@@ -68,6 +68,8 @@ namespace Sim::Loot {
         float driftShare = 0.07f;      // CALIBRATED per LEG, never per arrival (marth's method constraint): the four field sessions print 12 'ARRIVED but he is N u away' on 277 legs asked for (4.3 percent). After a leg ended ARRIVED the follow package takes him back this often before MFO's tick reads the arrival, otherwise the claim holds him at the ref. At 0.07 the lab prints the line on about 4 percent of its legs (14.8)
         float carryCap = Logi::kCarryCap;
         // THE RULES OF OLDER BUILDS, for the scenarios that must fail on them:
+        float museumGold = 250.0f;     // ASSUMPTION (review S5): what a museum piece taken is worth, in gold, whatever it sells for (a display has no price; the errand never sells it). One knob, reported apart (dMuseumJ)
+        float stealRecheck = 1.0f;     // Steal.cpp: the witness check is run AGAIN at the write (Service.cpp:1019). 0 = the cached verdict alone (scenario thief-no-recheck: must commit a crime)
         float corpseBar = 1.0f;        // 0 = before the party-wide guard bar on a corpse (field 11-17 L1)
         float gateOld1117 = 0.0f;      // 1 = before 9a16a278 (11-17): every static block gates the target and its cone, no repeat / short test, no move / near / idle re-admit, stuck needs 3 distinct targets
     };
@@ -79,7 +81,7 @@ namespace Sim::Loot {
             { "departRadius", &Rules::departRadius }, { "lotd", &Rules::lotd }, { "releaseMul", &Rules::releaseMul }, { "departRelease", &Rules::departRelease }, { "grab", &Rules::grab }, { "arriveRadius", &Rules::arriveRadius },
             { "noProgressSec", &Rules::noProgressSec }, { "blockedGateSec", &Rules::blockedGateSec }, { "transientSec", &Rules::transientSec }, { "stickySec", &Rules::stickySec }, { "deadlineMax", &Rules::deadlineMax },
             { "deadlineSpeed", &Rules::deadlineSpeed }, { "stuckWindowSec", &Rules::stuckWindowSec }, { "stuckHits", &Rules::stuckHits }, { "guardRangeU", &Rules::guardRangeU }, { "maxSlots", &Rules::maxSlots },
-            { "candCap", &Rules::candCap }, { "followU", &Rules::followU }, { "carryCap", &Rules::carryCap }, { "idleTicks", &Rules::idleTicks }, { "gate", &Rules::gateOld1117 }, { "corpseBar", &Rules::corpseBar }, { "driftShare", &Rules::driftShare }, { "guardWarmSec", &Rules::guardWarmSec } };
+            { "candCap", &Rules::candCap }, { "followU", &Rules::followU }, { "carryCap", &Rules::carryCap }, { "idleTicks", &Rules::idleTicks }, { "gate", &Rules::gateOld1117 }, { "corpseBar", &Rules::corpseBar }, { "stealRecheck", &Rules::stealRecheck }, { "museumGold", &Rules::museumGold }, { "driftShare", &Rules::driftShare }, { "guardWarmSec", &Rules::guardWarmSec } };
         for (const F& f : k) if (name == f.n) { r.*(f.m) = v; return true; }
         return false;
     }
@@ -224,7 +226,7 @@ namespace Sim::Loot {
         std::vector<Hit> run; bool stuck = false; EQ::Vec3 stuckAt;   // StuckAtOrigin.cpp: the run of blocked ends, the open episode
         bool hasLast = false; EQ::Vec3 lastBlock; int lastTarget = -1; float lastShort = 0; double lastBlockAt = -1e9;   // NoteBlockGround
         std::map<int, std::pair<int, float>> farArr;        // target -> (count, last distance)
-        int idle = 0; double lastReassess = -1e9;
+        int idle = 0, museumTaken = 0; double lastReassess = -1e9;
         std::map<std::pair<int, int>, int> left;            // the loot oracle: (source, category) he was told to leave: not offered again
         // the lab's record
         float ldx = 0, ldy = 0; double lastLegAt = -1e9; int lastDest = -1; std::vector<int> visited; std::vector<char> near;
@@ -250,14 +252,16 @@ namespace Sim::Loot {
         double lateU = 0; long lateN = 0;                                         // how far from the player a follower stood when a fight began
         long walkedPast = 0;                                                      // he came within reach of wanted, released loot and left it
         long waves = 0, stuckEpisodes = 0; double stuckOffSec = 0;                           // stuck-at-origin episodes, and the seconds his looting was off for one
-        double uFights = 0, dPotJ = 0, dGoldJ = 0; double goldTaken = 0;          // the episode's value (14.4)
+        double uFights = 0, dPotJ = 0, dGoldJ = 0, dMuseumJ = 0; double goldTaken = 0;
+        long roadTaken = 0, roadLeft = 0;                                         // stacks a loot road COULD take (any category, the bag as it began): taken, and left with nothing excusing it
+        long dibsNear = 0;                                                        // any stack left under the player's dibs with him within 700 units of it at the end          // the episode's value (14.4)
         void Merge(const LTally& o) {
             episodes += o.episodes; lostFights += o.lostFights; lootSec += o.lootSec; followerSec += o.followerSec; for (const auto& kv : o.ev) ev[kv.first] += kv.second; stacks0 += o.stacks0; taken += o.taken; wanted += o.wanted;
             for (const auto& kv : o.left) left[kv.first] += kv.second; for (const auto& kv : o.noRoad) { noRoad[kv.first].first += kv.second.first; noRoad[kv.first].second += kv.second.second; } leftRR += o.leftRR; goldLeft += o.goldLeft; goldLeftRR += o.goldLeftRR; goldDibsNear += o.goldDibsNear; museumLeft += o.museumLeft; museumLeftRR += o.museumLeftRR;
             waitSum += o.waitSum; waitN += o.waitN; waits.insert(waits.end(), o.waits.begin(), o.waits.end()); waitsDibs.insert(waitsDibs.end(), o.waitsDibs.begin(), o.waitsDibs.end()); legs += o.legs; legsArrived += o.legsArrived; legsAborted += o.legsAborted; legsRestarted += o.legsRestarted;
             reversals += o.reversals; revisits += o.revisits; srcTaken += o.srcTaken; twoOnOneSec += o.twoOnOneSec; twoOnOne += o.twoOnOne; combatLootSec += o.combatLootSec; combatTakes += o.combatTakes;
             guardSeenTakes += o.guardSeenTakes; crimes += o.crimes; awaySec += o.awaySec; awayMax = std::max(awayMax, o.awayMax); lateU += o.lateU; lateN += o.lateN; walkedPast += o.walkedPast;
-            waves += o.waves; stuckEpisodes += o.stuckEpisodes; stuckOffSec += o.stuckOffSec; uFights += o.uFights; dPotJ += o.dPotJ; dGoldJ += o.dGoldJ; goldTaken += o.goldTaken;
+            waves += o.waves; stuckEpisodes += o.stuckEpisodes; stuckOffSec += o.stuckOffSec; uFights += o.uFights; dPotJ += o.dPotJ; dGoldJ += o.dGoldJ; dMuseumJ += o.dMuseumJ; goldTaken += o.goldTaken; roadTaken += o.roadTaken; roadLeft += o.roadLeft; dibsNear += o.dibsNear;
         }
     };
 
@@ -270,6 +274,11 @@ namespace Sim::Loot {
         bool oracleWide = false;                            // the loot oracle's world (LootLab.h): the plan is every category with a road, a consumable is offered whatever its score
         double nextPump = 0, lastCombatEnd = 0, lastGlobalReassess = -1e9; int rr = 0; bool combat = false;
         LTally t; std::FILE* trace = nullptr;
+        // A take is QUEUED and lands on the next frame (TheftGate.cpp Take). Whether anybody saw it is read over that frame, with the guards where they walk to
+        // meanwhile, and not only at the instant the rule itself looked (review S1: read at that instant alone the count can never differ from the rule).
+        struct Landing { int fi, si; bool owned, waived; double at; bool seenG, seenW; }; std::vector<Landing> landing;
+        void LandStep() { for (std::size_t i = 0; i < landing.size();) { Landing& L = landing[i]; if (!L.waived && !L.seenG && GuardSeesTruth(L.fi, L.si)) L.seenG = true; if (L.owned && !L.seenW && GuardSeesTruth(L.fi, L.si, false)) L.seenW = true;
+                if (Now() >= L.at) { t.guardSeenTakes += L.seenG; t.crimes += L.seenW; if (L.seenW) Log("[crime] F%d: a witness saw the take from %u", L.fi, src[Z(L.si)].id); landing.erase(landing.begin() + static_cast<std::ptrdiff_t>(i)); } else ++i; } }
         // an option the loot oracle forces (LootLab.h): per (follower, source, category) -1 = the game decides, 0 = leave, 1 = take
         std::function<int(int fi, int si, Cat c)> force;
 
@@ -299,6 +308,14 @@ namespace Sim::Loot {
         // TheftGate.cpp GuardCheck: a cached verdict is trusted guardFreshSec, an answer nobody has read is usable once up to guardUnreadMaxSec, one verdict
         // per visit (a verdict first used under guardFreshSec ago stands), a (follower, source) is asked again no faster than guardRepostSec. The answer
         // of a post lands on the next frame, so the FIRST ask is always pending. Returns 0 clear, 1 seen, 2 pending.
+        // Steal.cpp Check's witness verdict cache: fresh 1.5 s, an unread answer usable up to 10 s, asked again no faster than 0.4 s (Steal.cpp:105-241). 0 unseen, 1 seen, 2 pending.
+        int StealCheck(int fi, int si) {
+            GuardAns& e = fs[Z(fi)].guard[100000 + si]; const double now = Now();
+            if (e.pend && now >= e.pat) { e.verdict = e.pv; e.at = e.pat; e.readAt = -1; e.pend = false; e.has = true; }
+            if (e.has && (now - e.at < 1.5 || (e.readAt < 0 && now - e.at < 10.0) || (e.readAt >= 0 && now - e.readAt < 1.5))) { if (e.readAt < 0) e.readAt = now; return e.verdict; }
+            if (!e.pend && now - e.postAt >= 0.4) { e.pv = GuardSeesTruth(fi, si, false) ? 1 : 0; e.pat = now + static_cast<double>(TM::dt); e.pend = true; e.postAt = now; }
+            return 2;
+        }
         void GuardPost(GuardAns& e, int fi, int si) { e.pv = GuardSeesTruth(fi, si) ? 1 : 0; e.pat = Now() + static_cast<double>(TM::dt); e.pend = true; e.postAt = Now(); Ev("guard.post"); }
         int GuardCheck(int fi, int si, bool peek = false) {
             GuardAns& e = fs[Z(fi)].guard[si]; const double now = Now();
@@ -315,7 +332,7 @@ namespace Sim::Loot {
         bool CorpseBarred(int fi, int si) {
             Src& s = src[Z(si)]; if (!s.barred) return false; const double now = Now();
             if (now - s.barSince < T->guardBarFloorSec) return true;
-            if (now - s.barAsk >= R.guardReaskSec) { s.barAsk = now; if (!GuardSeesTruth(fi, si)) { s.barred = false; Ev("corpse bar LIFTED"); Log("[theft-gate] corpse %u bar LIFTED", s.id); return false; } }
+            if (now - s.barAsk >= R.guardReaskSec) { const int g = GuardCheck(fi, si); /* the CACHED answer, as every other ask (review): a pending one keeps the bar */ if (g != 2) s.barAsk = now; if (g == 0) { s.barred = false; Ev("corpse bar LIFTED"); Log("[theft-gate] corpse %u bar LIFTED", s.id); return false; } }
             return true;
         }
 
@@ -326,7 +343,7 @@ namespace Sim::Loot {
             Src& s = src[Z(si)]; Claim& cl = s.claim; const double now = Now(); const float pd = D3(P(Fp->b[0]), s.p);
             if (cl.seen < 0) cl.seen = now;
             { const float dt = cl.lastAccrue < 0 ? 1.0f : std::min(static_cast<float>(now - cl.lastAccrue), 2.0f); cl.lastAccrue = now;
-              if (dt > 0.0f && pd <= R.chanceRadius) { cl.everNear = true; cl.farSince = -1; if (playerOpenSrc == si) cl.nearSecs += 3.0f * dt; else if (PlayerFacing(s.p)) cl.nearSecs += dt; }
+              if (dt > 0.0f && pd <= R.chanceRadius) { cl.everNear = true; cl.farSince = -1; if (PlayerFacing(s.p)) cl.nearSecs += dt; }   // (PlayerIsConsidering's x3 needs QuickLoot's crosshair, which the lab does not model: an open container menu is not it)
               else if (pd > R.departRadius && cl.farSince < 0) cl.farSince = now; }
             const bool rejected = cl.rejected || (cl.playerTook >= 0 && (now - cl.playerTook >= R.quickLootWaiver || pd > R.departRadius));
             if (c == Cat::Equipment) return rejected || now - cl.seen >= R.firstDibs;
@@ -436,8 +453,8 @@ namespace Sim::Loot {
             const double w = Now() - std::max(s.born, lastCombatEnd); t.waitSum += w; ++t.waitN; (freeTier ? t.waits : t.waitsDibs).push_back(static_cast<float>(w));
             if (d.kind == Kind::Gold) t.goldTaken += n;
             if (combat) ++t.combatTakes;
-            if (!CorpseWaived(s) && GuardSeesTruth(fi, si)) ++t.guardSeenTakes;
-            if (owned && GuardSeesTruth(fi, si, false)) ++t.crimes;
+            landing.push_back({ fi, si, owned, CorpseWaived(s), Now() + static_cast<double>(TM::dt), false, false }); { Landing& L = landing.back(); L.seenG = !L.waived && GuardSeesTruth(fi, si); L.seenW = owned && GuardSeesTruth(fi, si, false); }
+            if (d.museum) ++fs[Z(fi)].museumTaken;
             Log("[take] F%d %s x%d from %s %u", fi, d.edid, n, SrcName(s.kind), s.id);
         }
         // LootTake.cpp LootHere for one category. formBusy: the form types a take of this visit already queued (the landing hold). Returns moved; landing = a take was refused by the hold.
@@ -491,7 +508,7 @@ namespace Sim::Loot {
             { const float dx = s.p.x - x.c.x, dy = s.p.y - x.c.y, l = std::hypot(dx, dy);   // back and forth: this leg heads back against his last one, both real legs, within 10 s
               if (l > 200.0f && f.lastDest >= 0 && now - f.lastLegAt < 10.0 && (dx * f.ldx + dy * f.ldy) / l < -0.5f) ++t.reversals;
               if (l > 200.0f) { f.ldx = dx / l; f.ldy = dy / l; f.lastLegAt = now; f.lastDest = si; } }
-            if (TargetedByOther(si, fi)) ++t.twoOnOne;
+            if (df > R.grab && TargetedByOther(si, fi)) ++t.twoOnOne;   // past arm's reach, where native excludes a second walker. Inside it native has no exclusion (LootTravel_internal.h:140), so that is not counted against it
         }
         void Release(int fi, const char* why) { FState& f = fs[Z(fi)]; if (!f.slot.active) return; ++t.ev[std::string("RELEASE why=") + why]; Log("[loot-road] RELEASE road=CH19 F%d why=%s", fi, why); if (f.slot.phase == Phase::Walking && f.slot.leg == LegState::Walking) ++t.legsAborted; f.slot = Slot{}; }
 
@@ -621,18 +638,19 @@ namespace Sim::Loot {
             f.nextLogi = now + static_cast<double>(R.logiSec);
             if (combat) return;
             GuardKeepWarm(fi);
-            if (sl.active) { if (!Drive(fi)) return; }
-            else if (ScanAll(fi, false)) { f.idle = 0; return; }
+            if (sl.active) { Drive(fi); return; }
+            f.hasDefer = false;   // Service.cpp:467,479: g_actorDefer is erased on every tick he has no slot (review S4)
+            if (ScanAll(fi, false)) { f.idle = 0; return; }
             // idle (Service.cpp:2379-2417): nothing acted and no slot is active anywhere
             if (ActiveSlots() == 0 && ++f.idle >= static_cast<int>(R.idleTicks)) {
                 if (R.gateOld1117 <= 0.0f) for (std::size_t g = 0; g < gates.size();) if (gates[g].fi == fi) Readmit(g, "idle (his own record lifted)"); else ++g;
                 if (now - lastGlobalReassess >= R.idleReassessSec) { int n = 0; for (Src& s : src) if (s.transientUntil > now && now - (s.transientUntil - static_cast<double>(R.transientSec)) >= R.idleAgeSec) { s.transientUntil = -1; ++n; }
                     if (n) { lastGlobalReassess = now; f.idle = 0; Ev("idle: cleared blocklisted bodies"); Log("[loot] F%d idle -- cleared %d blocklisted bodies to reassess", fi, n); } } }
         }
-        // The excursion driver (Service.cpp:480-1664). Returns true when the tick falls through to the rule walk / idle (the slot is gone).
-        bool Drive(int fi) {
+        // The excursion driver (Service.cpp:480-1664). The tick is his: nothing falls through to the rule walk.
+        void Drive(int fi) {
             FState& f = fs[Z(fi)]; Slot& sl = f.slot; const double now = Now(); const Body& x = BodyOf(fi); const Body& pl = Fp->b[0]; const EQ::Vec3 fp = P(x);
-            if (D3(fp, P(pl)) > Leash(fi) * R.releaseMul) { Release(fi, "left leash"); return false; }
+            if (D3(fp, P(pl)) > Leash(fi) * R.releaseMul) { Release(fi, "left leash"); return; }
             if (sl.phase == Phase::Walking) {
                 Src& s = src[Z(sl.target)]; const int si = sl.target; const bool loose = s.kind == SrcKind::Loose || s.kind == SrcKind::Flora; const float d = D3(fp, s.p); const char* skip = nullptr;
                 if (sl.cat != Cat::Steal && !HasLoot(f, s, sl.cat)) { skip = "EMPTIED before arrival"; if (sl.leg == LegState::Walking) ++t.legsAborted; }
@@ -643,12 +661,12 @@ namespace Sim::Loot {
                     if (d <= arriveD) {   // ARRIVAL by MFO's own distance test
                         if (sl.leg == LegState::Walking) { sl.leg = LegState::Arrived; }
                         s.strikes = 0; f.farArr.erase(si); if (std::find(f.visited.begin(), f.visited.end(), si) == f.visited.end()) f.visited.push_back(si);
-                        if (playerOpenSrc == si) return false;   // the player is in it: hold
+                        if (playerOpenSrc == si) return;   // the player is in it: hold
                         ++s.arrivals; ++t.legsArrived; Ev("leg ended ARRIVED");
-                        if (loose) return ArriveLoose(fi, si);
+                        if (loose) { ArriveLoose(fi, si); return; }
                         bool dl = false; const int r = Strip(fi, si, dl);
                         if (r == 2) { s.barred = R.corpseBar > 0.0f; if (s.barSince < 0 || now - s.barSince > T->guardBarFloorSec) s.barSince = now; s.barAsk = now; Ev("arrived: guard sees it (BARRED)"); Log("[loot] F%d: arrived at %u -- guard sees it, kept, batch continues", fi, s.id); sl.phase = Phase::Holding; }
-                        else if (r == 3) { --s.arrivals; --t.legsArrived; --t.ev["leg ended ARRIVED"]; Ev("arrived: pending (guard or landing)"); return false; }
+                        else if (r == 3) { --s.arrivals; --t.legsArrived; --t.ev["leg ended ARRIVED"]; Ev("arrived: pending (guard or landing)"); return; }
                         else { if (!dl) MarkFailed(si, "visited and fully stripped (done)"); Ev(r == 1 ? (dl ? "arrived -- looted (dibs left)" : "arrived -- looted") : (dl ? "arrived -- nothing to take (dibs left)" : "arrived -- nothing to take")); Log("[loot] F%d: arrived -- %s%s (batch continues)", fi, r == 1 ? "looted" : "nothing to take", dl ? " (loot still under player's dibs -- corpse kept)" : ""); sl.phase = Phase::Holding; }
                     }
                     else if (sl.leg == LegState::Arrived) {   // FAR ARRIVAL: Harbinger's leg ended inside its radius and he has drifted off since
@@ -659,30 +677,31 @@ namespace Sim::Loot {
                     else if (sl.leg == LegState::Blocked) {
                         const EQ::Vec3 bp{ sl.bx, sl.by, sl.bz }; Ev("leg ended BLOCKED"); ++t.legsAborted;
                         if (sl.blocker) { f.hasDefer = true; f.deferItem = si; f.deferBlocker = sl.blocker; f.deferPos = bp; f.run.clear(); Ev("ACTOR-BLOCKED (REORDER)"); Log("[loot] F%d target %u ACTOR-BLOCKED: REORDER", fi, s.id); skip = "ACTOR-BLOCKED"; }
-                        else { if (StaticBlock(fi, si, bp)) return false; skip = "BLOCKED (static)"; }
+                        else { if (StaticBlock(fi, si, bp)) return; skip = "BLOCKED (static)"; }
                     }
                     else if (now - sl.progressAt > R.noProgressSec) { ++t.legsAborted; Ev("unreachable (no progress)"); if (loose) MarkSticky(si, "STICKY (loose/unacquirable)"); else MarkStalled(si); skip = "stalled"; if (s.island == 0) NoteIsland(fi, si); }
                     else if (now > sl.deadline) { ++t.legsAborted; Ev("DEADLINE EXPIRED"); MarkFailed(si, "leg deadline expired or target gone"); skip = "deadline"; }
-                    else return false;   // still walking
+                    else return;   // still walking
                 }
                 (void)skip; sl.phase = Phase::Holding; sl.leg = LegState::None;
             }
             // HOLDING (Service.cpp:1608-1663)
-            if (playerMenu) return false;
-            if (sl.emptySince >= 0 && now - sl.emptySince < T->batchHoldMinSec) return false;      // the dwell: no scan
-            if (ScanAll(fi, true)) { sl.emptySince = sl.guardHoldSince = -1; return false; }
-            if (f.stuck || !sl.active) return false;
-            if (scanGuardPending) { if (sl.guardHoldSince < 0) sl.guardHoldSince = now; if (now - sl.guardHoldSince < T->guardUnreadMaxSec) return false; Ev("guard answer still PENDING: batch released"); }
+            if (playerMenu) return;
+            if (sl.emptySince >= 0 && now - sl.emptySince < T->batchHoldMinSec) return;      // the dwell: no scan
+            if (ScanAll(fi, true)) { sl.emptySince = sl.guardHoldSince = -1; return; }
+            if (f.stuck || !sl.active) return;
+            if (scanGuardPending) { if (sl.guardHoldSince < 0) sl.guardHoldSince = now; if (now - sl.guardHoldSince < T->guardUnreadMaxSec) return; Ev("guard answer still PENDING: batch released"); }
             else sl.guardHoldSince = -1;
-            if (sl.emptySince < 0 && T->batchHoldMinSec > 0.0f) { sl.emptySince = now; return false; }
-            Release(fi, "batch done"); return false;
+            if (sl.emptySince < 0 && T->batchHoldMinSec > 0.0f) { sl.emptySince = now; return; }
+            Release(fi, "batch done"); return;
         }
         // Service.cpp:937-1166, a loose ref at arrival: the bars again, then the pickup (ActivateRef). No carry check on this road (spec B15).
         bool ArriveLoose(int fi, int si) {
             FState& f = fs[Z(fi)]; Slot& sl = f.slot; Src& s = src[Z(si)]; const auto& I = Items(); f.run.clear();
             if (s.owned) {   // the steal road (Steal.cpp Check): sneaking, guard clear, no witness; run AGAIN at the write
                 if (!f.thief || GuardCheck(fi, si) != 0) { if (GuardCheck(fi, si, true) == 2) return false; MarkFailed(si, "loose ref skipped at ARRIVAL -- owned"); sl.phase = Phase::Holding; return false; }
-                if (GuardSeesTruth(fi, si, false)) { Ev("steal refused: witness"); MarkFailed(si, "steal refused -- a witness"); sl.phase = Phase::Holding; return false; }
+                { const int w = StealCheck(fi, si); if (w == 2) { Ev("arrived: pending (guard or landing)"); return false; }   // Steal.cpp Check: the cached witness verdict first
+                  if (w == 1 || (R.stealRecheck > 0.0f && GuardSeesTruth(fi, si, false))) { Ev("steal refused: witness"); MarkFailed(si, "steal refused -- a witness"); sl.phase = Phase::Holding; return false; } }
             } else if (!CorpseWaived(s)) { const int g = GuardCheck(fi, si); if (g == 2) { Ev("arrived: pending (guard or landing)"); return false; } if (g == 1) { MarkFailed(si, "loose ref skipped at ARRIVAL -- guard"); sl.phase = Phase::Holding; return false; } }
             if (!s.items.empty() && s.items[0].count > 0) { const ItemDef& d = I[Z(s.items[0].item)]; int n = s.items[0].count;
                 if (sl.cat == Cat::Museum) { auto [it, fresh] = museumNeed.try_emplace(s.items[0].item, 1); (void)fresh; n = std::min(n, std::max(1, it->second)); it->second -= n; }

@@ -1,0 +1,15 @@
+# Batch L review S1: an owned potion, and a guard walking a line of which the upper half sees it and the lower half does not (the wall at x 8).
+# (thief-no-recheck: with the witness check not run again at the write, a verdict a second old lets a seen theft through)
+nopool
+class fixture_loot
+map
+#################
+#P..........g...#
+#...............#
+#..a....#.......#
+#.......#.......#
+#.......#...h...#
+#################
+end
+loot a item RestoreHealth02 1 owned
+guard g h

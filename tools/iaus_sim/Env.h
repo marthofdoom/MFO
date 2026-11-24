@@ -130,6 +130,7 @@ namespace Sim {
         std::vector<EQ::Wall> walls; EQ::Grid grid;
         std::vector<std::uint32_t> walk, weak;
         std::vector<EnvPoint> entries, spawns, refs;   // load doors on the mesh / actor spawn points / containers and loose items (batch L)
+        bool dupMesh = false;   // two meshes with identical bounds (review of batch L: Vanilla x_Skyrim-104217_1_-2). The extractor should reject such a place; until it does the loader does, by this property and with a counted reason
         std::vector<LootRef> loot; std::vector<LootSpot> guards, bystanders, bodies; bool town = false, fixture = false;   // batch L (Loot.h)
         std::vector<float> triArea; float area0 = 0.0f; std::uint32_t tris0 = 0;   // walk component 0
         int defects = 0, plainDoors = 0;   // plainDoors: door triangles joined from REFS by geometry (no DOOR row)
@@ -199,6 +200,8 @@ namespace Sim {
         { const std::string& m = f.metaJson(); JP jp{ m }; J j; if (!m.empty() && m[0] == '{') j = jp.val();
           E->name = j["name"].s; E->cls = j["class"].s; E->set = j["set"].s; E->interior = j["interior"].has() ? j["interior"].yes() : true; E->pool = j["pool"].has() ? j["pool"].yes() : true;
           if (E->name.empty()) { const std::size_t s = path.find_last_of('/'); E->name = path.substr(s == std::string::npos ? 0 : s + 1); } }
+        for (std::uint32_t mi = 0; mi < f.meshCount() && !E->dupMesh; ++mi) for (std::uint32_t mj = mi + 1; mj < f.meshCount(); ++mj) { const mfoenv::Mesh& A = f.mesh(mi); const mfoenv::Mesh& B = f.mesh(mj);
+            if (A.triCount > 0 && !std::memcmp(A.min, B.min, sizeof A.min) && !std::memcmp(A.max, B.max, sizeof A.max)) { E->dupMesh = true; break; } }
         std::size_t nv = 0, nt = 0; for (std::uint32_t mi = 0; mi < f.meshCount(); ++mi) { nv += f.mesh(mi).vertCount; nt += f.mesh(mi).triCount; }
         if (nt == 0) { if (err) *err = "no triangle"; return nullptr; }
         E->verts.reserve(nv); E->tris.resize(nt);
@@ -278,6 +281,7 @@ namespace Sim {
     }
     // A place a fight can be put in: a largest walk component with room for two groups.
     [[nodiscard]] inline const char* EnvUnusable(const SimEnv& E) {
+        if (E.dupMesh) return "duplicate navmesh (two meshes of the file have identical bounds: the same floor twice, a walker on one copy is not on the other)";
         if (E.tris0 < 8) return "largest walk component under 8 triangles";
         if (E.area0 < 250000.0f) return "largest walk component under 250000 square units";
         return nullptr;
@@ -306,7 +310,7 @@ namespace Sim {
         "tools/iaus_sim/envs";
 #endif
     inline constexpr const char* kFixtureNames[] = { "open-room", "corridor-l", "doorway", "doorway-open", "doorway-plain", "locked-door", "stair-tower", "ledge", "ridge", "u-corridor", "dead-end", "island", "pillars", "narrow", "seam", "trust-wall", "trust-one-way",
-        "loot-room", "loot-backs", "loot-freeze", "loot-gate", "loot-town", "loot-shop" };   // batch L: nopool, so no ordinary fight draws them and the pool hash is what it was
+        "loot-room", "loot-backs", "loot-freeze", "loot-gate", "loot-town", "loot-shop", "loot-watch" };   // batch L: nopool, so no ordinary fight draws them and the pool hash is what it was
     inline bool LoadFixtures(EnvPool& P) { bool ok = true; for (const char* n : kFixtureNames) ok = P.Add(g_envDir + "/" + n + ".mfoenv", true) && ok; return ok; }
     // index.json of the library: every environment of a set (optionally one class). Returns the number loaded.
     // `<set>/heldout` (or `all/heldout`): the set's HELD-OUT places instead (tools/envextract: disjoint from every library place of every set).
