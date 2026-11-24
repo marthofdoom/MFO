@@ -25,7 +25,10 @@ Everything after `--` goes to `tune_driver.py` unchanged. `--bin` and `--out` ar
 - Stop: SIGTERM or Ctrl-C to `run_round.py`, or `systemctl --user stop $(cat <out>/unit)`. Every simulator of the round stops with it.
 - Resume: run the same command again. Finished simulator results are in `<out>/cache.jsonl` and are not run again.
   The result is the one an uninterrupted round gives. `test_live.py` proves that on a small round (below).
-- A resume with different driver arguments is refused. A round answers one question. Use a new `--out`, or `--new-args` when the change is meant.
+- One runner per round: `<out>/round.lock` is held for the runner's whole life. A second `run_round.py` on the same `--out` exits with code 3 and changes nothing, with or without systemd.
+- A resume with different driver arguments is refused. A round answers one question. Use a new `--out`, or `--new-args` when the change is meant. `<out>/round.json` keeps the ORIGINAL arguments and lists later ones under `history`.
+- A resume with another simulator binary is refused (`--new-bin` to mean it). The cache is keyed by the binary's hash, so nothing would be reused, and the driver carries nothing over from a summary another binary made.
+- A round stopped from outside (`systemctl --user stop <unit>`, a kill of the driver) is recorded as `stopped`, like a signal to the runner.
 - `<out>/round-status.json` holds the state: `running`, `stopped`, `failed`, `done`, `refused`.
 
 ## Priority
@@ -76,17 +79,18 @@ It refuses, writes nothing and exits 2 when:
    whose recalib rows covered 15 classes. Here recalib rows are never values. Recalib may only withhold, and only when it judged exactly
    this summary's accepted values. The driver also drops a carried-over joint and recalib result when `--cells` differs from the summary's
    (`tune_driver.carry_over`).
-2. The joint gate did not pass on this table. `--unshipped` writes anyway and marks every file `NOT JOINT-GATED`.
-3. `progress.log` shows accepted values for a class in its last search and the summary holds none, with nothing recorded that explains it.
-   `--accept-log-mismatch` writes anyway and records it in the manifest.
-4. A value names a class outside the run's cells, or two values set one knob.
+2. The joint gate did not pass on this table, or never ran in this round. `--unshipped` writes anyway and marks every file `NOT JOINT-GATED`.
+3. `progress.log` and the summary disagree on an accepted value. Every knob the log shows accepted in a class's last search is compared, with its value, against the summary's own row for it. One differing knob stops the tool. `--accept-log-mismatch` writes anyway and records it in the manifest.
+4. A value names a class outside the run's cells. (Two values for one knob cannot reach the tool: `final_curves()` keeps one, the classes stage's over the rejudged one.)
 5. A class's search did not finish. Resume the round first.
+6. A smoke round (`tune_driver.py --smoke`). Its numbers are not results. `--smoke-ok` exists for this directory's tests and marks every file SMOKE.
+7. A partial round: a cell of the round's scope (`--classes` when it named classes, else every cell of `--cells`) was never searched. `--unshipped` writes the searched ones.
 
 A searched class with no accepted value gets a file with a header and no value. A cell the round never searched gets no file, because
 an empty one would drop the values an earlier round shipped for it.
 
 Shared tables (`shared.txt`, `potions.txt`, `looting.txt`) are not written. The driver reports a shared value as a decision for the
-coordinator (`summary.md`).
+coordinator (`summary.md`), and `MANIFEST.json` names every accepted shared value that no file carries (`shared_values_not_written`).
 
 ## Watching
 
@@ -101,7 +105,7 @@ priority on a busy machine can be that quiet, so it is a prompt to look. It exit
 ## Tests
 
 ```
-python3 tools/iaus_sim/live/test_live.py                      # 16 tests, under a second
+python3 tools/iaus_sim/live/test_live.py                      # 24 tests, about a second (three start a stand-in round)
 SIM_BIN=<built sim> python3 tools/iaus_sim/live/test_live.py   # + the stop / resume proof, about two minutes
 ```
 

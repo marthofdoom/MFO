@@ -4,7 +4,7 @@ marth, 2026-11-23, verbatim: "Do a big sim fix round. Consider t2+ needs. full l
 
 And the same day, on what the environments make possible: "This means the sentient AI can now power movement, fully aware of the environment. line of sight, etc. Make sure thats included, and tested in the sim." On where the game gets its world: "Instead of extracting it reads the active navmesh". On spells: "I noticed that the spells being chosen were still pretty ineffective, certainly were probably better options available. But I was unsure if a proper spell tuning pass occuired".
 
-Branch `feat/sim-v4-s1`. This note is the design (sections 1 to 8), the record of slice 1 which is built (section 9), the slice list (10), marth's open decisions with a recommendation each (11) and findings outside this branch's file boundary (12). Read `iaus-sim-v3.md` first. v4 is v3 plus what is below.
+Branch `feat/sim-v4-s1`. Revised after the Opus review of 1874f81e and marth's rulings of 2026-11-23 (section 11 records each). This note is the design (sections 1 to 8), the record of slice 1 which is built (section 9), the slice list (10), marth's open decisions with a recommendation each (11) and findings outside this branch's file boundary (12). Read `iaus-sim-v3.md` first. v4 is v3 plus what is below.
 
 Standing rulings this design is held to. The oracle has unlimited tries and only the class's abilities, and tuning follows the oracle. "The goal is that a classes tune will be the actual best possible class behavior". No list-specific data in game logic: lists and game data are sim test input only. The sim derives IAUS constants and a hand value is a labelled placeholder. One named table per set of tunables, one shared reader per kind, and the docs say "to add X, edit Y".
 
@@ -50,6 +50,8 @@ A new header `tools/iaus_sim/Env.h`. One immutable `Env` per loaded file, shared
 
 A fight is placed into an environment by a `FightSpec` field, `env` plus a seed. Followers and the player start at a door or an entry edge. Both sides are placed in ONE connected component of the mesh (walk edges and drops count, the review's islands finding), unless a scenario asks for an unreachable foe on purpose. Foes stand on the environment's own actor spawn points, grouped by distance (MODEL: spawn points within 1500 units and in sight of each other are one encounter). Which actor stands on a point comes from the list world when the base id joins, else from the sim's own foe draw for the environment class. The built-in world keeps working with no game data: `tools/envextract/tests/synth.py` already builds synthetic records, and the sim ships a handful of hand-made synthetic `.mfoenv` fixtures (corridor, doorway, stair tower, ledge with a drop, ridge, dead end) under `tools/iaus_sim/envs/`. Those are not game data, so they can be in git, and the CLI checks and baselines run on them.
 
+Coverage is the goal of the library (marth, 11-23): every terrain type and every kind of design the game has is in it, and an anomalous area (a cell a mod broke, a mesh that fails the validator, an island with no way in) is simply SKIPPED by the sim, with a count. The sim does not study broken places. The GAME has to recognise them when it stands in one: that is the trust reader of 8.9.
+
 Switch: `--v4 env=on|off` in a new `Sim::V4` struct beside `V3`, same rules as v3's switches (off = draw for draw the lab before it, the headline names what is off). `--env <file>`, `--env-set <set> [--env-class <class>]`, `--env-seed`.
 
 ### 1.5 Validation against field logs
@@ -76,7 +78,7 @@ So the lab cannot produce one of the things the field logs are full of. One Deck
 
 A* over triangles of the `Env` (edge midpoints as nodes, straight-line heuristic), then the funnel algorithm for the corner list. Edge costs: length, times a preferred-path discount where the flag is set (MODEL: the engine prefers them, weight is a knob), a closed door adds the open time, a locked door is closed to anyone without the key or a pick road, water triangles are closed for a fight (ASSUMPTION, out of scope). Links by kind (1.3): kind 0 is a walk edge both ways. Kind 2 is a drop, one way, down. Kind 1 is never an edge for a walker (treating it as one gives wall climbing of up to about 1,500 units). Kind 3 is closed unless the environment's state opens it. **Whether followers USE drop links in the game is not observed.** So a drop is an edge only for a body whose traversal abilities say so (8.8), the default for a follower is OFF until the probe of 8.8 has seen one taken, and the lab runs both ways (`--v4 drops=on|off`). `NoLargeCreatures` triangles are closed to a body whose radius is over a threshold.
 
-One function, `Env::Path(from, to, body) -> {corners, length, reachable, firstBlock}`. It is the ONE reader of "can he get there and how far is it". Section 8 moves it into `native/iaus` so the game calls the same code.
+One function, `FindPath(view, from, to, body) -> {corners, length, reachable, firstBlock}`, the ONE reader of "can he get there and how far is it". **It is written from the start (batch W) as a pure, engine-free file in `native/iaus` (`EnvQuery.h`, `PathSearch.cpp`), compiled into the sim as `Generate.cpp` is, so it cannot fork into a sim copy and a game copy.** That first slice adds the file and nothing calls it in the DLL yet (a pure file with no caller, harness-tested: tier B, Opus review). `Env::Path` in this note is the sim's thin call into it.
 
 ### 2.3 Mechanism: path following as the engine does it
 
@@ -93,7 +95,7 @@ The legs, as Harbinger's channels execute them (the lab mirrors the request and 
 | Leg | Native source | Request the lab mirrors | End states |
 |---|---|---|---|
 | Approach | `apmf/OffenseApproach.cpp`, ch.24 | target ref, radius, hold, standoff by weapon kind | arrived, target lost, ENGINE DROPPED (path failed) with `offenseApproachBackoffSec` and `offenseApproachDropCap` |
-| Hide, flee, back-off, hidden step | `Concealment.cpp` picks, the Disengage and BackOff families | a point picked by the concealment rules | arrived, seen on the way, blocked |
+| Hide, flee, back-off, hidden step, give ground | `Concealment.cpp` picks, `apmf/Disengage.cpp` and `apmf/GroundApproach.cpp`: a ch.24 approach on a WORLD POINT (`kApproach_Point`, ABI v39, with `kApproach_Hold` for the disengage) | a point, a radius, hold or end on arrival | arrived, seen on the way, ENGINE DROPPED (the engine cannot path to the point), target lost (he left the cell space) |
 | Leash | ch.23 | anchor and radius | pulled back, the foe past the radius dropped |
 | Entry | ch.21 EngageOnSight | the entry foe | v3 model, unchanged |
 | Loot and errand travel | `logistics/LootTravel`, ch.19 | destination ref, arrival radius, gait | arrived, BLOCKED, DONE-WHILE-WALKING, combat |
@@ -240,7 +242,7 @@ Impact = how wrong a tune of the affected classes is while it is missing, times 
 1. **Real geometry for hide, disengage, range and line of fire** (sections 2 and 8). Touches every caster, every archer and the whole thief line: 26 of 38 cells.
 2. **Books like the field's and the spell choice pass** (section 7). Every caster and hybrid: 21 cells.
 3. **Arch-Mage independent hands.** One cell, but the T4 capstone of the largest line, and the Dragonborn can be one. Without it his tune optimises a mechanic he does not have.
-4. **Unseated rows and never-started casts** (section 5). Every cell that holds a paralysis, a turn, a stagger or a disarm spell.
+4. **Unseated rows and never-started casts** (section 5). Every cell that holds a paralysis, a turn, a stagger or a disarm spell. Harbinger is seating those rows now (`feat/seat-unseated-casters`), so the lab models both states (`--seats today|all`) and the gap closes on the game's side.
 5. **Rider damage and foe spell bursts** (9.2). Every cell: it is the survival side of every tune.
 6. **Summons as real bodies with their own AI and limits.** Conjurer, necromancer, sorcerer, arch-mage, warlock.
 7. **T4 passives with no mechanism**: Grand Battlemage's free off-hand release, Living Legend's two modes, Ebony Warrior's damage share, Saint's revive, Jaqspur's draw speed, the marks.
@@ -327,7 +329,7 @@ The spell choice stage of section 7 and the movement stage of section 8 are the 
 
 ### 6.4 Validation, slice
 
-Validation: the stage is proven on the tuner's own terms, the racing proof's pattern. On a fixed cache it must accept a planted improvement (a curve moved toward the oracle's pick in one cluster) and reject a planted regression. Slice S7 "the follow stage": `stage_follow`, the cuts 1 to 4 of 6.2, the closable-gap report, tests. Driver only. It can be built before any environment work, and it should be, because it is what the tune after this round runs.
+Validation: the stage is proven on the tuner's own terms, the racing proof's pattern. On a fixed cache it must accept a planted improvement (a curve moved toward the oracle's pick in one cluster) and reject a planted regression. Slice S7 "the follow stage": `stage_follow`, the cuts 1 to 4 of 6.2, the closable-gap report, tests. Driver only. It needs no environment work. It is in batch C (section 10), which runs beside the world batch, so that the one tune that follows this round has the gap as its score.
 
 ## 7. The spell choice pass
 
@@ -378,7 +380,7 @@ Two readings. First, cross-family choice is the action weights, one constant per
 - Split **within family** (the oracle's best spell is in the same family as IAUS's pick: a ranking error) and **cross family** (control against offense against buff against summon against heal: a weight error). The second needs one unit across families, and the rollout's U is that unit. The diagnostics convert through the foe's damage rate so a control second and a damage point can be read side by side.
 - Reported per class and book, by family pair, with the count, the mean regret and the share of decisions with any regret. `SPELLREG <class> <iaus family> <oracle family> n regretU eps_regret epm_regret` lines, the `GAPDEC` pattern.
 
-The field side: `[iaus-why]` prints the top three with every term, so a field book replayed in the lab (7.1) gives the same decision twice, once as the game scored it and once as the lab's oracle would have chosen. The example above is the first test case: with Jesper's book against draugr the stage must say whether Turn Lesser Undead at 1.374 was right. (Section 5 adds: it keyed an unseated row and could not fire at all. Spell choice has to read `HarbingerSeatsSpell`. It has no caller today, per the 11-19 backlog note.)
+The field side: `[iaus-why]` prints the top three with every term, so a field book replayed in the lab (7.1) gives the same decision twice, once as the game scored it and once as the lab's oracle would have chosen. The example above is the first test case: with Jesper's book against draugr the stage must say whether Turn Lesser Undead at 1.374 was right. (Section 5 adds: it keyed an unseated row and could not fire at all on that build. marth's ruling is "run every spell": no spell is vetoed for its row. It stays a candidate, bounded by the never-started release, and Harbinger is seating the rows now, `feat/seat-unseated-casters`. So the lab models the release and the hold-off exactly, and a spell that cannot start today costs what it costs in the game: one short window, then it is held off for the fight.)
 
 ### 7.4 Missing from the estimate, against only badly weighted
 
@@ -388,25 +390,25 @@ MISSING: no input exists, so no weight can fix it.
 |---|---|
 | **Time to land** per spell. `effectRate` uses one `t.spellCastSec` for every fire-and-forget spell. Charge time, projectile travel, claim-to-fire by row and hand redraw are not in it | `Generate.cpp:588`. The field's claim-to-fire tables differ by family (v3 13.2) |
 | **Channel uptime.** A concentration spell is "counted for 1 s" | `[iaus-fill] spell ... concentration=false (counted for 1 s)`. A stream held 4 s and a stream cut after 0.5 s by a line-of-fire hold read the same |
-| **AoE count.** `areaUnits` exists. The number of foes (and friends) inside it at the target is not in `expDamage` | `SpellOn(e, foe)` is one foe |
 | **Level caps and immunities** of control, fear, calm, turn. `undeadOnly` exists. The capped effect is judged since 2.11.9 for control. Whether a turn or an illusion can affect THIS foe by level is will-work, learned by trying | `Cons::ControlWorth`. `wwMirror` in the lab |
 | **Existing effects.** `activeOn` stops a recast. A different spell with the same effect archetype (a second fire DoT, a weaker armor spell) is not seen as redundant | `SpellEntry::activeOn` is per spell form |
 | **Kill-confirm.** `overkill` penalises excess. Nothing rewards the cheapest spell that finishes a foe before it acts again | no fact |
 | **Magicka per fight length.** `mp_reserve` is a level. Nothing reads expected fight length against magicka per effect, so an expensive spell early is never weighed against being dry later | the oracle drinks magicka potions 3 to 9 percent of its divergence (v3 14.6) |
-| **Seat.** Whether the row can start at all | section 5 |
+| **What a failed start costs.** Not a veto (marth: "run every spell"). Missing is the COST of a start that never fires: the seconds a claim holds a hand before the never-started release | section 5. Moot per row as Harbinger seats it |
 | **Duration perks, dual cast, the poison-resist swap** | the fill line's own "left out" list |
 | **Armor** for spells that deal physical damage, and **summon worth** in damage-per-second terms | `SpellOn` uses element and magic resist only |
 
 ONLY BADLY WEIGHTED: the input exists, the constant is a placeholder or was tuned on books too small to matter.
 
 - The family action weights (control 3.6 against offense 1.769).
+- **Area.** The input exists: `Facts::foesInArea` (the foes inside the spell's area at the target, `Generate.cpp:850-860`), `splashSafe` (no ally inside it) and `Cons::AreaValue` (`foesInArea / 3`). What is weak is its use: it is a separate boost, and `expDamage`, so `damage`, `overkill` and the tie-break, stay one foe's worth. An area spell on four foes ranks by what it does to one.
 - `damage`'s curve (0.18 of the best reads 0.65, so a spell five times weaker keeps two thirds of its score).
 - `exploit` and its weight 1.3. `spell_perks` and its 1.15 ceiling. `variety`. `overkill`.
 - `t.spellCastSec`.
 
 ### 7.5 The tunables it exposes, and the stage that searches them
 
-One table, native, `iaus/Core.h` `struct SpellWorth` inside `Tuning` (the `WorthTable` and `LootTuning` pattern: one struct, one name per field, `sw.<field>` in the tuning file and the sim, a `SetSpellWorthKnob` reader, a `test_tune_driver` test that the driver's knob list covers the struct). Fields, each replacing a missing input above with a measured or declared one: `landSecBase` and per-row `landSec[row]`, `channelUptime`, `aoeFoeWeight` and `aoeFriendPenalty`, `redundantEffectScale`, `killConfirmBonus`, `magickaHorizonSec`, `summonDpsScale`, `unseatedScale` (0 by rule: a row no seat starts is not a candidate, see 11). And ONE shared reader, `Estimate::SpellWorthOn(entry, foe, snapshot, table) -> {effect, seconds, magicka}`, which every cast family's worth consideration calls. Two readers of "what is this spell worth" is how the next 11-13 loot bug is born. "To add a term to spell worth, add a field to `SpellWorth` and read it in `Estimate::SpellWorthOn`." That is a native tier-B change with its own brief. Not made here.
+One table, native, `iaus/Core.h` `struct SpellWorth` inside `Tuning` (the `WorthTable` and `LootTuning` pattern: one struct, one name per field, `sw.<field>` in the tuning file and the sim, a `SetSpellWorthKnob` reader, a `test_tune_driver` test that the driver's knob list covers the struct). Fields, each replacing a missing input above with a measured or declared one: `landSecBase` and per-row `landSec[row]`, `channelUptime`, `aoeFoeWeight` and `aoeFriendPenalty`, `redundantEffectScale`, `killConfirmBonus`, `magickaHorizonSec`, `summonDpsScale`, `areaFoesIntoDamage` (how far `foesInArea` multiplies the expected effect), `failedStartSec` (what a start that never fires costs, read from the never-started windows of section 5. Never a veto: marth's ruling is "run every spell"). And ONE shared reader, `Estimate::SpellWorthOn(entry, foe, snapshot, table) -> {effect, seconds, magicka}`, which every cast family's worth consideration calls. Two readers of "what is this spell worth" is how the next 11-13 loot bug is born. "To add a term to spell worth, add a field to `SpellWorth` and read it in `Estimate::SpellWorthOn`." That is a native tier-B change with its own brief. Not made here.
 
 Driver stage `spells`, after `follow`: knobs = the `sw.*` table plus the cast families' `aw`, the `damage`, `exploit`, `overkill`, `variety` and `control_worth` curves. Score = mean `regretU` over field-size books (7.1), pooled over the caster cells for shared knobs and per class for class rows. Fence = the J gates and cards as everywhere. It is a shared-table stage like `worth` and `loot` (`shared_search`), so it is mostly wiring.
 
@@ -426,7 +428,7 @@ So the environments are not only a better test world. IAUS itself decides WHERE 
 
 Today IAUS picks WHAT (a family, a target, a spell). Where he is when he does it belongs to the engine's combat style, plus a handful of point picks made outside the scorer (`Concealment` hide and flee points, the hidden step, the back-off point, the ch.24 approach). Each of those is its own rule set with its own constants.
 
-v4: **a position is a candidate.** Each lap the generator offers spots and the scorer ranks (action, spot) pairs.
+v4: **a position is a candidate.** There is ONE decider of where he stands: the shared movement pass of 8.7, once per 500 ms window for the whole party. The action facet (his own lap, today's scheduling) never picks a position.
 
 **Candidate spots**, generated from the navmesh around him by ONE function, `Env::Spots(self, snapshot, kinds, budget)`, each tagged with its kind. A kind is a generator rule, not a hard-coded behaviour:
 
@@ -462,11 +464,18 @@ v4: **a position is a candidate.** Each lap the generator offers spots and the s
 | hide and sneak exposure | `spotDetected` | `Detect.h`'s formula with real rays |
 | target reachability | `foeReachable`, `foePathLen` on the TARGET's facts | `Env::Path` |
 
-**Chosen together.** A candidate is (action, target, spot). The generator pairs an action only with spots that make sense for it: a cast with firing spots for that spell's range band, a heal with heal-reach spots, a melee attack with reach points and flank points, a retreat with exits. "Stay here" is always a spot, with zero path cost. The score is the action's score times the spot's considerations, so a strong spell from a spot he can reach in one second beats a stronger one from across the room. The existing act.attack veto for a waived foe, the range vetoes and the line-of-fire refusal become spot considerations instead of vetoes: a cast that is refused from here is offered from there.
+**Chosen together, by one decider.** Who decides what, and who wins:
+
+- The **action facet** decides WHAT, as today, on his own lap: a family, a target, a spell. It keeps every consideration it has.
+- The **movement pass** decides WHERE, once per window. For each follower it scores (action, spot) pairs for the action he holds when the pass runs AND for the next two of his last ranked list (the action facet's own ranking, cached with the picture). So "a spot for a spell he can then cast" is real: the pass may choose a spot that serves his second-ranked action better than his first, when the pair scores higher.
+- The pass publishes, per follower, the spot and the action it was chosen for (`spotAction`). The action facet reads two things back as plain facts: where he is going (its range, sight and line-of-fire considerations are evaluated at the committed spot once he is inside its radius, and at his own position before that), and `spotAction`, which gets the existing momentum bonus. It is a bonus, not an order.
+- **Position wins inside a window. Action wins across windows.** While a spot is committed the action facet cannot move him. It can only choose among actions, and those that work from the spot score better because their range and sight facts are good there. If it picks another action anyway (a heal the moment an ally drops), he does it from where he is if it can be done, and the next pass, at most one window later, plans for the action he then holds. An action change is one of the events that marks him for the next pass. It never triggers a pass.
+
+The pass pairs an action only with spots that make sense for it: a cast with firing spots for that spell's range band, a heal with heal-reach spots, a melee attack with reach points and flank points, a retreat with exits. "Stay here" is always a spot, with zero path cost. The pair's score is the action's last score times the spot's considerations, so a strong spell from a spot he can reach in one second beats a stronger one from across the room. The existing act.attack veto for a waived foe, the range vetoes and the line-of-fire refusal stay where they are in the action facet. What changes is that the pass offers the spot from which they no longer bite.
 
 **Per class and playstyle.** Spot kinds are gated by the class row exactly as families are (`ClassGate`): a Knight is offered peel and chokepoint and never retreat, a Thief hide and flank, a healer heal reach and regroup. Weights per class live in `ClassCurves` rows like every other class weight, searched by the tune.
 
-**Hysteresis.** He never dithers, by three mechanisms that already exist for actions and are reused: momentum (the spot he is walking to gets `t.postureMomentum`-style bonus until he arrives or it becomes invalid), a commit time per leg (no new spot inside `spotCommitSec` unless the current one is refused), and a minimum gain (a new spot must beat the current by `spotPreempt`, the `t.preempt` pattern). The `osc/min` metric of 2.5 is the gate on all three. The cadence of the decision itself is in 8.7.
+**Hysteresis.** He never dithers, by three mechanisms that already exist for actions and are reused inside the pass: momentum (the spot he is walking to gets a `t.postureMomentum`-style bonus until he arrives or it becomes invalid), a commit per leg (a committed follower is not re-scored unless an event of 8.7 marked him), and a minimum gain (a new spot must beat the current by `spotPreempt`, the `t.preempt` pattern). The `osc/min` metric of 2.5 is the gate on all three. The cadence of the decision itself is in 8.7.
 
 **One table.** New tunables are fields of `Tuning` with `t.spot*` names and rows of the consideration catalogue. New kinds are rows of one `kSpotKinds` table (name, generator function, which families may pair with it). "To add a spot kind, add a row to `kSpotKinds` and its generator in `iaus/Spots.cpp`. To add a consideration, add a `Cons` and its `Facts` field. To add a geometric fact, add a method to `Env` and fill it in `Spots.cpp`, nowhere else."
 
@@ -496,8 +505,8 @@ What the game side needs, and how sure each piece is:
 
 | Need | Status |
 |---|---|
-| The navmeshes of a loaded cell | `TESObjectCELL` runtime data `navMeshes` (`NavMeshArray`, `BSTArray<BSTSmartPointer<NavMesh>>`). DECLARED in the fork (`RE/T/TESObjectCELL.h`). The member's offset is VERIFIED on 1.6.1170 and 1.7.104 as the same (`Docs/ENGINE_NOTES.md` layout table, the `navMeshes 0x80` row, already read by `LootTake.cpp` and `Lotd.cpp`). 1.5.97: NOT verified here, own row needed (principle 11) |
-| Vertices, triangles, flags, neighbours | `BSNavmesh::vertices / triangles`, `BSNavmeshTriangle {vertices[3], triangles[3], triangleFlags, traversalFlags}` (size 0x10, the same 16 bytes as the NVNM record the extractor decodes). DECLARED in the fork's `RE/B/BSNavmesh.h` and noted in `Linux-Native-Tools/actor-ai-and-packages.md:215` (`triangles` at 0x028). The other member offsets of `BSNavmesh` are NOT verified against the disassembly on any runtime. CommonLib declarations are not ABI-trustworthy (principle 6): each needs a disassembly check per runtime and a `VERIFIED-ADDRESSES`-style row |
+| The navmeshes of a loaded cell | **Already read in shipped code**: `native/logistics/LootReach.cpp:40-165` (the loot walk's connectivity pre-check) takes the cell's `spinLock`, walks `GetRuntimeData().navMeshes`, finds the triangle under a point (`FindTriangle`) and flood-fills neighbours, edge portals and door portals. It runs on the MAIN thread, posted, with its verdict cached, because a cell unload happens on main. It treats closed doors, obstacles and enable/disable portals as passable and answers Island only when certain. That file is the pattern and the proof the members can be read on the shipped runtimes: the snapshot builder is the same walk under the same lock, copying into plain arrays instead of flooding. Declaration: `TESObjectCELL` runtime data `navMeshes` (`NavMeshArray`, `BSTArray<BSTSmartPointer<NavMesh>>`). DECLARED in the fork (`RE/T/TESObjectCELL.h`). The member's offset is VERIFIED on 1.6.1170 and 1.7.104 as the same (`Docs/ENGINE_NOTES.md` layout table, the `navMeshes 0x80` row, already read by `LootTake.cpp` and `Lotd.cpp`). 1.5.97: NOT verified here, own row needed (principle 11) |
+| Vertices, triangles, flags, neighbours | `BSNavmesh::vertices / triangles`, `BSNavmeshTriangle {vertices[3], triangles[3], triangleFlags, traversalFlags}` (size 0x10, the same 16 bytes as the NVNM record the extractor decodes). DECLARED in the fork's `RE/B/BSNavmesh.h` and noted in `Linux-Native-Tools/actor-ai-and-packages.md:215` (`triangles` at 0x028). `vertices`, `triangles`, the edge portals and the door portals are exercised by `LootReach.cpp` in the field on 1.6.1170. The members it does not read (`closedDoors`, cover edges, the grid, obstacle data) are NOT verified against the disassembly on any runtime, and none is verified on 1.5.97 here. CommonLib declarations are not ABI-trustworthy (principle 6): each needs a disassembly check per runtime and a `VERIFIED-ADDRESSES`-style row |
 | Edge links, ledges, portals | `BSNavmeshEdgeExtraInfo {type: portal, ledge up, ledge down, enable/disable portal}`. DECLARED. Meaning of the types as the pathfinder uses them: needs RE or a probe (this also settles the extractor's `LINK.kind` open item) |
 | Door state | `BSNavmeshTriangleDoorPortal`, `BSNavmeshClosedDoorInfo` (a `BSPathingDoor` and a triangle). DECLARED. Whether `closedDoors` is the live list the pathfinder consults: needs a probe (open a door, dump twice) |
 | Runtime obstacles | `BSNavmeshObstacleData`, `BSNavmeshObstacleUndoData`. Forward-declared only. Needs RE. Not required for a first version: an obstacle the view lacks shows up as a Movement Blocked leg, which the design already handles as a fact |
@@ -516,30 +525,32 @@ What needs RE or a probe before any native slice, in order: (1) `BSNavmesh` memb
 
 IAUS decides a spot. Harbinger moves the body, so the engine's own path following and animations stay (animations are required for all actions, standing rule).
 
-| Channel | Carries today | Enough for |
+**A held world point already exists.** ch.24 CombatApproach with `kApproach_Point` (ABI v39, `APMF_API.h:829-855`): the centre is a world point (`param.pos`, target 0), `param.fval` is the radius, the actor fights the whole way, arrival ends the claim unless `kApproach_Hold`, and a point the engine cannot path to ends it as `kApproachState_EngineDropped`. With `kApproach_Hold` he stays within the radius of the point until the client releases it. MFO uses both today: `apmf/GroundApproach.cpp` (give ground: the point, ends on arrival) and `apmf/Disengage.cpp:104` (point and hold: his combat area is the retreat point, the engine paths him there at its run speed). So the first cut of this note was wrong to ask for a new facet for "hold this spot", and to quote v2's "needs a combat area centred on a point" as open: v39 is that. Harbinger does not test the point. Choosing a reachable one is the client's job, which is exactly what `FindPath` on the active navmesh is for.
+
+| Channel | Carries today | Serves which spots |
 |---|---|---|
-| ch.24 CombatApproach (target ref, radius, hold, standoff) | walk toward a pinned foe to regain sight | "reach the unreachable", firing spots that are defined relative to the TARGET at a radius |
+| ch.24 CombatApproach, on a ref (radius, hold, standoff) | walk toward a pinned foe to regain sight (`OffenseApproach.cpp`), close on a heal recipient (`CombatApproach.cpp`) | target-relative firing spots, heal reach, reach the unreachable |
+| ch.24 CombatApproach, on a POINT (`kApproach_Point`, with or without `kApproach_Hold`) | give ground, the disengage run | **every spot kind**: firing spot, cover, high ground, chokepoint, flank, peel, kite, retreat. Point plus hold is the spot claim |
 | ch.19 travel (to a ref or cell, arrival radius 50 to 512) | loot and errand legs, out of combat | loot route. Ends on the actor entering combat, so not a combat mover |
-| ch.23 pursuit leash (anchor, radius) | keeps him near the player | regroup, anchor and leash as a constraint |
+| ch.23 pursuit leash (anchor, radius) | keeps him near the player | regroup, and the leash as a constraint. Per the ABI note a leash still wins over a ch.24 point |
 | ch.21 EngageOnSight (entry foe) | the entry | unchanged |
-| ch.25 guard | the held guard | not a mover |
-| Disengage, hide, back-off, hidden step runs (`Concealment` picks to a point) | the stealth and mage lines' runs | cover and retreat spots, for classes with the disengage flag only |
+| ch.25 CastGuard (`kIntent_CastGuard`: the line-of-fire and area guard on his own casts) | refuses or holds a cast through a friend | not a mover. It is the engine-ray authority for line of fire that the pass reads |
+| ch.31 CombatMove (`kIntent_CombatMove`, ABI v38: one melee move. The held guard and the power attack ride it) | block, power attack | not a mover |
 
-What they cannot express today:
+What the point claim does NOT express, and so what a Harbinger brief (H1) is still for. It is smaller than first written:
 
-- **Hold this exact spot in combat.** ch.24 is anchored on a ref with a radius. A point needs a marker ref. v2 section 25 already records this as a PROVEN LIMIT for the step back: "needs a Harbinger combat area centred on a point, tier A".
-- **Strafe**, and any motion defined relative to a foe's facing (flank while engaged).
-- **Break line of sight as a goal** that the engine keeps honouring (he walks to cover and the combat style walks him back out).
-- **A path through a chosen corridor.** The engine picks its own path. A spot behind a different door than the engine prefers is reached by the engine's route or not at all.
-- **A melee class moving to a point** at all: retreat and back-off roads are gated to classes with the disengage flag.
+- **Stand still.** `kApproach_Hold` keeps him inside R "moving tactically inside it". A firing spot behind a pillar is lost if he circles out of its two metres. Needed: a hold that pins him, or a radius the engine honours down to a body width. Which of the two the engine already does at a small R is NOT known: it is the first thing to observe.
+- **Facing.** Nothing says "face this ref" or "face this heading" while he holds. A cover spot is only cover if he looks out of it the right way.
+- **Gait.** The point claim runs. A sneak approach, a walk, or a sprint is not a parameter.
+- **Strafe**, and any motion defined relative to a foe's facing.
+- **Corridor choice.** The engine picks its own path to the point. A route the pass refused (exposure along it) can only be forced as a sequence of point claims on `FindPath`'s corners. Whether the engine then follows corner to corner without stalling is not observed.
+- **Field status.** The point road is shipped and field-run for the disengage and give-ground cases only. Its behaviour as a general mover is UNPROVEN: melee classes holding a point while foes are in reach, a point on another floor, a point behind a door, a point claim renewed every 500 ms window. Each is a probe before the design leans on it (principle 5: disassembly and an ABI comment prove the path exists, not that it runs).
 
-The new Harbinger facet, as its own tier-A brief (number assigned by Harbinger, not here): **CombatPosition**. Declare: a world point, an arrival radius, a hold (stay within the radius until released), a facing target (keep aiming at this ref), a gait, an expiry. Enforce: the body goes there by the engine's own pathing and stays, while every other combat-movement source for that body (the combat style's advance, circle and fallback) is denied for the claim's life. Deny-completeness is the design question the brief must answer facet by facet (principle 2): a hold that the combat style can walk him out of is not a hold. Its end states are reported like travel's: ARRIVED, BLOCKED (with the point), ENGINE DROPPED, TARGET LOST, PREEMPTED. A chosen corridor is expressed as a sequence of CombatPosition claims on the corners of `FindPath`'s route, only when the engine's own route is refused by a consideration (exposure along the path). Strafe is out of the first version.
-
-Until that facet exists, IAUS can ship spot scoring for what today's channels reach: target-relative firing spots through ch.24, cover and retreat for disengage classes through the existing runs, regroup through the leash. The lab models both (`--position-road today|facet`), and the difference per class in J and in the pathing metrics is the measured value of the Harbinger brief.
+marth's ruling (11, item 9): the spot scoring and the Harbinger side are built TOGETHER. So H1 is not "after". It is the same batch as the native movement work: observe the point road as a general mover, then add to Harbinger only what the observation says is missing from the list above. The lab models both (`--position-road point|pinned`: `point` is today's ABI as documented, `pinned` adds stand-still and facing), and the difference per class in J and in the pathing metrics is the measured value of each H1 item.
 
 ### 8.4 The oracle plans over positions too
 
-The oracle's options gain the spots: every (action, spot) the generator offers, plus spots of every kind its class may use that the generator did NOT pair (so "IAUS never offered the spot the oracle used" is a (c) divergence, counted like a missing family). Class-bound as always: `ClassRefuses` reads the same `kSpotKinds` gate, and a spot that only the facet road could reach is refused under `--position-road today` with its own refusal token. The existing `ext:clear_line`, `ext:get_sight`, `ext:step_back`, `ext:sprint_back`, `ext:to_player`, `ext:to_healer` are all special cases of a spot and are retired into it, each only after the spot version reproduces its numbers.
+The oracle's options gain the spots: every (action, spot) the generator offers, plus spots of every kind its class may use that the generator did NOT pair (so "IAUS never offered the spot the oracle used" is a (c) divergence, counted like a missing family). Class-bound as always: `ClassRefuses` reads the same `kSpotKinds` gate, and a spot that needs stand-still or facing is refused under `--position-road point` with its own refusal token. The existing `ext:clear_line`, `ext:get_sight`, `ext:step_back`, `ext:sprint_back`, `ext:to_player`, `ext:to_healer` are all special cases of a spot and are retired into it, each only after the spot version reproduces its numbers.
 
 Cost: options per decision grow from about 6 to about 6 times the spots per action. The race drops most after 8 streams. ESTIMATE: 2 to 3 times an oracle fight, on top of 2.7. This is the largest cost in the whole design and the reason 6.2's cuts come first.
 
@@ -603,8 +614,10 @@ A globally highest-first rule has no first mover: swapping two followers' places
 |---|---|---|---|
 | Candidate spots in the party pool | 64 | | worker |
 | Path searches (after the triangle-pair cache) | 80 for a party of ten, 0.1 to 0.4 ms each | 16 to 64 ms of worker time | worker |
-| Ray requests | 256, at most 16 a frame | 512 | main thread, about 5 to 20 microseconds each (ESTIMATE for an engine pick): under 0.3 ms in any frame, 3 to 10 ms a second |
-| Triples scored | up to 10 x 6 actions x 16 spots = 960 | | worker, tens of microseconds each: 10 to 30 ms |
+| Ray requests | at most 16 a frame, so at most 16 x the frames the window holds: 192 at 24 frames a second (12 frames), 480 at 60. The pass plans for the FLOOR, 192. A request the window could not serve is carried to the next window and its fact stays marked unanswered. It is never dropped and never guessed | 384 at the floor | main thread, about 5 to 20 microseconds each (ESTIMATE for an engine pick, to be measured by a probe before the budget is trusted): under 0.3 ms in any frame, 2 to 8 ms a second |
+| Triples scored | up to 10 followers x 3 actions (his held action and the next two of his ranking, 8.1) x the 64 pooled spots his kinds allow = at most 1,920, typically a quarter of that | | worker, tens of microseconds each: 10 to 40 ms |
+
+The rays are the tight budget. Worst case without sharing would be 64 spots x 5 foes x 3 rays = 960 a window, five times the floor. What makes 192 enough: a fact is keyed by (spot, foe) and shared by the party, a fact answered in the last window is reused while neither end moved a triangle, the snapshot's boundary walls remove the rays whose answer is certain, and spots are asked nearest and best-scored first, so what is left unasked at the window's end is the far tail. A spot whose sight was not answered is scored as UNKNOWN (the catalogue's existing not-applicable input, `In::Off()`), never as clear.
 
 So a full party costs the worker about 30 to 100 ms of every 500 ms window and the main thread well under a third of a millisecond in any frame. When a budget is hit the pass scores fewer spots, nearest first, counts it and logs it once per fight. It never uses a stale fact as fresh.
 
@@ -647,23 +660,59 @@ An adapter row is data: `{ name, graph variables, start / stop / interrupt event
 | the movement pass itself (8.7) | treat "no progress" as an invalidating event. A move in progress is a commitment with the watchdog as its bound |
 | `[stall-probe]` and the pathing metrics of 2.5 | count the move as stuck time. The lab's `stuck%` excludes it and reports traversal time on its own line |
 
-**(4) Can he be ordered to do it?** There is no API in what was read. The trigger is the mod's own stuck gate: he pushes at the ledge. So a deliberate traversal is expressed with what exists: the route's corner is the foot of the ledge, squarely facing it, and the leg holds him there (ch.24 or the position facet with a small radius and a facing), and the mod does the rest. That is a request, not a guarantee, so the move's outcome is observed (source row 3) and a failure falls back to the stairs route with the edge priced up. A proper order would be a Harbinger traversal facet with the mod's cooperation or its own animation road: its own brief, not designed here. And since the mod is GPL, MFO stays MIT by never linking to it and never copying from it. It reads graph variables and events, which any plugin may observe.
+**(4) Can he be ordered to do it?** There is no API in what was read. The trigger is the mod's own stuck gate: he pushes at the ledge. So a deliberate traversal is expressed with what exists: the route's corner is the foot of the ledge, squarely facing it, and the leg holds him there (the ch.24 point claim with a small radius, and a facing once H1 adds one), and the mod does the rest. That is a request, not a guarantee, so the move's outcome is observed (source row 3) and a failure falls back to the stairs route with the edge priced up. A proper order would be a Harbinger traversal facet with the mod's cooperation or its own animation road: its own brief, not designed here. And since the mod is GPL, MFO stays MIT by never linking to it and never copying from it. It reads graph variables and events, which any plugin may observe.
 
 **(5) The sim.** `--v4 traversal=off|drops|parkour` and a per-actor ability set with the declared conditions as data (`--traversal-file`, defaults from the adapter row, marked UNVERIFIED until the probe's numbers replace them). Scenarios, each run with and without the ability, the pass rule being that BOTH are sensible: `ledge-shortcut` (a foe above, the player above: with climb he climbs when the slot is free, without it he takes the stairs, and nobody stands at the wall), `ledge-slot` (two followers, one slot: one climbs, the assignment of 8.7 sends the other round), `ledge-player-below` (the climb condition fails: stairs, no pressing at the wall), `foe-climbs` (a mage's safe ledge is not safe from a climbing foe), `drop-retreat` (a drop as the exit of a dead end, and no drop when the ability is off). The oracle is class-bound and actor-bound: it may use an ability only when `Traversal::Of` grants it.
 
 **(6) The passive field probe**, so the numbers are measured and not read off an ini. Config-gated and rate limited, no hotkey, dev and release builds alike since it only observes. Per traversal event on a follower, or on a foe within the party's fight: actor, the event, position and height at the start and at the stop, duration, the player's position and height, the triangle and link kind under him at both ends when the navmesh snapshot exists, who else was in a move, what MFO had in flight for him (leg, claim, pin, run), and whether any of the readers of (3) fired during it. And the same line for a plain drop link taken with no graph event, which is the check the extractor's review asked for: **whether followers use the navmesh's own drop links in the game has not been observed, and nothing in the movement design relies on them until this line has shown one.** `calib_traversal.py` turns those lines into the ability file the lab loads.
 
-### 8.9 Sequence: what must precede the tune
+### 8.9 Trust: the game has to know when the world is weird
 
-marth wants the tune started after the sim round. Two honest facts pull against each other. A tune started now tunes a plane, and its movement-sensitive values (range, retreat, hide, kite, approach) are what section 4.3 ranks first as wrong. But the full design is weeks of slices, three of them native tier A and one a Harbinger facet.
+marth: "The in game side will need to know if it actually runs into wierdness."
 
-Recommendation: **two tunes, not one.**
+The sim's library skips anomalous areas (1.4). The game cannot skip the place it is standing in. A list with five hundred mods has navmesh that floats, links that point at nothing and doors that are not there, and a movement facet that believes such a mesh walks followers into walls with full confidence. So the active navmesh and what followers live through on it are both read for trouble, by ONE reader, `iaus/EnvTrust.h` (pure): `Trust::Of(region) -> { level, reason, since, evidence }`. A region is a navmesh, or a connected patch of one around a point (a grid cell of the snapshot, about 512 units), so one bad doorway does not condemn a dungeon.
 
-- **Tune A, now, on the fixed v3 world of slice 1** (this branch): the heal-timing knobs are live, the hit sizes are per event, the driver's bookkeeping is right, the runner is restart-safe and idle. Before it starts: the band re-measure of 9.6 and slice S7 (`follow`, so the gap is the score) if marth wants "follows the oracle" to be literal for this round. Its values are for what the plane can judge: target choice, heal timing, drink lines, power and taunt pacing, family weights. It is labelled as such.
-- **Tune B, after S2 to S5 and S6**: environments, route search, sight by geometry, the pathing metrics as gates, cast starts. No native change needed for any of them. It is the first tune that can say "no odd pathing" for the legs the game already has. Spot scoring is not in it.
-- **Tune C, after the movement decision** (native `Spots`, the snapshot, then the Harbinger facet): the tune of where to stand.
+**Static signs**, checked on the main thread when a cell's snapshot is built, each a row of ONE table `kTrustSigns` with its threshold:
 
-What cannot be skipped before any tune that claims pathing: S3, S4, S5. What can follow: loot in the world (S8 to S10), T4 mechanics (S12 to S15), collision extraction, the facet.
+| Sign | Read from | Says |
+|---|---|---|
+| a mesh far from the ground around it | a few vertical engine rays down from sampled triangle centres (budgeted, at build time, not per window) | floating or buried navmesh |
+| a link to a missing or stale triangle | the edge portal's mesh id and triangle index against what is loaded | a plugin conflict left a dangling link |
+| one-way neighbours | triangle A names B and B does not name A (the extractor's validator reports the same on vanilla at 0.005 percent, so the threshold is a rate, not a count) | an edited mesh, or a deliberate drop without its link |
+| an island under the party | the flood fill `LootReach.cpp` already does | no walkable way off it |
+| a triangle the rays say is inside or above geometry | a ray along the triangle's edge at chest height is blocked at once, or the ray down finds nothing | mesh under a static a mod added, or over a hole |
+| a door portal without a door | the door portal's ref is null, disabled or deleted | a removed door whose portal stayed |
+
+**Lived signs**, per place, from what a follower or the player actually experienced. They need no new engine read. They are the end states this project already logs:
+
+| Sign | Source |
+|---|---|
+| the plan said walkable and he made no ground | Movement Blocked with a clear path and no door or actor in the lane, a leg that ends STUCK |
+| the engine refused a path we found | `kApproachState_EngineDropped`, a ch.19 leg the engine ends short |
+| the engine's path is far from ours | the leg's travelled length against `FindPath`'s (8.2), past a ratio |
+| he was moved without walking | a position jump between two samples larger than his speed allows (a teleport, a warp, a script) |
+| a traversal we did not plan | a parkour, ladder or drop move (8.8) on a leg whose route had none |
+| falling | a height loss with no link under it |
+
+**The result.** A trust level per region (trusted, doubted, distrusted) with its reason and its evidence, **shared by the whole party** (it lives in the party picture of 8.7), learned for the session and held in no save. It is never a silent permanent block. That is the 11-17 GATED lesson, where one false mark froze all loot (`LootNeed.h`: "a gate is a fact, not a freeze"). So every mark decays, and new facts clear it at once: the cell is re-attached, the player walks through the region (the player's own trail is the strongest proof a place is walkable), a follower crosses it, a door event changes the snapshot stamp. A lived sign needs a repeat, or two different signs, before a region is distrusted. One blocked leg is only a blocked leg.
+
+**What low trust does.** Three steps, each weaker than the last and each chosen by the considerations, not by special cases. `spotRegionTrust` and `pathRegionTrust` are facts like any other, with their own curve in the one catalogue:
+
+1. Spots and routes that do not depend on the region score better. A doubted region costs. A distrusted one is priced so that only "stay here" is worse.
+2. Where the region cannot be avoided, the pass prefers what has been PROVEN: the engine's own pathing to a foe (the ref form of ch.24, no point of ours) and the player's recent trail (points the player stood on in this cell, which the picture keeps) over spots of its own making.
+3. If nothing proven serves, the movement facet hands that follower back to the engine for that region: no spot claim, today's behaviour. That is the documented degrade of 8.2, per region instead of per runtime.
+
+**Never a mask.** The first time a region's level changes, one line: `[env-trust] <cell> region <id> <level>: <sign> (<evidence: the triangle, the leg, the two lengths, the positions>)`, once per region and level, rate limited, and the same record goes into the dev dump (8.6), so the case is diagnosable from a field log and replayable in the lab. The log says what was weird. It never just goes quiet.
+
+**To add a sign, add a row to `kTrustSigns`** (name, static or lived, the threshold, the level it argues for, how it decays). One table, one reader, and every consumer (spots, paths, the loot legs' gating, the dump) calls `Trust::Of`.
+
+**In the sim.** The library is clean by construction, so the defects are INJECTED into clean environments, as scenarios: `trust-missing-link` (a link removed after the plan was made), `trust-buried-patch` (a patch of mesh under a wall the rays see and the mesh does not), `trust-ignored-wall` (a wall the mesh walks through), `trust-one-way` (an edge walkable one way only). The lab's "engine" walks the TRUE geometry while IAUS plans on the defective mesh, which is exactly the game's situation. Gates: recovery time (from the first lived sign to a plan that no longer depends on the region) under a bound, no oscillation (`osc/min` of 2.5 inside its band while the mark stands), no permanent block (after the defect is "repaired" mid-scenario and the player walks it, the region is used again within one decay), and the log line printed once. The same four defects are also the test of the 11-17 lesson: a single blocked leg in a clean environment must NOT distrust a region.
+
+### 8.10 Sequence: one tune, after the environment work
+
+marth's ruling (11, item 1): there is NO tune on the plane. The tune waits for the environment work, because every cached result dies with the sim build it was made by (the driver's cache is keyed by the binary's hash), so a tune started now would be thrown away at the first environment commit. And his rule for the work itself: "We want to avoid just running the sim over and over every time something changes". So the sim slices are batched by area on one agent each, each batch regenerates its baselines once and runs the long checks once at its end, and the tune starts once, on the world all the batches left.
+
+What that one tune needs in the sim before it starts: the world (environments, route search and following, sight by geometry, the pathing metrics as gates, cast starts), the choice batch (the `follow` stage so the gap is the score, field-size books and the spell choice stage), and the pre-tune measurements of 9.6 run ON THAT WORLD, once. What it does not need and can follow as a second, smaller tune of the knobs they add: loot in the world, the T3+ mechanics, and the movement decision (native spots, the snapshot, traversal, trust, the Harbinger additions), which is native tier A work with field probes in front of it. Section 10 is the batch list and its order.
 
 ## 9. Slice 1 (built on this branch)
 
@@ -688,28 +737,38 @@ Baseline: 4,099 of 17,269 metrics move. U +0.18 mean over the 90 class and brack
 
 A modelling limit to know: the lab's attacker estimates are much closer to the real hit than the game's (the game's read 2 to 6 times under, 9.2), so the lab's floor binds more often than the game's. The burst reads agree in shape, not to the point.
 
-### 9.2 F-A: the hit sizes, per event (`7141eeca`)
+### 9.2 F-A: the hit sizes, per event (`7141eeca`, revised in the review round)
 
 The review's finding was right, and the tool now shows it: on `deck-run-1117f` alone `calib_damage.py` prints "FIELD HIT WINDOWS n=16 ... median 4.7% p75 9.7% p90 30.1% max 96.7%", the exact figures of v3 15.5. The sixteen "hits" were sixteen windows.
 
-What a hit line is. "took" is the drop between the worker's two health samples around the event, 0.12 to 0.55 s apart. The engine raises the event twice for most blows, and once more per rider of the blow (an enchantment, a poison, a perk spell: another source form at the same instant). Lines are rate limited. An event can land one sample late.
+What a hit line is. "took" is the drop between the worker's two health samples around the event, 0.12 to 0.55 s apart. The engine raises the event twice for most blows, and once more per rider of the blow (an enchantment, a poison, a perk spell: another source form at the same instant). Lines are rate limited: the lines' own "lines skipped" counts add up to 223 dropped lines, and 21 windows report more events on the target than the log holds lines for. An event can land one sample late.
 
 The derivation (`calib_damage.py`, section HITS, reproducible, a CLI check compares its output with the two constants):
 
 - Five sessions carry the lines: 1117c (1117d and 1117e are the same session pulled again, counted once), 1117f, 1117g, 1118-adelinda, 1119-jesper. Not one, as v3 had.
-- 263 foe-on-follower events after de-duplication, **139 windows with a loss**.
-- **27 windows hold one plain blow of one foe**: the attacker's weapon was sampled, every source of the blow is that weapon (no rider), no power attack, sneak attack, bash or block, and the loss is at least 0.25 of the attacker's own after-armor estimate (`MIN_SHARE`, an ASSUMPTION: below that the blow landed in the neighbouring sample. The estimate reads under the real hit, so a real blow cannot be that far under it).
-- **10 of the 27** belong to an attacker kind with three or more such blows, which is what a median needs: 4 arrows of Ravager Archers (ratios 1.00, 1.00, 1.00, 2.06) and 6 blows of Silver Hand with one weapon (0.71, 0.71, 0.94, 1.06, 1.65, 2.48).
+- **139 windows with a loss**, each classified by what it holds (`classify_window`), and each kind kept as its own figure:
 
-`World.h kFieldHit` is those ten, divided by their mean so the mean is 1: `0.56 0.56 0.75 0.79 0.79 0.79 0.84 1.31 1.64 1.97`. The old table's largest value was 3.91.
+| Kind | Windows | Share | Loss, share of the target's health: median, p90, max |
+|---|---|---|---|
+| plain: one plain weapon blow of one foe | 27 | 19.4 % | 7.5 %, 33.0 %, 100 % |
+| rider: a weapon blow with an enchantment, poison or perk spell on it | 35 | 25.2 % | 8.6 %, 32.4 %, 96.7 % |
+| power attack | 15 | 10.8 % | 14.8 %, 34.5 %, 39.3 % |
+| foe spell | 14 | 10.1 % | 8.6 %, 71.0 %, 95.0 % |
+| unarmed (a creature's own attack) | 8 | 5.8 % | 0.3 %, 29.7 %, 29.7 % |
+| unsampled attacker (no estimate on its lines) | 37 | 26.6 % | 7.1 %, 46.3 %, 100 % |
+| bash, blocked, late (under a quarter of the estimate) | 1 each | | |
+| several attackers, or blows at several instants | **0** | 0 % | |
 
-**Do the logs support per-event sizes? Barely.** Ten blows, two attacker kinds. That is the honest size and it is in the comment at the table. It is still better founded than what it replaces, because it is the thing the name says. The assumption made explicit: a plain physical blow of a foe varies by about a factor of two around its median, drawn evenly from ten observed ratios.
+- **No window holds blows of several attackers or instants.** So nothing here is a multi-blow burst, and neither the table nor the lab models one. (The first cut of this note said the field's bursts were partly "several blows in one window". They are not, in these logs.) All 27 plain windows are also free of unlogged events by the lines' own counts.
+- The spread is drawn from the **27 plain blows**, each as the health it took over the ATTACKER'S OWN printed estimate after armor (the line's hit x (1 - armor share)). Every plain blow counts whatever its attacker: no per-kind median and no minimum per kind, which is what cut the first version of this table to ten blows. The ratios run 0.77 to 4.62 with a mean of 2.202, which is how far the game's estimate reads under a real plain blow. Divided by that mean: `World.h kFieldHit`, 27 values from 0.35 to 2.10, median 0.91.
 
-What moved out of the table, and matters more than the table: **the field's bursts are not big plain blows.** They are riders, several blows in one window, power attacks, and foe spells (the largest windows: a Bandit Chief's spell took 292 and 302 from followers with 308 and 440 health). The lab models power attacks and several attackers. It does not model riders on foe blows or the size of those foe spells. So after this change the lab is gentler in bursts than the field again, by an amount now attributed instead of hidden in a multiplier. That gap is item 5 of 4.3.
+**Do the logs support per-event sizes? Yes for a plain blow, on 27 of them.** Part of the spread is the estimate's own error from one attacker to the next, which cannot be separated from the blow's variation at this size. The old table's largest value was 3.91.
 
-`kOneHitLine` 0.30 to 0.35: the 90th percentile of the 139 windows is 34.5 percent of the target's health. It is stated as a WINDOW statistic on purpose. The game's own read, `Estimate::HitsToDown`, is the largest burst inside `Tuning::burstWindowSec`, not one event, so "one hard burst from down" is the right line for judging a heal as late. One assumption inside it: the target's maximum health is the largest health the session's lines show for him.
+What is NOT in the table, and matters more than the table: the plain blow is a fifth of what hits a follower. Riders are a quarter of the windows and the lab does not model them. Foe spells are a tenth and carry the worst tail (p90 71 percent of the target's health). The lab casts foe spells with its own damage model and nothing checks that tail. Power attacks the lab models itself. Each kind is printed by the tool on its own line for the day it is modelled. That gap is item 5 of 4.3.
 
-Baseline: 7,704 of 17,268 metrics move. U +3.28 mean over the 90 rows, +1.44 over the 15 natural rows. The old tail had cost -4.56 and -2.76. Every J of the v3 world is a new number again.
+`kOneHitLine` 0.30 to 0.35: the 90th percentile of the 139 windows is 34.5 percent of the target's health. The plain blows alone give 33.0 percent, so the line does not depend on what a window holds. It is read off the windows because the game's own read, `Estimate::HitsToDown`, is the largest burst inside `Tuning::burstWindowSec`. One assumption inside it: the target's maximum health is the largest health the session's lines show for him.
+
+Baseline (regenerated once in the review round, with the 27-value table): 7,243 of 17,265 metrics move against the ten-value table. U +0.17 mean over the 90 rows (-7.16 to +7.61), +0.53 over the 15 natural rows. Against the old v3 table the world is about 3.5 U kinder over the 90 rows (the old tail had cost -4.56). Every J of the v3 world is a new number again.
 
 ### 9.3 F-B, F-C, F-D's uncounted heals (`ee73e70f`)
 
@@ -719,7 +778,9 @@ Baseline: 7,704 of 17,268 metrics move. U +3.28 mean over the 90 rows, +1.44 ove
 
 ### 9.4 The driver (`037b17f8`)
 
-- `needs_joint_rerun`: `final_curves()` is the one reader of the final table and now leaves out what recalib withheld. The joint stage therefore grades the reduced table, and `ship_state()` clears the flag after a passing joint on it. The withheld list alone used to keep it set. Recalib resets the list when it starts.
+- `needs_joint_rerun`: `final_curves()` is the one reader of the final table and now leaves out what recalib withheld. The joint stage therefore grades the reduced table, and `ship_state()` clears the flag after a passing joint on it. The withheld list alone used to keep it set. Recalib resets the list when it starts. Review round: when recalib withholds a value after the joint ran, the driver runs the joint stage AGAIN in the same run (`rerun_after`), so the round ends with a verdict on the table it would ship and nobody has to change the command.
+- One value per knob (review): the rejudge stage and the classes stage can both accept a value for the same knob (the default rejudge spec `warrior:6.32.b` is a classes knob too). `final_curves()` keeps the classes stage's, which searched the whole range after it.
+- The simulator's hash is recorded (`config.bin_sha`) and `carry_over` carries NOTHING from a summary made by another binary. Its cache replays none of it anyway.
 - `test_tune_driver`'s `LOOT_KNOBS` failure: the twelve `LootTuning` fields native gained are `LOOT_NOT_SEARCHED` rows with their reasons.
 - "15 cells" text: the RULE, the docstrings, the joint failure lines and `summary.md` say "every cell" or the real count.
 - `summary.json` config records `cells` and `cell_list`.
@@ -733,9 +794,17 @@ The generator, runner and watcher of rounds 1 and 2 lived in `/tmp` and are gone
 - `gen_class_files.py`: `summary.json` to per-class tuning files. In round 2 the 23 new classes were written empty although the log showed accepted values. The likely cause, unverified because the old tool is gone: a summary seeded from an earlier round whose recalib rows covered 15 classes, read as the value list. Made impossible three ways: values come only from `tune_driver.final_curves()`, a recalib stage that judged another table stops the tool with nothing written, and `progress.log` is checked against the summary. The driver also drops a carried-over joint and recalib result when `--cells` differs (`carry_over`). Each has a test, including the round-2 case itself.
 - `watch.py`: read-only status.
 
+Review round, each with a test:
+
+- The generator also refuses a smoke round (`--smoke-ok` is for the tests), a round whose joint stage never ran, and a partial round (a cell of the round's scope never searched), the last two unless `--unshipped`. The log check now compares every knob the log accepted, with its value, against the summary's own row for it. One differing value stops it, not only a class with none.
+- `MANIFEST.json` names accepted shared values (worth, loot, globals) that no file carries.
+- `run_round.py` holds `<out>/round.lock` (flock) for its whole life. A second runner on the same round exits with code 3 and changes nothing: not the status file, not the unit, not the arguments. That also closes the double run of the no-systemd fallback. `round.json` keeps the ORIGINAL driver arguments and the simulator's hash (`--new-args` and `--new-bin` are recorded under history). A round stopped from outside (`systemctl --user stop <unit>`, a kill of the driver) is recorded as stopped.
+
 ### 9.6 Checks, and what was not run
 
-Run on the head commit: the sim builds. `SIM_CLITEST=1 run.sh` with `SIM_EVIDENCE` set: CLI-CHECKS PASS, no check failed or skipped. The suite takes about 18 minutes on 8 cores now, against under 4 before: three of its checks write a results file, which runs the automatic gap pass with the full oracle on six mage fights, and with the lighter hit table those fights are longer. `test_tune_driver.py`: 30 pass. `live/test_live.py`: 17 pass with `SIM_BIN`. Determinism: the v3 baseline is byte-identical at 1 and 16 threads, and a gap dump's `GAP*` and `ORC*` lines are identical at 1 and 16 threads. Both baselines regenerated where they moved, with the diff explained in 9.1 and 9.2. The v2 baseline never moved.
+Run on 1874f81e (before the review round): the sim builds, and `SIM_CLITEST=1 run.sh` with `SIM_EVIDENCE` set: CLI-CHECKS PASS, no check failed or skipped. The suite takes about 18 minutes on 8 cores, against under 4 before: three of its checks write a results file, which runs the automatic gap pass with the full oracle on six mage fights, and with the lighter hit table those fights are longer.
+
+Run on the review round's commit, by the coordinator's instruction NOT the full suite again (marth: "We want to avoid just running the sim over and over every time something changes"): one build, the v3 baseline regenerated ONCE and compared with 0 changes, the v2 baseline 0 changed, the baseline byte-identical at 1 and 16 threads, the `calib_damage.py` check against both constants, the heal knobs live and flat with the switch off, `test_tune_driver.py` 36 pass, `live/test_live.py` 25 pass with `SIM_BIN` (the stop and resume proof among them). The only C++ change of the round is the `kFieldHit` table and two comments.
 
 NOT run, each a listed pre-tune step with its command:
 
@@ -744,58 +813,62 @@ NOT run, each a listed pre-tune step with its command:
 2. **The potion-worth table** (`PotionWorth.h`), measured before the hit sizes changed twice: `tools/iaus_sim/potion_worth.py --header`, then rebuild. The driver's prep and recalib stages do this for a round's own tables.
 3. **v3 15.6 under pressure** (`--gap-bracket strong2`) on the new world, the record marth's heal-timing ruling needs (11).
 
-## 10. The slice list
+## 10. The work, in batches
 
-Size = ESTIMATED changed lines including tests and docs. Author per the model roles: Fable for the sim's structure (the sim is Fable-only) and for tier A, Sonnet for native tier B from a Fable skeleton, Opus reviews everything. "Before tune B" = needed for the first tune that can claim pathing.
+marth's rulings of 11-23 shape this list. There is one tune, after the environment work. Sim work is batched by area, one agent per batch, with few sim runs: a batch regenerates its baselines ONCE and runs the long CLI suite ONCE, at its end. Spell choice is not "later". The spot scoring and the Harbinger side are built together.
 
-| Slice | What | Size | Author | Needs | Before |
+Size = ESTIMATED changed lines including tests and docs. Authors per the model roles: Fable for the sim's structure (the sim is Fable-only) and for tier A, Sonnet for native tier B from a Fable skeleton, Opus reviews every batch. The slice ids are the ones sections 1 to 8 use.
+
+### 10.1 The four sim batches
+
+| Batch | Slices | What | Size | Agent | Needs |
 |---|---|---|---|---|---|
-| S1 | this branch | built | Fable | | tune A |
-| S1b | pre-tune steps of 9.6 (measure, rewrite the band rows, regenerate the potion table) | 150 + CPU | Sonnet runs, Fable reads the numbers | S1 merged | tune A |
-| S7 | the `follow` stage and the cuts of 6.2 | 700 | Fable | S1 | tune A if the gap is to be the score now |
-| S2 | environment loader, synthetic fixtures, placement | 900 | Fable | envextract merged | tune B |
-| S3 | route search and path following, blocked and stuck legs, bodies, drops, stairs | 1,800 | Fable | S2 | tune B |
-| S4 | sight and line of fire by geometry, terrain patches | 800 | Fable | S2. LAND heights from the extractor for the ridge case | tune B |
-| S5 | pathing metrics, `calib_path.py`, oracle-relative bounds as gates | 700 | Fable | S3, S4 | tune B |
-| S6 | cast starts: rows, never-started releases, `--seats`, interrupts | 800 | Fable | none | tune B |
-| S11a | field-size books, regret report, domination pruning | 700 | Fable | none | tune B (cheap, large effect) |
-| N1 | dev-build dump of the active navmesh and the parity check (8.6). Includes the `BSNavmesh` layout verification on three runtimes | 900 native, 300 tools | Fable (tier A), Opus review | envextract merged | tune C. Useful to tune B as validation |
-| S8 | loot in the fight world: sources, scan, batch, dibs, legs, party stop | 1,600 | Fable | S3 | later |
-| S9 | loot gates and guards | 700 | Fable | S8, owner fields | later |
-| S10 | loot oracle, episode Utility, the loot stage | 900 | Fable | S8, list container contents | later |
-| S11b | native `SpellWorth` table and `Estimate::SpellWorthOn` | 600 | Sonnet (tier B) from a Fable skeleton | S11a's regret numbers | later |
-| S11c | the `spells` stage | 400 | Fable | S11b | later |
-| N2 | native `iaus/EnvQuery`, `Spots`, the main-built snapshot, spot candidates and considerations, behind an INI switch, default off until tune C | 2,500 | Fable (tier A: threading, engine reads) | N1 | tune C |
-| S16 | the sim's side of N2: `EnvView` over `.mfoenv`, the seven scenarios of 8.5, the oracle over spots, the `spots` stage | 1,500 | Fable | N2 (shared code), S5 | tune C |
-| N0 | the passive traversal and drop-link probe (8.8 item 6) and `calib_traversal.py`. Observes graph variables and events only | 400 native, 200 tools | Sonnet (tier B: a passive probe, no seat, no engine write) from a Fable spec, Opus review | none | as early as possible: every later number waits on its field data |
-| N3 | native `iaus/Traversal.h` capability reader, the adapter table, and the hold-offs of 8.8 item 3 in the listed readers | 900 | Fable (tier A: it touches the cast, approach and travel readers) | N0's data, N2 | tune C |
-| S17 | the sim's traversal switch, ability file, the five scenarios | 600 | Fable | S3, N0's data for real numbers | tune C |
-| H1 | Harbinger CombatPosition facet (its own repo, its own brief) | Harbinger | Fable (tier A) | N2's measured value from `--position-road` | after tune C's first numbers |
-| S12 | Arch-Mage independent hands | 900 | Fable | S6 | later |
-| S13 | T4 passives, one table | 700 | Fable | none | later |
-| S14 | summons as real bodies | 600 | Fable | S3 | later |
-| S15 | Dragonborn | 500 | Fable | native shout road check first | later |
-| X1 | collision extraction from NIFs | 2,500 to 4,000 | Sonnet (tools) with a Fable format note | N1's error number says it is needed | only if needed |
+| **W, world** | S2, S3, S4, S5, S6 | environment loader and synthetic fixtures. Route search and path following, with `FindPath` written as a PURE file in `native/iaus` from the first commit (no caller in the DLL yet, harness-tested), so it can never fork into a sim copy. Sight and line of fire by geometry. The six pathing metrics, `calib_path.py`, their oracle-relative bounds. Cast starts (rows, never-started releases, `--seats`, interrupts) | 5,000 | one Fable agent. The native `iaus/EnvQuery.h` and `PathSearch.cpp` files are tier B by shape (pure, no engine type, no caller) and get their own Opus pass | `tools/envextract` merged with its rebuilt library (link kinds, components, water and enable parents corrected). LAND heights from the extractor for the ridge case, else exterior sight is navmesh patches and the scenario is marked |
+| **C, choice** | S7, S11a, S11b, S11c | the `follow` stage (the gap is the score) and the cost cuts of 6.2. Field-size books (`book_from_log.py`, `--book`, generated worst-case books), the regret report, exact domination pruning. The native `SpellWorth` table and `Estimate::SpellWorthOn`. The `spells` stage | 2,400 | one Fable agent for the driver and the sim. S11b (600 lines, native tier B) is a Sonnet agent from the Fable agent's skeleton, with its Opus review | nothing from W for S7 and S11a. S11c needs S11b. Its sim edits (`Oracle.h`, `Load.h`, `sim.cpp`) rebase onto W before its one baseline regeneration |
+| **L, looting** | S8, S9, S10 | loot in the fight world: sources from refs, scan, batch, dibs, legs, the party combat stop, carry. Gates and guards. The loot oracle, episode Utility, the driver's loot stage on episodes with the twelve new knobs, `calib_loot.py` | 3,200 | one Fable agent | W merged (S3). Ownership per ref from the extractor. Container and leveled-list contents from `tools/list_balance` for list worlds |
+| **T, T2 and up** | S12, S13, S14, S15 | Arch-Mage independent hands. The T4 passives in one table. Summons as real bodies. Dragonborn | 2,700 | one Fable agent | W merged (S12 needs S6's claims, S14 needs S3's bodies on a mesh). S15 needs a check of the game's shout road first |
 
-Requests to other owners, not slices of this line: the extractor (LAND heights, edge kinds, ownership per ref, the optional `LIVE` and `COLL` tags reserved), `tools/list_balance` (container and leveled-list contents, the spell fields the archetype classifier reads), `tools/tune_app` (section 12).
+### 10.2 The native line, and the sim mirrors that belong to it
 
-## 11. marth's open decisions
+| Batch | Slices | What | Size | Agent | Needs |
+|---|---|---|---|---|---|
+| **N0, probes** | N0 | passive, config-gated, rate-limited field probes, nothing else: traversal events with positions and heights and what MFO had in flight (8.8), a drop link taken with no graph event, the cost of an engine ray, the lived trust signs as log lines (8.9), and the ch.24 POINT road watched as a general mover (8.3: does a small radius pin him, what he does inside it). Plus `calib_traversal.py` | 700 | Sonnet (tier B: observes only, no seat, no engine write) from a Fable spec, Opus review | none. FIRST, because every later native number waits on field sessions |
+| **N1, the active navmesh** | N1 | the main-built snapshot of loaded cells (the `LootReach.cpp` walk into plain arrays), the `BSNavmesh` layout rows on three runtimes, the dev-build dump in the sim's format with the `LIVE` section, the parity check, and the STATIC trust signs at snapshot build | 1,600 | Fable (tier A: engine reads, threading), Opus review | `envextract` merged (the format). N0's ray cost |
+| **M1, the movement decision** | N2, H1, S16 | native `iaus/PartyPicture`, `Spots`, `EnvTrust`, the shared 500 ms pass and its assignment, spot claims through the ch.24 point road, behind an INI switch that ships OFF. TOGETHER with the Harbinger side (marth's ruling): H1 adds to Harbinger only what N0 showed the point road lacks (stand still, facing, gait, strafe, corridor), as its own brief in its own repo. And the sim's side, S16: `EnvView` over `.mfoenv`, the seven scenarios of 8.5, the four trust scenarios of 8.9, the oracle over spots, the `spots` stage | 2,800 native, 1,800 sim, Harbinger its own | Fable for MFO and the sim (tier A), a Fable Harbinger agent for H1, Opus reviews each. Two build trees, so two agents, never both in one | N1, W merged, N0's field data |
+| **M2, traversal** | N3, S17 | native `iaus/Traversal.h`, the adapter table, the hold-offs in the readers of 8.8 item 3. And the sim's side, S17: the traversal switch, the ability file, the five scenarios | 900 native, 600 sim | Fable (tier A: it touches the cast, approach and travel readers), Opus review | M1 (N2), N0's traversal data. S17 needs N3 because the ability reader and its conditions are the shared native code |
+| X1, collision from NIFs | X1 | only if N1's parity and ray numbers put the geometry layer's error over the threshold of 11 item 8 | 2,500 to 4,000 | Sonnet (tools) with a Fable format note | N1's numbers |
 
-Nothing above blocks on these. Each has the default the work proceeds on.
+### 10.3 The order
 
-1. **Two tunes or one?** Start tune A now on the fixed plane and tune B after S2 to S6, or wait for environments. Recommendation: start tune A now, labelled as the plane tune. It costs idle CPU only, and its heal, target and pacing values do not depend on geometry.
-2. **F-D: should the bands also gate under pressure?** The natural bracket is 11 to 28 times gentler than the field day (v3 15.4), and the healer's `healLate%` band does not bind there (IAUS 1.9 against a bound of 8). Recommendation: yes, add a second band row per caster on the bracket whose downs match the field (strong1 on Tuxborn, strong2 on the built-in world), bound = the oracle's value there plus the same margin. It is where "healing comes too late" shows.
-3. **Bands beside IAUS companions instead of oracle companions** (review F7, and cut 1 of 6.2). Recommendation: yes. It is a truer bound for the subject and three times cheaper.
-4. **Is the gap the score from tune A on** (S7 before the tune), or does tune A run on today's rule? Recommendation: build S7 first. It is driver-only, about a day, and it is what the standing rule says.
-5. **The oracle's ceiling.** 128 stays unless you say otherwise. 32 costs a third and v3 could not measure a loss, but it is a weaker oracle. Recommendation: keep 128.
-6. **The 23 parked classes' round-2 values.** They rest on unchecked rows, and nine classes lack their signature mechanic (4.2). Recommendation: do not ship T3+ values from any round before S12 and S13, and ship T2 and below from tune A.
-7. **Unseated rows in spell choice.** Until Harbinger seats Stagger, Disarm, TargetEffect and Paralyze, should a spell that keys one be no candidate at all (the lab and the game agree, he never tries it), or stay a candidate bounded by the never-started release? Recommendation: no candidate, through `HarbingerSeatsSpell`, and rank the Harbinger seating brief by `--seats all` minus `--seats today`.
-8. **The line-of-sight error threshold** that triggers collision extraction (8.5). Placeholder 5 percent of rays disagreeing in an environment class. Recommendation: keep 5 until the first parity numbers exist, then set it from them.
-9a. **Drop links and parkour before the probe has seen them?** Nothing relies on either until the passive probe (N0) has logged a follower taking one. Recommendation: ship N0 in the next build, with every session, and keep `drops` and `traversal` off in any tune until its numbers exist.
-9. **Movement without the Harbinger facet first?** Ship spot scoring for what today's channels reach (target-relative firing spots, cover and retreat for disengage classes, regroup) before CombatPosition exists. Recommendation: yes, default off behind an INI switch until tune C, because the lab can measure exactly what the facet would add.
-10. **The loot value function** (`Logi::Value`, `GoldJ`), open since v2 34.6, becomes load-bearing when loot and fights share a score: how much fight Utility is a gold piece worth. Recommendation: keep the potion-worth exchange rate (gold is worth what it buys in potions for his class), and report every loot result with and without the gold term.
-11. **Field books as test input** (7.1). A dump of a real follower's spell list is used like a list world: never in game logic, never committed. Recommendation: yes, and field every caster class once with `[spellbook]` and `bIausFillProbe` on.
-12. **Every field session with `bIausFillProbe = 1`.** Still the standing ask. Three of the last five sessions had it, and the hit table is ten blows because of the other sessions.
+1. **Now, side by side** (two agents while a Fable one runs): **W** and **N0**. N0 is small and its sessions take calendar time.
+2. **Then C**, on W's world. Its driver-only part (S7) can start beside W in its own worktree, since it touches `tune_driver.py` and not the world.
+3. **Then the pre-tune measurements of 9.6, ONCE**, on the world W and C left: the oracle-relative bounds, the potion-worth table, the pressure-bracket record. They are not run before, because each belongs to a sim build and dies with it.
+4. **THE TUNE**, through `live/run_round.py` at idle priority. Its pathing gates are S5's.
+5. **N1** can run beside C or beside the tune (the tune holds no build tree).
+6. **L and T**, one after the other, each ending in a small tune of the knobs it adds.
+7. **M1, then M2**, each ending in its own stage of a tune (`spots`, then the traversal conditions).
+
+Requests to other owners, not slices of this line: the extractor (LAND heights, ownership per ref, the optional `LIVE` and `COLL` tags reserved), `tools/list_balance` (container and leveled-list contents, the spell fields the archetype classifier reads), `tools/tune_app` (section 12).
+
+## 11. marth's decisions
+
+Ruled on 2026-11-23. Recorded with what follows from each.
+
+1. **Two tunes or one? RULED: no tune now.** The tune waits for the environment work, because cached results die with the sim build. Sim slices are batched by area on one agent with few sim runs. 8.10 and 10.3 are written to that.
+2. **F-D: the bands also gate under pressure.** Proceeds on the recommendation: a second band row per caster on the bracket whose downs match the field (strong1 on Tuxborn, strong2 on the built-in world), bound = the oracle's value there plus the same margin. Measured in step 3 of 10.3.
+3. **Bands beside IAUS companions instead of oracle companions.** Proceeds: a truer bound for the subject and three times cheaper.
+4. **The gap is the score.** Proceeds: S7 is in batch C, before the tune.
+5. **The oracle's ceiling stays 128.**
+6. **The 23 parked classes' round-2 values do not ship** before S12 and S13 (batch T).
+7. **Unseated rows: RULED, "run every spell".** No veto and no candidate filter by row. A spell stays a candidate, bounded by the never-started release, and Harbinger is seating the rows now (`feat/seat-unseated-casters`). The lab models the release and keeps `--seats today|all` as a measurement only.
+8. **The line-of-sight error threshold** for collision extraction stays the 5 percent placeholder until N1's first parity and ray numbers exist.
+9. **Movement and Harbinger: RULED, together.** Spot scoring and the Harbinger side are one batch (M1). The switch ships off until its tune.
+9a. **Drop links and parkour** stay off in any tune until N0 has logged a follower taking one.
+10. **The loot value function** keeps the potion-worth exchange rate. Every loot result is reported with and without the gold term.
+11. **Field books are test input** like a list world: never in game logic, never committed.
+12. **Every field session runs with `bIausFillProbe = 1`.** The hit table is 27 blows because two of the last five sessions' worth of fights were not probed, and the rider and foe-spell tails rest on 35 and 14 windows.
+
+Also ruled the same day and written into the design: environments aim at coverage of every terrain type and design, and anomalous areas are skipped by the sim (1.4) and recognised by the game (8.9). In game the environment is the ACTIVE navmesh, never extracted data (8.2, 8.6). Engine rays are the authority for sight, with a 500 ms floor on the movement decision and no turns between followers (8.7). Traversal abilities are detected per actor (8.8).
 
 ## 12. Findings outside this branch's file boundary
 
@@ -803,7 +876,8 @@ Reported, not made.
 
 - **`tools/tune_app/mfo_tune/tuningfiles.py` `T_SCALARS`** (a separate Sonnet change owns the app) does not list `t.dyingSelfHp`, `t.dyingAllyHp`, `t.dyingHitsToDown`, `t.urgencyHitsDiv`, `t.grossWindowSec`, `t.maxHitWindowSec`, `t.burstWindowSec`, `t.waivedRangeX`, `t.bowRange`. Its validator mirrors the in-game loader, and native's `SetTuningScalar` accepts the first seven (`Catalogue.cpp:481`). The driver now searches three of them, so the app would reject a `shared.txt` line the game accepts.
 - **The app's priority drop-down** should import `tools/iaus_sim/live/priority.py` (`ORDER`, `DEFAULT`, `get`, `set_level`) and start rounds through `live/run_round.py`. A round started by the app's own launcher has no unit file and cannot be re-prioritised.
-- **Native, cast**: the pure part of `cast/Archetype.cpp ClassifyArchetype` behind an engine-free input struct, so the sim predicts the engine row with the game's own code (5.3). And `HarbingerSeatsSpell` still has no caller (backlog 2026-11-19).
+- **Native, cast**: the pure part of `cast/Archetype.cpp ClassifyArchetype` behind an engine-free input struct, so the sim predicts the engine row with the game's own code (5.3). `HarbingerSeatsSpell` has no caller and, after marth's ruling ("run every spell"), needs none as a veto: its table (`kUnseatedRows`) shrinks as `feat/seat-unseated-casters` lands.
+- **Native, heal timing, the floor over-counts** (found by the Opus review of this branch, checked against the field lines here): the engine raises `TESHitEvent` twice for most blows and once more per rider of the blow (9.2). `Fills.cpp`'s sink pushes one `Taken` per event (`g_taken`, `:216-218`) and the lap adds the attacker's estimate once per `Taken` (`:530-539`), so one plain blow floors at twice the attacker's estimate and an enchanted one at three times or more. The estimate reads about 2.2 times under a real plain blow, so the doubled floor is by accident near the truth for a plain blow and over it for a blocked or glancing one. The lab's `NoteHit` counts a blow once. Fix shape, native: de-duplicate the sink by (attacker, target, instant), or floor with the largest estimate instead of the sum. Not made here.
 - **Native, IAUS**: `t.waivedRangeX` and `t.bowRange` are known to the lab and not to the game's tuning file (already recorded as review F3 of 5749026a), so they cannot be searched.
 - **Native, heal timing**: the three windows are sized for a party of ten sampling every 1.3 s, while each follower's snapshot samples every ally every lap (0.133 s). The comment in `Core.h` says both. A window per party size is not a tunable the lab can find (9.1).
 - **Field probe**: the hit lines would support per-event sizes directly with two more fields that the sink already has in hand: the event's own damage is not available to it, but the health AT the event is (`at-event`, main thread only) and it is NaN on 90 percent of lines. A main-thread read posted for every probed hit would turn windows into events.
