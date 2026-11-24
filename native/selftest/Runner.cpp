@@ -9,6 +9,9 @@
 // the tick, #4):
 //   pick   -- once a second, the first test in registry order that is not COMPLETE, not running on another
 //             follower, not backing off for this follower, and whose precondition() returns nullptr;
+//   EXCLUSIVE (TestDef::exclusive, the g0b.* tests): starts only when NO run is live on any follower and the last run's hostile is gone;
+//           nothing else starts while it runs, while one waits for the others to drain, or within kExclusiveGapSec of the last one's end
+//           (so pending exclusive tests run back to back, first).
 //   fixtures -- the missing items / spells it asked for are added on the MAIN thread (Fixtures.cpp); the
 //             run waits for that ack (10 s, else ABORT, loud);
 //   drive  -- step() every 0.5 s of unpaused run time until it returns a verdict or the timeout fires
@@ -82,6 +85,14 @@ namespace MFO::SelfTest {
         // ally, Harbinger) must not keep the final line from ever printing. WORKER-ONLY.
         std::map<std::string, std::string>                     g_lastPre;
         bool                                                   g_blockedAnnounced = false;
+
+        // EXCLUSIVE runs (WORKER-ONLY). g_exclGap: unpaused seconds in which only an exclusive test may start (armed at load and by every
+        // exclusive run that completed, so one that keeps RETRYing never starves the rest). g_exclDrain: an exclusive test could start but other runs are live, so nothing new may start.
+        constexpr float kExclusiveGapSec = 45.0f;
+        constexpr float kRetireEverySec  = 1.5f;   // the second pass of a spawned hostile's removal (Fixtures.cpp)
+        float g_exclGap    = kExclusiveGapSec;
+        float g_exclDrain  = 0.0f;
+        float g_retireWait = 0.0f;
 
         constexpr float kPickEverySec   = 1.0f;
         constexpr float kStepEverySec   = 0.5f;
@@ -408,9 +419,18 @@ namespace MFO::SelfTest {
                 g_spawnRef.erase(a_run.token);
             }
             PostFixtureCleanup(a_run.token, d->id);
+            if (d->exclusive && done) g_exclGap = kExclusiveGapSec;
+            g_retireWait = kRetireEverySec;
             g_blockedAnnounced = false;
             if (done) LogPending(std::format("after {}", d->id).c_str(), false);
             else g_backoff[{ a_id, d->id }] = Clock::now() + a_backoff;
+        }
+
+        bool ExclusivePending() {
+            std::lock_guard lk(g_mx);
+            for (const auto& d : Reg())
+                if (d.exclusive && !g_results.contains(d.id)) return true;
+            return false;
         }
 
         void ServiceFollower(RE::Actor* a, RE::FormID a_id, FollowerState& a_st, float a_dt, bool a_blockStarts) {
@@ -423,7 +443,20 @@ namespace MFO::SelfTest {
                 if (wait > 0.0f) return;
                 wait = kPickEverySec;
                 const auto now = Clock::now();
+                bool exclusiveLive = false, retiring = false;
+                for (const auto& [fid, rr] : g_runs) exclusiveLive = exclusiveLive || rr.def->exclusive;
+                if (exclusiveLive) return;
+                {
+                    std::lock_guard lk(g_mx);
+                    for (const auto& f : g_ledger) {   // a hostile whose run is over but which is not deleted yet
+                        if (f.kind != FixtureKind::Spawn) continue;
+                        bool live = false;
+                        for (const auto& [fid, rr] : g_runs) live = live || rr.token == f.token;
+                        retiring = retiring || !live;
+                    }
+                }
                 for (const auto& d : Reg()) {
+                    if (!d.exclusive && (g_exclDrain > 0.0f || (g_exclGap > 0.0f && ExclusivePending()))) continue;
                     {
                         std::lock_guard lk(g_mx);
                         if (g_results.contains(d.id)) continue;
@@ -442,6 +475,10 @@ namespace MFO::SelfTest {
                     g_lastPre[d.id] = why ? why : "";
                     if (why) continue;
                     g_blockedAnnounced = false;
+                    if (d.exclusive && (!g_runs.empty() || retiring)) {   // let the others end, start nothing new meanwhile
+                        g_exclDrain = 5.0f;
+                        return;
+                    }
 
                     Run r;
                     r.def       = &d;
@@ -667,6 +704,24 @@ namespace MFO::SelfTest {
 
         DevClassEquipTick(dt);   // card C5c
 
+        g_exclGap   = std::max(0.0f, g_exclGap - dt);
+        g_exclDrain = std::max(0.0f, g_exclDrain - dt);
+        g_retireWait -= dt;
+        if (g_retireWait <= 0.0f) {   // second pass: a hostile disabled by the cleanup of a run that is over
+            g_retireWait = kRetireEverySec;
+            std::unordered_set<std::uint32_t> tokens;
+            {
+                std::lock_guard lk(g_mx);
+                for (const auto& f : g_ledger) {
+                    if (f.token == 0 || f.kind != FixtureKind::Spawn) continue;
+                    bool live = false;
+                    for (const auto& [fid, rr] : g_runs) live = live || rr.token == f.token;
+                    if (!live) tokens.insert(f.token);
+                }
+            }
+            for (const auto t : tokens) PostFixtureCleanup(t, "a finished test");
+        }
+
         HoldTick(dt);    // G0b: before the followers are served, so step() reads this tick's sample
         std::unordered_set<RE::FormID> live;
         bool anyRule = false;
@@ -704,6 +759,9 @@ namespace MFO::SelfTest {
         g_backoff.clear();
         g_last       = {};
         g_orphanWait = 0.0f;
+        g_exclGap    = kExclusiveGapSec;
+        g_exclDrain  = 0.0f;
+        g_retireWait = 0.0f;
         g_classWait  = 0.0f;
         g_lastPre.clear();
         g_blockedAnnounced = false;

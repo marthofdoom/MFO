@@ -66,6 +66,7 @@ namespace MFO::SelfTest {
         RE::FormID  baseLocal = 0x000E4010;   // Skyrim.esm NPC_ EncMudcrabMedium (verified in the master, 2026-11-10)
         float       hurtPct = 0.0f;
         float       health = 0.0f;            // > 0: the SPAWNED hostile gets this base Health (it must outlive a timed test; it is deleted at the end)
+        bool        clearSpot = false;        // place it on standable ground in the follower's clear view (Harbinger's FindEmptySpace); none = refused, RETRY
         int         respawns = 3;             // re-spawned when the hostile dies while the test still runs
     };
     // Log-only probe flags switched on IN MEMORY for the run (never the INI file) and put back.
@@ -116,6 +117,8 @@ namespace MFO::SelfTest {
         Step (*step)(Ctx&) = nullptr;
         // Optional: the verdict at timeout. nullptr = FAIL "timeout after N s".
         Step (*onTimeout)(Ctx&) = nullptr;
+        // true = it runs ALONE: no other test runs on any follower while it does, and pending ones go first (Runner.cpp).
+        bool exclusive = false;
     };
 
     // A test a HUMAN must judge (a look, a feel): listed in the pending log and counted in ALL DONE as MANUAL, never run.

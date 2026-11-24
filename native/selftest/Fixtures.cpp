@@ -21,6 +21,8 @@
 
 #include "selftest/SelfTest_internal.h"
 #include "MainThread.h"
+#include "Sightline.h"
+#include "apmf/APMFBridge.h"   // FindStandPoint (SpawnSpec::clearSpot)
 #include "Runtime.h"
 
 #include <cmath>
@@ -40,6 +42,19 @@ namespace MFO::SelfTest {
             return func(a_foe, a_target, nullptr);
         }
 
+        // MAIN THREAD. SpawnSpec::clearSpot: a standable point 500 to 700 units off that the follower sees, the front first.
+        bool ClearSpot(RE::Actor* a_follower, RE::NiPoint3& a_out) {
+            const float ang = a_follower->GetAngleZ();
+            for (const float d : { 700.0f, 500.0f })
+                for (const float off : { 0.0f, 0.5f, -0.5f, 1.0f, -1.0f, 1.6f, -1.6f, 2.3f, -2.3f, 3.1f }) {
+                    std::uint32_t st = 0;
+                    if (!APMFBridge::FindStandPoint(a_follower->GetFormID(), ang + off, d, 40.0f, a_out, st)) continue;
+                    if (a_follower->GetPosition().GetDistance(a_out) < 350.0f) continue;   // clamped to a wall
+                    if (Sightline::PointSeenNow(a_follower, a_out, 128.0f) == Sightline::PointSight::Seen) return true;
+                }
+            return false;
+        }
+
         // MAIN THREAD. Places one hostile in front of the follower at ~700 units, records it in the ledger (same closure) and sets it on
         // him. Returns false + a_note on failure; whatever landed is in the ledger.
         bool SpawnHostile(RE::Actor* a_follower, const SpawnSpec& a_spec, std::uint32_t a_token, const std::string& a_testId,
@@ -47,6 +62,11 @@ namespace MFO::SelfTest {
             const RE::FormID baseId = VanillaForm(a_spec.baseLocal);
             auto*            base   = baseId ? RE::TESForm::LookupByID<RE::TESBoundObject>(baseId) : nullptr;
             if (!base) { a_note = std::format("Skyrim.esm base {:06X} does not resolve", a_spec.baseLocal); return false; }
+            auto        pos = a_follower->GetPosition();
+            const float ang = a_follower->GetAngleZ();
+            pos.x += std::sin(ang) * 700.0f;
+            pos.y += std::cos(ang) * 700.0f;
+            if (a_spec.clearSpot && !ClearSpot(a_follower, pos)) { a_note = "no clear standable ground 350 to 700 units around the follower"; return false; }
             auto ref = a_follower->PlaceObjectAtMe(base, false);
             auto* foe = ref ? ref->As<RE::Actor>() : nullptr;
             if (!foe) { a_note = "PlaceObjectAtMe returned no actor"; return false; }
@@ -58,10 +78,6 @@ namespace MFO::SelfTest {
             }
             if (a_spec.health > 0.0f)
                 if (auto* avo = foe->AsActorValueOwner()) avo->SetBaseActorValue(RE::ActorValue::kHealth, a_spec.health);
-            auto pos = a_follower->GetPosition();
-            const float ang = a_follower->GetAngleZ();
-            pos.x += std::sin(ang) * 700.0f;
-            pos.y += std::cos(ang) * 700.0f;
             foe->SetPosition(pos, true);
             const bool engaged = StartCombatOn(foe, a_follower);
             a_note = std::format("spawned {:08X} '{}' (Skyrim.esm base {:06X}) ~700 units from the follower; StartCombat {}",
@@ -96,6 +112,12 @@ namespace MFO::SelfTest {
                 if (const char* why = SpawnUnsafeReason(actor)) {
                     std::lock_guard lk(g_mx);
                     g_acks[a_token] = { false, std::string("refused, ") + why, true };
+                    return;
+                }
+                RE::NiPoint3 spot{};
+                if (req.spawn.clearSpot && !ClearSpot(actor, spot)) {
+                    std::lock_guard lk(g_mx);
+                    g_acks[a_token] = { false, "refused, no clear standable ground 350 to 700 units around the follower: move to an open place", true };
                     return;
                 }
             }
@@ -182,11 +204,30 @@ namespace MFO::SelfTest {
                                      "expected {:08X}) -- nothing deleted", why, f.form, bo ? bo->GetFormID() : 0u, static_cast<RE::FormID>(f.before));
                     } else {
                         const std::string nm = foe->GetName() ? foe->GetName() : "?";
-                        foe->StopCombat();
-                        foe->Disable();
+                        // STAGED: stop + disable now, delete on a LATER pass (Runner Tick, 1.5 s), and only once no actor's fight still points at
+                        // it, so nothing is deleted under a live combat target. The ledger keeps the entry until then (a save carries it).
+                        if (!foe->IsDisabled()) {
+                            foe->StopCombat();
+                            foe->Disable();
+                            spdlog::info("[selftest] fixture removed ({}): spawned hostile {:08X} '{}' stopped and disabled (it was {}); deleted once no "
+                                         "fight points at it", why, f.form, nm, foe->IsDead() ? "dead" : "alive");
+                            continue;
+                        }
+                        RE::FormID held = 0;
+                        if (auto* pl = RE::ProcessLists::GetSingleton())
+                            pl->ForEachHighActor([&](RE::Actor* x) {
+                                if (x && x != foe && x->GetActorRuntimeData().currentCombatTarget.get().get() == foe) {
+                                    held = x->GetFormID();
+                                    return RE::BSContainer::ForEachResult::kStop;
+                                }
+                                return RE::BSContainer::ForEachResult::kContinue;
+                            });
+                        if (held) {
+                            spdlog::info("[selftest] spawned hostile {:08X} '{}' not deleted yet: {:08X} still has it as combat target", f.form, nm, held);
+                            continue;
+                        }
                         foe->SetDelete(true);
-                        spdlog::info("[selftest] fixture removed ({}): spawned hostile {:08X} '{}' stopped, disabled and marked for deletion (it was {})",
-                                     why, f.form, nm, foe->IsDead() ? "dead" : "alive");
+                        spdlog::info("[selftest] fixture removed ({}): spawned hostile {:08X} '{}' marked for deletion", why, f.form, nm);
                     }
                     doneIdx.push_back(i);
                     continue;

@@ -18,13 +18,19 @@
 // QUIET: the ch.33 style claim needs a TESCombatStyle, and the engine has no "stand still" one, so the calmest style of the LOAD ORDER is
 // looked up at run time (lowest circle + fallback + strafe that still weighs melee, magic and bows). Exerciser only, never shipped.
 // To add a leg or a test: a row in Tests() (append, and bump kCount). To add a kind of point: a Where value and a case in PlanOnMain.
+// ALONE: every g0b test is TestDef::exclusive (Runner.cpp). ROLE: a fight test fixes the follower's role for the run (his right hand when it
+// starts: melee / bow / hostile spell), gives a plain weapon of that kind, and puts him in a matching TEMP class (snapshot, restored), so the
+// class rules want the weapon the test is about. A leg starts only with that kind in hand; a leg that loses it, is leashed, or (idle test)
+// is broken by a fight is a SKIP, never a FAIL.
 // THREADS: run state is WORKER-ONLY. The planner is a MainThread::Post (FormIDs captured, re-resolved), its answer under the LEAF lock
 // g_planMx. Engine requests only through APMFBridge. Release: leg end, HoldEnd (every way a run ends), ClearHoldState (load / revert).
 #include "selftest/SelfTest_internal.h"
 #include "Followers.h"
 #include "MainThread.h"
 #include "Sightline.h"
+#include "logistics/Logistics.h"   // ForEachLoadedRefInRange
 #include "apmf/APMFBridge.h"
+#include "classes/Classes.h"
 
 #include <array>
 #include <cmath>
@@ -48,6 +54,11 @@ namespace MFO::SelfTest {
             float doorReach    = 1200.0f;
             float clearance    = 40.0f;   // FindEmptySpace clearance (Concealment's order of size)
             float bodyHeight   = 128.0f;
+            float startOutside = 60.0f;   // a leg starts at least this far outside its own radius, else "arrived" proves nothing
+            float playerReach  = 1200.0f; // points and starts stay this near the player: past his pursuit leash Harbinger refuses the point
+            float roleWait     = 12.0f;   // how long a leg waits for the role's weapon to be in hand
+            float roleLost     = 2.0f;    // other things in the right hand this long in a leg = not a valid leg
+            float leashedMax   = 1.0f;
         };
         constexpr Tuning kT{};
         constexpr float  kTwoPi = 6.2831853f;
@@ -83,8 +94,8 @@ namespace MFO::SelfTest {
                 { "g0b.hold_idle", "out of combat, nobody near", Who::Any, 0, Where::Near, sweep(5) },
                 { "g0b.fighter_vs_melee", "a follower with a melee weapon (or fists) in the right hand", Who::Fighter, kMelee, Where::Near, sweep(14) },
                 { "g0b.fighter_vs_archer", "a follower with a melee weapon (or fists) in the right hand", Who::Fighter, kArcher, Where::Near, sweep(14) },
-                { "g0b.shooter_vs_melee", "a follower with a bow, crossbow, staff or spell in hand", Who::Shooter, kMelee, Where::Near, sweep(14) },
-                { "g0b.shooter_vs_mage", "a follower with a bow, crossbow, staff or spell in hand", Who::Shooter, kMage, Where::Near, sweep(14) },
+                { "g0b.shooter_vs_melee", "a follower with a bow, crossbow or hostile spell in the right hand", Who::Shooter, kMelee, Where::Near, sweep(14) },
+                { "g0b.shooter_vs_mage", "a follower with a bow, crossbow or hostile spell in the right hand", Who::Shooter, kMage, Where::Near, sweep(14) },
                 { "g0b.keep", "(any follower) a 20 s hold left alone, then one re-pointed half way", Who::Any, kMelee, Where::Near,
                   { { "kept, no re-file", Where::Near, 150, 22 }, { "re-filed half way", Where::Same, 150, 14, false, false, true } } },
                 { "g0b.corners", "(any follower) three points in a row on one re-pointed claim", Who::Any, kArcher, Where::Near,
@@ -114,10 +125,9 @@ namespace MFO::SelfTest {
 
         // MAIN THREAD. The nearest ordinary (not load) door, an open one first.
         bool FindDoor(RE::Actor* a_f, RE::NiPoint3& a_out, std::string& a_text) {
-            auto* tes = RE::TES::GetSingleton();
-            if (!tes) return false;
             std::vector<RE::ObjectRefHandle> doors;   // read after the walk: the callback runs inside the cell's walk
-            tes->ForEachReferenceInRange(a_f, kT.doorReach, [&](RE::TESObjectREFR* r) {
+            // never RE::TES::ForEachReferenceInRange: on AE it derefs TES+0x140 as the worldspace (Logistics.h; field crash 2026-11-24)
+            Logistics::ForEachLoadedRefInRange(a_f->GetPosition(), kT.doorReach, [&](RE::TESObjectREFR* r) {
                 auto* b = r ? r->GetBaseObject() : nullptr;
                 if (b && b->Is(RE::FormType::Door) && doors.size() < 64) doors.push_back(r->GetHandle());
                 return RE::BSContainer::ForEachResult::kContinue;
@@ -175,21 +185,25 @@ namespace MFO::SelfTest {
         }
 
         // MAIN THREAD. A standable point of the asked kind.
-        Plan PlanOnMain(RE::FormID a_fid, RE::FormID a_foe, Where a_where, int a_leg) {
+        Plan PlanOnMain(RE::FormID a_fid, RE::FormID a_foe, Where a_where, int a_leg, float a_radius) {
             Plan  o;
             auto* f = RE::TESForm::LookupByID<RE::Actor>(a_fid);
             if (!f || f->IsDead() || !f->Is3DLoaded()) { o.why = "the follower is gone"; return o; }
             auto* foe = a_foe ? RE::TESForm::LookupByID<RE::Actor>(a_foe) : nullptr;
             if (foe && (foe->IsDead() || !foe->Is3DLoaded())) foe = nullptr;
             const auto me = f->GetPosition();
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            const auto nearPlayer = [&](const RE::NiPoint3& a_pt) { return player && a_pt.GetDistance(player->GetPosition()) <= kT.playerReach; };
+            if (!nearPlayer(me)) { o.why = "the follower is too far from the player (pursuit leash): the player must stand near him"; return o; }
             if (a_where == Where::Doorway) {
                 o.ok = FindDoor(f, o.pt, o.why);
-                if (!o.ok) o.why = "no ordinary door within reach on this floor";
+                if (o.ok && !nearPlayer(o.pt)) o.ok = false;
+                if (!o.ok) o.why = "no ordinary door within reach on this floor and near the player";
                 return o;
             }
             const auto stand = [&](RE::FormID a_org, float a_head, float a_dist, RE::NiPoint3& a_pt) {
                 std::uint32_t st = 0;
-                return APMFBridge::FindStandPoint(a_org, a_head, a_dist, kT.clearance, a_pt, st);
+                return APMFBridge::FindStandPoint(a_org, a_head, a_dist, kT.clearance, a_pt, st) && nearPlayer(a_pt);
             };
             RE::NiPoint3 pt{};
             if (a_where == Where::Flank) {
@@ -230,7 +244,7 @@ namespace MFO::SelfTest {
             for (const float d : { 350.0f, 280.0f, 220.0f })
                 for (const float off : { 0.0f, 0.5f, -0.5f, 1.0f, -1.0f, 1.8f, -1.8f, 3.1f }) {
                     if (!stand(a_fid, base + off, d, pt)) continue;
-                    if (me.GetDistance(pt) < 160.0f) continue;                                          // clamped to a wall: too short to measure
+                    if (me.GetDistance(pt) < std::max(160.0f, a_radius + kT.startOutside)) continue;                                 // clamped to a wall: too short to measure
                     if (foe && pt.GetDistance(foe->GetPosition()) < 150.0f) continue;
                     if (Sightline::PointSeenNow(f, pt, kT.bodyHeight) != Sightline::PointSight::Seen) continue;   // a clear way by his own ray
                     o.ok = true;
@@ -242,11 +256,11 @@ namespace MFO::SelfTest {
             return o;
         }
 
-        std::uint32_t PostPlan(RE::FormID a_f, RE::FormID a_foe, Where a_where, int a_leg, bool a_style, bool a_point) {
+        std::uint32_t PostPlan(RE::FormID a_f, RE::FormID a_foe, Where a_where, int a_leg, float a_radius, bool a_style, bool a_point) {
             const auto t = g_ticket++;
-            MainThread::Post([t, a_f, a_foe, a_where, a_leg, a_style, a_point]() {
+            MainThread::Post([t, a_f, a_foe, a_where, a_leg, a_radius, a_style, a_point]() {
                 Plan p;
-                if (a_point) p = PlanOnMain(a_f, a_foe, a_where, a_leg);
+                if (a_point) p = PlanOnMain(a_f, a_foe, a_where, a_leg, a_radius);
                 else p.ok = true;
                 if (a_style)
                     if (auto* f = RE::TESForm::LookupByID<RE::Actor>(a_f)) p.style = FindCalmStyle(f, p.styleText);
@@ -273,7 +287,7 @@ namespace MFO::SelfTest {
             if (now - at > std::chrono::duration<float>(kT.scanEvery)) {
                 at = now;
                 MainThread::Post([key, a_f, a_w]() {
-                    const auto      p = PlanOnMain(a_f, 0, a_w, 0);
+                    const auto      p = PlanOnMain(a_f, 0, a_w, 0, 0.0f);
                     std::lock_guard lk(g_planMx);
                     g_scans[key] = { p.ok, std::chrono::steady_clock::now() };
                 });
@@ -298,10 +312,13 @@ namespace MFO::SelfTest {
             int   prevAtk = 0, prevCast[2]{};
             unsigned asked = 0;                                  // which MFO clients asked for ch.24 meanwhile
             std::uint32_t applied = 0;
+            float leashT = 0, roleLostT = 0, engineInT = 0, engineT = 0, playerD = 0;   // validity, and the engine's own inside answer
             bool  everOurs = false, styleLive = false;
             const char* state = "none";
         };
         struct HRun {
+            enum class Role : std::uint8_t { None, Melee, Bow, Spell } role = Role::None;   // fixed at the run's start
+            int   restarts = 0;   // Start again because he stood inside the radius when the claim was due
             int   test = -1, leg = 0, measured = 0, refusedLegs = 0, skipped = 0, redo = 0;
             Phase phase = Phase::Start;
             float phaseT = 0, waitT = 0, replanT = 0, postedT = 0;
@@ -338,15 +355,27 @@ namespace MFO::SelfTest {
             return o.empty() ? "none" : o.substr(0, o.size() - 1);
         }
 
-        bool IsShooter(RE::Actor* a) {
-            for (const bool left : { false, true }) {
-                auto* o = a->GetEquippedObject(left);
-                if (!o) continue;
-                if (o->Is(RE::FormType::Spell)) return true;
-                if (auto* w = o->As<RE::TESObjectWEAP>(); w && (w->IsBow() || w->IsCrossbow() || w->IsStaff())) return true;
+        using Role = HRun::Role;
+        // The RIGHT hand decides (the left takes heals and buffs in every class). A buff or utility spell there is no role at all.
+        Role RoleOf(RE::Actor* a) {
+            auto* o = a->GetEquippedObject(false);
+            if (!o) return Role::Melee;   // fists
+            if (auto* w = o->As<RE::TESObjectWEAP>()) {
+                if (w->IsStaff()) return Role::None;
+                return w->IsBow() || w->IsCrossbow() ? Role::Bow : Role::Melee;
             }
-            return false;
+            if (auto* s = o->As<RE::SpellItem>())
+                for (const auto* e : s->effects)
+                    if (e && e->baseEffect && e->baseEffect->IsHostile()) return Role::Spell;
+            return Role::None;
         }
+        const char* RoleName(Role r) { return r == Role::Melee ? "melee" : r == Role::Bow ? "bow" : r == Role::Spell ? "spell" : "none"; }
+        bool RoleFits(Who a_who, Role a_r) {
+            if (a_r == Role::None) return false;
+            return a_who == Who::Any || (a_who == Who::Fighter) == (a_r == Role::Melee);
+        }
+        // The plain vanilla weapon of the role (Skyrim.esm: IronSword / HuntingBow + IronArrow), so the temp class has one to wield.
+        constexpr RE::FormID kIronSword = 0x00012EB7, kHuntingBow = 0x00013985, kIronArrow = 0x0001397D;
         std::string HandsText(RE::Actor* a) {
             auto* r = a->GetEquippedObject(false);
             auto* l = a->GetEquippedObject(true);
@@ -420,6 +449,10 @@ namespace MFO::SelfTest {
             s.styleLive = s.styleLive || info.styleLive;
             s.state     = info.state;
             s.asked |= Asking(a_id);
+            if (std::string_view(s.state) == "Leashed") s.leashT += dt;
+            if (r.foe && RoleOf(a) != r.role) s.roleLostT += dt;
+            if (auto* pc = RE::PlayerCharacter::GetSingleton()) s.playerD = std::max(s.playerD, pc->GetPosition().GetDistance(p));
+            if (info.engineInside != 0) { s.engineT += dt; if (info.engineInside == 1) s.engineInT += dt; }
             const auto end = [&](std::string why) { r.ending = true; r.endWhy = std::move(why); };
             if (const char* w = Outranked(a_id)) { APMFBridge::DevHoldRelease(a_id); r.claimKept = false; return end(std::format("YIELDED to {}", w)); }
             if (info.ended) return end(std::format("Harbinger ended it: {}", info.state));
@@ -430,6 +463,9 @@ namespace MFO::SelfTest {
                 APMFBridge::DevHoldRepoint(a_id, r.pt, leg.radius);
                 spdlog::info("[hold] {:08X} {}: re-filed (Repoint, same point) at {:.1f}s, {:.0f} from the point", a_id, Tests()[r.test].id, s.t, d);
             }
+            if (!Tests()[r.test].foe && APMFBridge::InCombat(a)) return end("INVALID: a fight began during the out-of-combat leg");
+            if (s.leashT > kT.leashedMax) return end("INVALID: the pursuit leash excluded the point (the player moved off)");
+            if (s.roleLostT > kT.roleLost) return end(std::format("INVALID: the {} weapon left his right hand ({})", RoleName(r.role), HandsText(a)));
             if (s.t >= leg.sec) return end("leg time up");
         }
 
@@ -438,6 +474,7 @@ namespace MFO::SelfTest {
             const auto& t   = Tests()[r.test];
             const auto& leg = t.legs[r.leg];
             auto&       s   = r.st;
+            const bool invalid = r.endWhy.starts_with("INVALID");
             const bool combatEnded = r.endWhy.find("CombatEnded") != std::string::npos;
             if (!leg.keep || r.endWhy != "leg time up") { APMFBridge::DevHoldRelease(a_id); r.claimKept = false; }
             else r.claimKept = true;
@@ -447,11 +484,20 @@ namespace MFO::SelfTest {
                 r.phase = Phase::Start;
                 return;
             }
+            if (invalid && t.foe && r.redo < 1) {   // a leg that measured the wrong thing: once more
+                ++r.redo;
+                spdlog::info("[hold] {:08X} {} leg {}: {}, run again ({}/1)", a_id, t.id, r.leg + 1, r.endWhy, r.redo);
+                r.phase = Phase::Start;
+                return;
+            }
             const float inside = s.afterT > 0.2f ? s.insideT / s.afterT : 0.0f;
             const float avgD   = s.samples ? s.sumD / static_cast<float>(s.samples) : -1.0f;
             const float drift  = s.afterT > 0.2f ? s.walkedIn / s.afterT : 0.0f;
             const char* v      = "MEASURED";
-            if (t.foe == 0) {
+            if (r.endWhy.starts_with("INVALID")) {
+                v = "SKIP";
+                ++r.skipped;
+            } else if (t.foe == 0) {
                 v = s.applied == 0 && std::string_view(s.state) == "Waiting" ? "MEASURED(ch.24 waits out of combat, moves nothing)" : "FAIL(expected Waiting)";
             } else if (!s.everOurs || s.applied == 0) {
                 v = "FAIL(not carried)";
@@ -477,17 +523,19 @@ namespace MFO::SelfTest {
             spdlog::info("[hold] RESULT {} leg {}/{} '{}' R={:.0f}: {} | {:08X} {} | start {:.0f}u, arrived {:.1f}s after walking {:.0f}u, inside {:.0f}% of {:.1f}s, "
                          "escapes {}, dist avg {:.0f} max {:.0f} last {:.0f}, drift {:.0f} u/s | attacks {} shots {} casts {} | facing foe front/side/back "
                          "{:.1f}/{:.1f}/{:.1f}s, moving fwd/strafe/back {:.1f}/{:.1f}/{:.1f}s, gait still/walk/run {:.1f}/{:.1f}/{:.1f}s, top {:.0f} u/s | "
-                         "sees foe {:.0f}%, foe at {:.0f}u | state {} applied {} calm-style {} | MFO asked: {} | end: {}",
+                         "sees foe {:.0f}%, foe at {:.0f}u | state {} applied {} calm-style {} | MFO asked: {} | end: {} | role {}, engine inside {:.0f}% of {:.1f}s, leashed {:.1f}s, role lost {:.1f}s, player at most {:.0f}u",
                          t.id, r.leg + 1, t.legs.size(), leg.what, leg.radius, v, a_id, r.hands, s.startD, s.arriveAt, s.walkedTo, inside * 100.0f, s.afterT,
                          s.escapes, avgD, s.maxD, s.lastD, drift, s.attacks, s.shots, s.casts, s.face[0], s.face[1], s.face[2], s.move[0], s.move[1],
                          s.move[2], s.gait[0], s.gait[1], s.gait[2], s.sprintV, s.sightN > 0.2f ? 100.0f * s.sightT / s.sightN : -1.0f, foeDist, s.state,
-                         s.applied, leg.quiet ? (s.styleLive ? "LIVE" : "NOT LIVE") : "no", AskText(s.asked), r.endWhy);
+                         s.applied, leg.quiet ? (s.styleLive ? "LIVE" : "NOT LIVE") : "no", AskText(s.asked), r.endWhy,
+                         t.foe ? RoleName(r.role) : "-", s.engineT > 0.2f ? 100.0f * s.engineInT / s.engineT : -1.0f, s.engineT, s.leashT, s.roleLostT, s.playerD);
             Toast(std::format("MFO {} {}/{} {} R{:.0f}: {} ({:.0f}% inside, {} atk, {} cast)", t.id, r.leg + 1, t.legs.size(), leg.what, leg.radius,
                               std::string_view(v).substr(0, 4) == "MEAS" ? "measured" : v, inside * 100.0f, s.attacks, s.casts));
             r.summary += std::format("{}{} R{:.0f} {:.4} in {:.0f}% arr {:.1f}s drift {:.0f} atk {} shot {} cast {}", r.summary.empty() ? "" : "; ", leg.what,
                                      leg.radius, std::string_view(v), inside * 100.0f, s.arriveAt, drift, s.attacks, s.shots, s.casts);
             ++r.leg;
             r.redo  = 0;
+            r.restarts = 0;
             r.phase = Phase::Start;
         }
 
@@ -500,6 +548,7 @@ namespace MFO::SelfTest {
             r.summary += std::format("{}{} R{:.0f} SKIP ({})", r.summary.empty() ? "" : "; ", leg.what, leg.radius, a_why.substr(0, 60));
             ++r.skipped;
             ++r.leg;
+            r.redo = r.restarts = 0;
             r.phase = Phase::Start;
         }
 
@@ -536,6 +585,12 @@ namespace MFO::SelfTest {
                 r.test    = a_test;
                 c.s->b[0] = true;
                 r.hands   = HandsText(c.follower);
+                if (t.foe) {
+                    r.role = static_cast<Role>(static_cast<int>(c.s->n[0]));   // FixHold, before anything was given
+                    std::string why;
+                    const char* slug = r.role == Role::Bow ? "archer" : r.role == Role::Spell ? "evoker" : "warrior";
+                    if (Classes::Writable() && !ApplyClass(c.id, slug, 5, false, why)) spdlog::warn("[hold] {:08X} {}: temp class {} refused: {}", c.id, t.id, slug, why);
+                }
             }
             c.s->note = std::format("leg {} of {}; {}", r.leg + 1, t.legs.size(), r.summary.substr(0, 300));
             r.phaseT += 0.5f;
@@ -569,7 +624,7 @@ namespace MFO::SelfTest {
                 r.postedT = 0.0f;
                 r.hands  = HandsText(c.follower);
                 const bool point = leg.where != Where::Same || !r.havePt;
-                r.ticket = PostPlan(c.id, r.foe, leg.where == Where::Same ? Where::Near : leg.where, r.leg, leg.quiet, point);
+                r.ticket = PostPlan(c.id, r.foe, leg.where == Where::Same ? Where::Near : leg.where, r.leg, leg.radius, leg.quiet, point);
                 r.phase  = Phase::Planning;
                 return Step::Continue();
             }
@@ -596,7 +651,7 @@ namespace MFO::SelfTest {
                 } else if (r.ticket == 0) {
                     r.replanT += 0.5f;
                     if (r.replanT >= kT.replanEvery) {
-                        r.ticket  = PostPlan(c.id, r.foe, leg.where == Where::Same ? Where::Near : leg.where, r.leg, leg.quiet, true);
+                        r.ticket  = PostPlan(c.id, r.foe, leg.where == Where::Same ? Where::Near : leg.where, r.leg, leg.radius, leg.quiet, true);
                         r.postedT = 0.0f;
                     }
                     return Step::Continue();
@@ -607,10 +662,20 @@ namespace MFO::SelfTest {
                 }
             }
             if (r.phase == Phase::Filing) {
+                if (t.foe && RoleOf(c.follower) != r.role) {
+                    if (r.phaseT > kT.roleWait) SkipLeg(c.id, r, std::format("the {} weapon never came to his right hand ({})", RoleName(r.role), HandsText(c.follower)));
+                    return Step::Continue();
+                }
+                r.hands = HandsText(c.follower);
+                if (leg.where == Where::Near && !r.claimKept && c.follower->GetPosition().GetDistance(r.pt) < leg.radius + 20.0f && r.restarts < 3) {
+                    ++r.restarts;   // the fight carried him into it before the claim: another point
+                    r.phase = Phase::Start;
+                    return Step::Continue();
+                }
                 const char* busy = Outranked(c.id);
                 const unsigned ask = r.claimKept ? 0u : Asking(c.id);   // ours already stands on a kept claim
                 if (busy || ask) {
-                    if (r.phaseT > kT.busyWait)
+                    if (r.phaseT > kT.roleWait + kT.busyWait)
                         SkipLeg(c.id, r, std::format("another MFO ch.24 claim stood: {}", busy ? busy : AskText(ask)));
                     return Step::Continue();
                 }
@@ -644,14 +709,25 @@ namespace MFO::SelfTest {
             if (c.inCombat) return "out of combat";
             if (auto* pc = RE::PlayerCharacter::GetSingleton(); !pc || pc->IsInCombat()) return "the player out of combat";
             if (c.follower->IsOnMount()) return "the follower on foot";
-            if (t.who == Who::Shooter && !IsShooter(c.follower)) return "a bow, crossbow, staff or spell in hand";
-            if (t.who == Who::Fighter && IsShooter(c.follower)) return "a melee weapon in hand";
+            if (t.foe && !RoleFits(t.who, RoleOf(c.follower)))
+                return t.who == Who::Shooter ? "a bow, crossbow or hostile spell in the right hand"
+                     : t.who == Who::Fighter ? "a melee weapon (or fists) in the right hand" : "a weapon or hostile spell in the right hand";
+            if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc->GetPosition().GetDistance(c.follower->GetPosition()) > kT.playerReach * 0.6f) return "the player near the follower";
             if (t.scan != Where::Near && !PlaceNear(c.id, t.scan)) return t.scan == Where::Doorway ? "a doorway within 1200 units" : "geometry that hides a point nearby";
             return nullptr;
         }
-        void FixHold(Ctx&, FixtureRequest& q, int a_test) {
+        void FixHold(Ctx& c, FixtureRequest& q, int a_test) {
             const auto& t = Tests()[a_test];
             if (!t.foe) return;
+            const Role role = RoleOf(c.follower);
+            c.s->n[0] = static_cast<double>(static_cast<int>(role));
+            if (role == Role::Melee) q.items.push_back({ VanillaForm(kIronSword), 1 });
+            if (role == Role::Bow) {
+                q.items.push_back({ VanillaForm(kHuntingBow), 1 });
+                q.items.push_back({ VanillaForm(kIronArrow), 60 });
+            }
+            q.cls.snapshot    = Classes::Writable();
+            q.spawn.clearSpot = true;
             q.spawn.on        = true;
             q.spawn.baseLocal = t.foe;
             q.spawn.health    = kT.foeHealth;
@@ -672,8 +748,8 @@ namespace MFO::SelfTest {
             const auto one = [](int i, auto pre, auto fix, auto stp, auto tmo) {
                 const auto& t   = Tests()[i];
                 float       sec = 45.0f;   // the spawn, the first approach
-                for (const auto& l : t.legs) sec += l.sec + kT.busyWait + 6.0f;
-                Register({ t.id, "movement-plan G0b", t.needs, sec, pre, fix, stp, tmo });
+                for (const auto& l : t.legs) sec += 1.5f * l.sec + kT.busyWait + kT.roleWait;
+                Register({ t.id, "movement-plan G0b", t.needs, sec, pre, fix, stp, tmo, true });
             };
             (one(I, &Pre<I>, &Fix<I>, &Stp<I>, &Tmo<I>), ...);
         }
