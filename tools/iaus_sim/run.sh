@@ -49,7 +49,7 @@ if [[ -z "${SIM_NOBUILD:-}" ]]; then
     "${CXX:-g++}" -std=c++23 -O2 -pthread -Wall -Wextra -Wno-misleading-indentation -Wno-parentheses ${SIM_CXXFLAGS:-} \
         -DSIM_ENV_DIR="\"${SIM_ENV_DIR:-$ROOT/tools/iaus_sim/envs}\"" -include "$GEN/simknobs.h" -I "$P" -I "$GEN" -I "$ROOT/tools/iaus_sim/stub" -I "$ROOT/native" -I "$ROOT/tools" \
         "$P/iaus/Curves.cpp" "$P/iaus/Catalogue.cpp" "$P/iaus/ClassCurves.cpp" "$P/iaus/Score.cpp" \
-        "$P/iaus/Decide.cpp" "$P/iaus/Explain.cpp" "$P/iaus/Generate.cpp" "$P/iaus/EnvQuery.cpp" "$P/iaus/PathSearch.cpp" \
+        "$P/iaus/Decide.cpp" "$P/iaus/Explain.cpp" "$P/iaus/Generate.cpp" "$P/iaus/EnvQuery.cpp" "$P/iaus/PathSearch.cpp" "$P/iaus/SpellWorth.cpp" \
         "$ROOT/native/classes/ClassTable.cpp" "$ROOT/tools/iaus_sim/RealClasses.cpp" \
         "$ROOT/tools/iaus_sim/sim.cpp" -o "$OUT"
 fi
