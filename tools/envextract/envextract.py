@@ -7,8 +7,17 @@ SCAN = lambda s: os.path.join(CACHE, '_scan', s + '.pkl')
 CANDS = lambda s: os.path.join(CACHE, '_scan', s + '.cands.pkl')
 
 
+ORDER = []   # load order of the scan in use, so ids read plugin_localid and do not depend on a plugin's position
+
+
+def _k(key):
+    import re
+    nm = ORDER[key >> 24] if (key >> 24) < len(ORDER) else 'unknown'
+    return '%s-%06X' % (re.sub(r'[^A-Za-z0-9]+', '', os.path.splitext(nm)[0])[:24], key & 0xFFFFFF)
+
+
 def unit_id(u):
-    return 'i%08X' % u[1] if u[0] == 'i' else 'x%08X_%d_%d' % (u[1], u[2], u[3])
+    return 'i_' + _k(u[1]) if u[0] == 'i' else 'x_%s_%d_%d' % (_k(u[1]), u[2], u[3])
 
 
 def cmd_scan(a):
@@ -59,13 +68,14 @@ def _index_update(a, sc, rows):
     s = idx['sets'].setdefault(a.set, {})
     s['plugins'] = [x['name'] for x in sc['plugins']]
     if a.mode == 'library': s['envs'] = rows
-    else: s.setdefault('samples', []).extend(rows)
+    else:
+        old = {r['file']: r for r in s.get('samples', [])}; old.update({r['file']: r for r in rows}); s['samples'] = list(old.values())
     json.dump(idx, open(p, 'w'), indent=1)
 
 
 def cmd_library(a):
     import scan, select_lib
-    sc = scan.load(SCAN(a.set)); cands, cls = _cands(a, sc)
+    sc = scan.load(SCAN(a.set)); ORDER[:] = sc['order']; cands, cls = _cands(a, sc)
     allowed = None
     if a.changed_only:
         nb = 5; allowed = set()
@@ -85,7 +95,7 @@ def cmd_library(a):
 
 def cmd_sample(a):
     import scan, select_lib
-    sc = scan.load(SCAN(a.set)); cands, cls = _cands(a, sc)
+    sc = scan.load(SCAN(a.set)); ORDER[:] = sc['order']; cands, cls = _cands(a, sc)
     idx = json.load(open(os.path.join(CACHE, 'index.json'))) if os.path.exists(os.path.join(CACHE, 'index.json')) else {'sets': {}}
     have = set()
     for r in idx['sets'].get(a.set, {}).get('envs', []):

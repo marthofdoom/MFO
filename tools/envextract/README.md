@@ -120,9 +120,38 @@ Within each class the library takes the members farthest apart in feature space 
 start); `sample` draws more with a given seed from the same candidate index. To add a class or retune a
 threshold edit the table in `classes.py`; nothing else changes.
 
+### Class rules as shipped (`classes.py`, first match wins; candidates in the vanilla masters)
+
+| class | rule (features, units) | vanilla candidates |
+|---|---|---|
+| interior_tower_stairs | layering >= 0.15 and area < 3.0e6 (small, several floors) | 106 |
+| interior_house | area < 1.5e6, layering < 0.15, < 8 actors | 217 |
+| interior_cave_ledges | z span >= 600, steep >= 0.04, area >= 1.5e6, layering < 0.08 | 159 |
+| interior_ruin_halls | layering >= 0.05 and area >= 3.0e6 (large, multi level) | 82 |
+| interior_hall_open | wide share >= 0.02, area >= 1.5e6 | 38 |
+| interior_narrow | narrow share >= 0.9, area >= 1.5e6 | 72 |
+| interior_rooms | rest | 71 |
+| exterior_town | >= 5 doors with a teleport destination in the window | 282 |
+| exterior_fort | layering >= 0.004 and >= 10 large statics | 826 |
+| exterior_camp | >= 3 actors, >= 4 containers+furniture, < 2 teleport doors, layering < 0.004 | 2024 |
+| exterior_ruin | >= 1 teleport door and >= 40 large statics | 1205 |
+| exterior_hills | steep >= 0.22 | 445 |
+| exterior_open | steep < 0.22, wide share >= 0.10 | 2250 |
+| exterior_rough | rest | 315 |
+
+Exterior candidates overlap (one window per navmesh cell); the library keeps chosen windows at least 3 grid cells
+apart. The vanilla masters contain test and developer cells (for example DLC test cells); they classify like any
+other cell because nothing here looks at names. Library as built: Vanilla 41, LoreRim (profile Ultra, changed-only:
+windows or cells where a mod supplied a navmesh) 14, Tuxborn (profile Tuxborn - Deck, changed-only) 14.
+
 ## Water
 
-(filled in after measurement, see below)
+Triangle bit `0x200` is the navmesh water flag. Measured on the vanilla masters (exterior meshes, cell water height
+from the CELL `XCLW`, else the worldspace default): 98.3 percent of flagged triangles lie below the water height and
+91 percent of all triangles below water are flagged. The CELL's `waterHeight` (META, per cell; null or about
+-2.1e9 means none) is the surface for swimming and wading; the navmesh under water is still walkable ground
+(followers wade, they swim only when the player does), so the sim should treat flagged triangles as a movement
+cost / speed class, not a wall.
 
 ## What plugins alone cannot give
 
@@ -133,6 +162,43 @@ threshold edit the table in `classes.py`; nothing else changes.
 * Behaviour that scripts decide: which disabled refs get enabled, which doors are really locked after a quest.
 * Actor stats: use the world json (list_balance) joined by `(plugin, local)` base ids.
 
+## Validation (command `validate`)
+
+Vanilla masters (Skyrim, Update, Dawnguard, HearthFires, Dragonborn), run on the full NAVM record set:
+
+* 19992 NAVM records, 68 deleted, 19924 decoded, 0 failures: consumed size equals the subrecord size for every
+  one, every vertex / neighbour / link / door / cover / grid index in range.
+* Door flag `0x400` against door rows: 2211 agree, 3 triangles carry the flag without a door row (left as is).
+* Internal neighbours: 7,649,395 internal edges; reciprocal by index 99.995 percent, and the shared edge has the same
+  two vertex positions (0.5 unit) on both sides in 99.992 percent. The rest are one-way neighbours the game
+  data itself contains (the validator counts them, it does not repair them).
+* External links of the winning meshes: 233,852. Target navmesh exists 100 percent; a link back from the target
+  exists 99.97 percent (30 rows have none, 36 point at a target triangle number beyond the target mesh: stale
+  links left by an override of the neighbour). Geometry: the linked edge is within 4 units of the target
+  triangle for 76 percent and within 32 units for 97.5 percent (cell-border meshes are not vertex-snapped; the
+  rest are kind 1/2 mesh-to-mesh links inside a cell, which need not be geometrically adjacent).
+* No independent NVNM reader is installed on this machine (no xEdit for Skyrim, no pyffi, no Mutagen), so the
+  cross-check is the data's own redundancy: size consumed to the byte, door bit versus door rows, link bits versus
+  link rows, reciprocal neighbours with matching geometry, water bit versus water height. Layout from the
+  community-documented NVNM version 12; the one field not understood is the link `kind` (0 on cell borders, 1 or 2
+  on interior links).
+* Re-run: `envextract.py validate --set Vanilla` (about a minute); stats are also written to
+  `~/.cache/mfo-env/validate-<set>.json`. `validate FILE.mfoenv` checks written environments (ranges, one-way
+  neighbours, door ref ids, bounds); with no argument it checks every file in the cache.
+
+## Speed
+
+Vanilla: scan 20 s (two passes, 6 processes), candidates plus features 90 s (Tamriel is rasterised once at 64 units,
+windows are slices), writing 40 environments 10 s. A load order of 3500 plugins scans in about 10 s (the
+walker skips what it does not need).
+
 ## Open items
 
-(filled in at the end)
+* Cell-level `kind` of NVNM links is not decoded; `LINK.kind` is the raw value.
+* A ref moved by a later plugin to a different cell follows its winning record's cell; refs a script moves or
+  enables at runtime cannot be known.
+* Classification thresholds (`classes.py`) were set from the vanilla feature distribution; "camp" and "fort" are
+  measured proxies (actors + containers/furniture in open ground, multi-level structure with large statics), not
+  a statement that the base actors are bandits.
+* Actor spawns do not carry encounter zone / level data; join the base id with the world json.
+* Exterior environments are a 3x3 grid-cell window (about 12000 units square); towns bigger than that are cut.

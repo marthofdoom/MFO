@@ -156,7 +156,7 @@ def _geo_dist_seg(p, a, b):
 
 
 def run_file(path):
-    e = fmt.read(path); bad = []
+    e = fmt.read(path); bad = []; warn = 0
     M, V, T, L, D, R = e['meshes'], e['verts'], e['tris'], e['links'], e['doors'], e['refs']
     for mi, m in enumerate(M):
         vb, nv, tb, nt, lb, nl, db, nd = m[5:13]
@@ -167,7 +167,7 @@ def run_file(path):
             for k in range(3):
                 n = t[3 + k]
                 if n >= nt or n < -1: bad.append('mesh %d tri %d nb' % (mi, ti)); continue
-                if n >= 0 and not any(T[tb + n][3 + j] == ti for j in range(3)): bad.append('mesh %d tri %d one-way' % (mi, ti))
+                if n >= 0 and not any(T[tb + n][3 + j] == ti for j in range(3)): warn += 1     # one-way neighbours exist in the game data (README)
     for l in L:
         if l[0] >= len(M): bad.append('link owner')
         elif l[5] >= len(M): bad.append('link target idx')
@@ -180,7 +180,7 @@ def run_file(path):
         if any(r[13 + i] > r[16 + i] for i in range(3)): bad.append('ref bounds')
         if r[3] > 8: bad.append('ref kind')
         if (r[0] >> 24) >= len(e['plugins']): bad.append('ref plugin idx')
-    print('%s: %d meshes %d tris %d links %d doors %d refs -> %s' % (os.path.basename(path), len(M), len(T), len(L), len(D), len(R), 'OK' if not bad else 'BAD %s' % bad[:5]))
+    print('%s: %d meshes %d tris %d links %d doors %d refs -> %s' % (os.path.basename(path), len(M), len(T), len(L), len(D), len(R), ('OK' if not bad else 'BAD %s' % bad[:5]) + (' (%d one-way neighbour edges, as in the game data)' % warn if warn else '')))
     return 0 if not bad else 1
 
 
