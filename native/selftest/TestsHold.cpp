@@ -307,7 +307,7 @@ namespace MFO::SelfTest {
             float gait[3]{};                                     // still / walk / run, seconds (after arrival)
             float move[3]{};                                     // forward / strafe / backpedal, seconds (the whole leg, moving)
             float sprintV = 0;
-            bool  prevIn = false, have = false;
+            bool  prevIn = false, have = false, engineIn = false;
             RE::NiPoint3 prev{};
             int   prevAtk = 0, prevCast[2]{};
             unsigned asked = 0;                                  // which MFO clients asked for ch.24 meanwhile
@@ -412,7 +412,7 @@ namespace MFO::SelfTest {
             } else {
                 s.startD = d;
             }
-            if (in && s.arriveAt < 0) s.arriveAt = s.t;
+            if ((in || s.engineIn) && s.arriveAt < 0) s.arriveAt = s.t;   // arrived by distance or by the engine's own area answer (last tick's)
             if (s.arriveAt >= 0) { s.maxD = std::max(s.maxD, d); s.sumD += d; ++s.samples; }
             s.lastD = d;
             if (foe) {
@@ -452,7 +452,8 @@ namespace MFO::SelfTest {
             if (std::string_view(s.state) == "Leashed") s.leashT += dt;
             if (r.foe && RoleOf(a) != r.role) s.roleLostT += dt;
             if (auto* pc = RE::PlayerCharacter::GetSingleton()) s.playerD = std::max(s.playerD, pc->GetPosition().GetDistance(p));
-            if (info.engineInside != 0) { s.engineT += dt; if (info.engineInside == 1) s.engineInT += dt; }
+            s.engineIn = info.engineInside == 2;   // 0 not seen, 1 outside, 2 inside (its own bound radius is added to R)
+            if (info.engineInside != 0) { s.engineT += dt; if (s.engineIn) s.engineInT += dt; }
             const auto end = [&](std::string why) { r.ending = true; r.endWhy = std::move(why); };
             if (const char* w = Outranked(a_id)) { APMFBridge::DevHoldRelease(a_id); r.claimKept = false; return end(std::format("YIELDED to {}", w)); }
             if (info.ended) return end(std::format("Harbinger ended it: {}", info.state));

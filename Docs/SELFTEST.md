@@ -65,6 +65,10 @@ A verdict is never derived from a timer alone. A window that ends without the ob
 | `spawn` | after the safety check, `PlaceObjectAtMe` of a Skyrim.esm base (default `EncMudcrabMedium` 000E4010, an NPC_ verified in the master) ~700 units in front of the follower, `StartCombat(hostile, follower)` through the same relocation row as `Probe.cpp` (`Probe.StartCombat`, seat-verified; if the runtime refuses, it fights only if it aggroes on its own). `hurtPct` also damages the follower's Health by that percent for the run | `PostFixtureCleanup`: `StopCombat`, `Disable`, `SetDelete(true)`, logged; the damage is given back (never more than the damage he still has) |
 | `probes` | `kProbeAim` flips `Config::g_aimProbe` IN MEMORY (the INI is untouched) | `SetupTeardown` writes the previous value back |
 
+**Exclusive tests (`TestDef::exclusive`, the `g0b.*` tests):** start only when no run is live on any follower and the last run's hostile is gone; nothing else starts while one runs, while one waits for the others to drain, or within 45 s of a load or of an exclusive test completing (so they run first, back to back).
+
+**Hostile removal is staged:** the end of the run stops and disables it (the ledger entry stays); a later pass (1.5 s) deletes it once no actor's fight points at it. `SpawnSpec::clearSpot` places it on standable ground the follower sees, or refuses (RETRY).
+
 **Spawn safety (refuses with RETRY, never an error):** only ONE spawn-using run at a time across all followers (a second waits); a test that hurts the follower is refused unless he is essential or protected; the player already in a fight; the player's location (innermost-first) is a lived-in place (`LocationTypes::Classify` kCivilised: city, town, inn, house, farm, shop, temple ...); any living essential or protected non-follower, or any living non-hostile non-teammate actor, within 3500 units. Checked on the main thread inside the same closure that would add anything, so a refusal changes nothing.
 
 ## 4. The registry
