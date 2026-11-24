@@ -266,7 +266,7 @@ namespace Sim {
     //            and the rule before 11-17 was K = 8): never a tuning setting; the results file records it.
     //   commit   how long a rollout HOLDS the option before the base policy takes over again (an attack order, a retreat, his own AI). It is
     //            part of the rollout MODEL, not a budget: the oracle itself is asked again at his next decision point.
-    struct OracleCfg { int K = 0, nMin = 8, ceiling = 128; double pOne = 0.001; double H = 150.0, every = 0.0, commit = 2.5; double minDU = 1.0; bool allFollowers = true, ext = true, split = true; };
+    struct OracleCfg { int K = 0, nMin = 8, ceiling = 128; double pOne = 0.001; double pair = -1.0;   /* pair: THE COST CUTS below (g_oraclePrune's comment); < 0 = off */ double H = 150.0, every = 0.0, commit = 2.5; double minDU = 1.0; bool allFollowers = true, ext = true, split = true; };
 
     // One-sided Student-t critical value at p for n paired samples (df = n - 1): the Cornish-Fisher expansion about the normal quantile
     // (4.76 at n = 8 against the table's 4.785, 3.73 at 16, 3.37 at 32, 3.12 at 256 for p = 0.001). n < 2 has no variance: +infinity.
@@ -282,9 +282,10 @@ namespace Sim {
     // What the search did (summed over an oracle's decisions; sim.cpp prints it per class: the ORCSTOP and ORCREFUSED lines).
     struct OracleStats {
         long decisions = 0, options = 0, rollouts = 0, streams = 0;   // options offered after the class filter; rollouts run; streams at the stop (summed)
+        long twins = 0;   // options the pair rule retired (OracleCfg::pair): told apart from no standing option by more than its width, or the same outcome as an earlier one on every stream
         long bound = 0, standing = 0; double unresolved = 0, unresolvedMax = 0;   // decisions the ceiling ended with more than one option standing; how many stood; the best's lead over the best other standing (summed, and the largest)
         std::map<std::string, long> refused;   // option offers refused, by reason (ClassRefuses / RulingRefuses token)
-        void Merge(const OracleStats& o) { decisions += o.decisions; options += o.options; rollouts += o.rollouts; streams += o.streams; bound += o.bound; standing += o.standing; unresolved += o.unresolved; unresolvedMax = std::max(unresolvedMax, o.unresolvedMax);
+        void Merge(const OracleStats& o) { decisions += o.decisions; options += o.options; rollouts += o.rollouts; streams += o.streams; twins += o.twins; bound += o.bound; standing += o.standing; unresolved += o.unresolved; unresolvedMax = std::max(unresolvedMax, o.unresolvedMax);
             for (const auto& kv : o.refused) refused[kv.first] += kv.second; }
     };
 
@@ -313,9 +314,27 @@ namespace Sim {
     // would have picked on the same snapshot (its own generate and decide, on a copy of the mind as it stood before the base table decided). One
     // oracle fight then prices any number of candidate tables. It is a screen: the rollouts ran under the base table, so an accepted value
     // is measured again as the base table.
-    // Exact pruning (`--oracle-prune off` is the diagnostic): an offense spell that another offense spell on the same foe beats or equals on
+    // Exact pruning (`--oracle-prune off` is the diagnostic; `target` is the first cost cut below): an offense spell that another offense spell on the same foe beats or equals on
     // every number the world reads (Dominates) cannot be the best, and is not raced. IAUS's own pick and the alternates' picks always race.
-    inline bool g_oraclePrune = true;
+    //
+    // THE COST CUTS OF THE RACE (sim v4 batch C, iaus-sim-v4.md 15.7; each is measured there on the same streams as the race it replaces).
+    // With a field-size book a caster has 60 to 100 options, most of them offense spells on the same foe that do nearly the same thing, and
+    // the race could not tell them apart at the ceiling: it ran every one of them 128 times. Nothing below lowers the ceiling, shortens a
+    // rollout, skips a decision point or drops a candidate unseen.
+    //   g_oraclePrune 2 (`--oracle-prune target`)   the dominance test reads what the spell does to THIS foe: its damage times the foe's own
+    //                    resist factors (World.h SpellHit), so two bolts of different elements are compared on the foe they are thrown at.
+    //                    A spell with an area keeps the same-element test (it lands on other foes too). 1 (`on`, the default) is the
+    //                    record's numbers with the same element, as before. 0 = off.
+    //   OracleCfg::pair (`--oracle-pair <U>`, < 0 = off)   PAIRWISE INDIFFERENCE. After each look an option I is retired when another standing
+    //                    option J exists that it is not better than by more than `pair` U, at the race's own p on their paired difference
+    //                    (mean(J - I) > t * sd / sqrt(n) - pair), or, at any width, when J comes earlier (IAUS ranks it higher) and
+    //                    gave the SAME utility on every stream so far (a twin: the cast did the same thing in every future tried). The
+    //                    race then spends its streams on options that differ. Never retired this way: the best, IAUS's own pick, an
+    //                    alternate table's pick, the action he is on, so the gap ledger and the spell regret keep their meaning. The loss
+    //                    per decision is at most `pair` per link of a chain; measured, it is a few thousandths of a U (15.7).
+    //   OracleCfg::nMin 4 (`--oracle-nmin 4`)   the first look after 4 streams instead of 8. The test at 4 streams is the same test with its
+    //                    own (much wider) t; what it buys is that twins and near-twins leave after 4 rollouts instead of 8.
+    inline int g_oraclePrune = 1;
     struct AltTable { std::string sets; Tuning t; std::vector<Profile::WeightOverride> w; };
     inline std::vector<AltTable>& Alts() { static std::vector<AltTable> a; return a; }
     [[nodiscard]] inline bool CastFamily(Family f) { return f == Family::CastOffense || f == Family::CastControl || f == Family::CastHeal || f == Family::CastBuff || f == Family::CastSummon || f == Family::CastWard; }
@@ -345,10 +364,16 @@ namespace Sim {
         return o;
     }
     // A beats or equals B on every number the world reads for an offense cast at one foe (same road, same element, same area, same row).
-    [[nodiscard]] inline bool Dominates(const SimSpell& A, const SpellEntry& a, const SimSpell& B, const SpellEntry& b) {
+    // onFoe (g_oraclePrune 2): ka / kb are each spell's factor on the foe both are thrown at (World.h SpellHit: (1 - element resist)(1 - magic
+    // resist)), so the element may differ unless the spell has an area. A stealthy caster's cover breaks on a spell that deals damage, so for
+    // him the two must agree on dealing any (stealthy).
+    [[nodiscard]] inline bool Dominates(const SimSpell& A, const SpellEntry& a, const SimSpell& B, const SpellEntry& b, bool onFoe = false, float ka = 1.0f, float kb = 1.0f, bool stealthy = false) {
+        const bool area = a.areaUnits > 0.0f || A.areaKind != 0;
+        if (!onFoe || area) { if (a.resistAv != b.resistAv) return false; ka = kb = 1.0f; }
+        if (onFoe && stealthy && (A.dmg > 0.0f) != (B.dmg > 0.0f)) return false;
         return a.source == SpellSource::Spell && b.source == SpellSource::Spell && !a.concentration && !b.concentration && a.touch == b.touch && a.selfDelivery == b.selfDelivery
-            && a.resistAv == b.resistAv && A.row == B.row && a.areaUnits == b.areaUnits && A.areaKind == B.areaKind && !A.ctrl && !B.ctrl && a.undeadOnly == b.undeadOnly
-            && a.cost <= b.cost && A.castSec <= B.castSec && a.reach >= b.reach && A.dmg >= B.dmg && A.dot >= B.dot && A.dotDur >= B.dotDur && A.mpDmg >= B.mpDmg && A.spDmg >= B.spDmg
+            && A.row == B.row && a.areaUnits == b.areaUnits && A.areaKind == B.areaKind && !A.ctrl && !B.ctrl && a.undeadOnly == b.undeadOnly
+            && a.cost <= b.cost && A.castSec <= B.castSec && a.reach >= b.reach && A.dmg * ka >= B.dmg * kb && A.dot * ka >= B.dot * kb && A.dotDur >= B.dotDur && A.mpDmg * ka >= B.mpDmg * kb && A.spDmg * ka >= B.spDmg * kb
             && (A.stagger || !B.stagger) && A.heal >= B.heal && A.armor >= B.armor;
     }
 
@@ -459,16 +484,23 @@ namespace Sim {
                 Mind m = mind0; const Decision da = Decide(m, ga.actions, pf, a.t, in);
                 const bool has = da.verdict != Verdict::Idle && !da.order.empty() && da.order[0].idx < ga.actions.size();
                 altKey.push_back(has ? KeyOf(ga.actions[da.order[0].idx]) : Key{}); altHas.push_back(has ? 1 : 0); }
-            if (g_oraclePrune) { std::vector<int> bi(opt.size(), -1); std::vector<char> dead(opt.size(), 0), keep(opt.size(), 0); long np = 0;
+            std::vector<char> guard;   // options the pair rule never retires: IAUS's pick, an alternate's pick, the action he is on (filled below; the best is the race's own)
+            if (g_oraclePrune) { std::vector<int> bi(opt.size(), -1); std::vector<char> dead(opt.size(), 0), keep(opt.size(), 0); std::vector<float> kf(opt.size(), 1.0f); long np = 0; const bool onFoe = g_oraclePrune == 2;
                 for (std::size_t i = 0; i < opt.size(); ++i) { const Candidate* k = opt[i].k; if (!k || opt[i].ext != Ext::None || k->family != Family::CastOffense) continue;
-                    bi[i] = BookIndex(c, k->form); const Key ky = KeyOf(*k); if (iausPick && ky == KeyOf(*iausPick)) keep[i] = 1; for (std::size_t a = 0; a < altKey.size(); ++a) if (altHas[a] && ky == altKey[a]) keep[i] = 1; }
+                    bi[i] = BookIndex(c, k->form); const Key ky = KeyOf(*k);
+                    if (onFoe && bi[i] >= 0) { const Body* tg = F.Find(k->target); if (!tg) { bi[i] = -1; continue; } const int av = c.build->spells[static_cast<std::size_t>(bi[i])].e.resistAv;
+                        kf[i] = (1.0f - std::clamp(F.ResistOf(*tg, av) / 100.0f, -1.0f, 1.0f)) * (1.0f - std::clamp(F.ResistOf(*tg, kAvResistMagic) / 100.0f, -1.0f, 1.0f)); } if (iausPick && ky == KeyOf(*iausPick)) keep[i] = 1; for (std::size_t a = 0; a < altKey.size(); ++a) if (altHas[a] && ky == altKey[a]) keep[i] = 1; }
                 for (std::size_t i = 0; i < opt.size(); ++i) { if (bi[i] < 0 || dead[i]) continue;
                     for (std::size_t j = i + 1; j < opt.size(); ++j) { if (bi[j] < 0 || dead[j] || opt[i].k->target != opt[j].k->target) continue;
                         const auto si = static_cast<std::size_t>(bi[i]), sj = static_cast<std::size_t>(bi[j]);
-                        if (!keep[j] && Dominates(c.build->spells[si], c.book.entries[si], c.build->spells[sj], c.book.entries[sj])) { dead[j] = 1; ++np; }   // equal on every number: the earlier (IAUS's higher ranked) stands
-                        else if (!keep[i] && Dominates(c.build->spells[sj], c.book.entries[sj], c.build->spells[si], c.book.entries[si])) { dead[i] = 1; ++np; break; } } }
+                        if (!keep[j] && Dominates(c.build->spells[si], c.book.entries[si], c.build->spells[sj], c.book.entries[sj], onFoe, kf[i], kf[j], x.stealthy)) { dead[j] = 1; ++np; }   // equal on every number: the earlier (IAUS's higher ranked) stands
+                        else if (!keep[i] && Dominates(c.build->spells[sj], c.book.entries[sj], c.build->spells[si], c.book.entries[si], onFoe, kf[j], kf[i], x.stealthy)) { dead[i] = 1; ++np; break; } } }
                 if (np) { std::vector<Opt> kept; kept.reserve(opt.size()); for (std::size_t i = 0; i < opt.size(); ++i) if (!dead[i]) kept.push_back(opt[i]); opt.swap(kept); if (subj && reg) reg->pruned += np; } }
             opt.push_back(Opt{});   // idle: his own AI
+            if (cfg.pair >= 0.0) { guard.assign(opt.size(), 0);
+                for (std::size_t i = 0; i < opt.size(); ++i) { const Candidate* k = opt[i].k; if (!k || opt[i].ext != Ext::None) continue; const Key ky = KeyOf(*k);
+                    if ((iausPick && ky == KeyOf(*iausPick)) || (c.hasLastKey && ky == c.lastKey)) guard[i] = 1; for (std::size_t a = 0; a < altKey.size(); ++a) if (altHas[a] && ky == altKey[a]) guard[i] = 1; } }
+            long retired = 0;
             const long rollouts0 = st.rollouts;
             // EVALUATE: the race (OracleCfg). Streams are shared by all options (stream k has one seed for every option), so two options are
             // compared on the same luck and the test is on their PAIRED difference.
@@ -491,10 +523,15 @@ namespace Sim {
                 for (std::size_t i = 0; i < N; ++i) { if (!alive[i]) continue; if (i == best) { ++live; continue; }
                     double sd = 0; const double d = lead(best, i, &sd);
                     if (n >= 2 && (sd <= 0.0 ? d >= 0.0 : d > tc * sd / rn)) alive[i] = 0; else ++live; }   // sd 0: the same outcome on every stream (a duplicate of the best, or beaten on every one)
+                // PAIRWISE INDIFFERENCE (OracleCfg::pair, the block comment above g_oraclePrune): from the last option to the first, so of two twins the earlier stands
+                if (cfg.pair >= 0.0 && n >= 2 && live > 1) for (std::size_t i = N; i-- > 0;) { if (!alive[i] || i == best || guard[i]) continue;
+                    for (std::size_t j = 0; j < N; ++j) { if (j == i || !alive[j]) continue;
+                        double sd = 0; const double d = lead(j, i, &sd);
+                        if (sd <= 0.0 ? (d >= 0.0 && j < i) : (cfg.pair > 0.0 && d > tc * sd / rn - cfg.pair && d > -0.5 * cfg.pair)) { alive[i] = 0; --live; ++retired; break; } } }
                 if (live <= 1 || n >= ceil) break;
                 next = std::min(ceil, n * 2);
             }
-            { OracleStats one; one.options = static_cast<long>(N); one.streams = n; one.decisions = 1; one.rollouts = st.rollouts - rollouts0;
+            { OracleStats one; one.options = static_cast<long>(N); one.streams = n; one.decisions = 1; one.rollouts = st.rollouts - rollouts0; one.twins = retired;
               if (live > 1) { one.bound = 1; one.standing = static_cast<long>(live); double other = -1e9; for (std::size_t i = 0; i < N; ++i) if (alive[i] && i != best) other = std::max(other, u[i]); one.unresolved = one.unresolvedMax = u[best] - other; }
               const long r = one.rollouts; one.rollouts = 0; st.Merge(one); one.rollouts = r; if (ci == 0) stSubj.Merge(one); }
             // pick: the best; the action he is already on wins when it still stands (not separated from the best) and is within 0.3 U of it (a person does not dither)

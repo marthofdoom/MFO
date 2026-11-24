@@ -171,7 +171,7 @@ namespace {
         char b[300]; if (oc.K > 0) std::snprintf(b, sizeof b, "DIAGNOSTIC fixed K=%d", oc.K); else std::snprintf(b, sizeof b, "streams until separated at p=%g, from %d, ceiling %d", oc.pOne, oc.nMin, oc.ceiling);
         std::string d = b; if (oc.H >= 150.0) d += ", rollouts to the fight's end"; else { std::snprintf(b, sizeof b, ", DIAGNOSTIC rollouts cut at %.0f s", oc.H); d += b; }
         if (oc.every > 0.0) { std::snprintf(b, sizeof b, ", DIAGNOSTIC a decision every %.2f s", oc.every); d += b; } else d += ", every decision point";
-        d += ", every candidate"; if (!oc.split) d += ", DIAGNOSTIC one shared random stream"; if (!g_classRulings) d += ", DIAGNOSTIC class rulings OFF"; return d; }
+        d += ", every candidate"; if (oc.pair >= 0.0) { std::snprintf(b, sizeof b, ", pairwise indifference %.2f U", oc.pair); d += b; } if (g_oraclePrune == 2) d += ", dominance on the foe"; if (!oc.split) d += ", DIAGNOSTIC one shared random stream"; if (!g_classRulings) d += ", DIAGNOSTIC class rulings OFF"; return d; }
     int OracleKOf(const OracleCfg& oc) { return oc.K > 0 ? oc.K : oc.ceiling; }   // the results file's "k": the most streams an option can get
 
     // What the oracle's search did (Oracle.h OracleStats), one line: sizes per decision, and how often the safety ceiling ended a race.
@@ -179,7 +179,8 @@ namespace {
         const double d = std::max<double>(1, double(s.decisions)); char b[400];
         std::snprintf(b, sizeof b, "decisions %ld  options/dec %.1f  streams/dec %.1f  rollouts/dec %.0f  ceiling bound %ld (%.2f%%)  standing there %.1f  unresolved lead mean %.3f max %.3f U", s.decisions, double(s.options) / d, double(s.streams) / d, double(s.rollouts) / d,
                       s.bound, 100.0 * double(s.bound) / d, s.bound ? double(s.standing) / double(s.bound) : 0.0, s.bound ? s.unresolved / double(s.bound) : 0.0, s.unresolvedMax);
-        return b; }
+        std::string o = b; if (s.twins > 0) { std::snprintf(b, sizeof b, "  retired by the pair rule %.1f", double(s.twins) / d); o += b; }
+        return o; }
 
     // ── the named scenarios: IAUS, and (with --oracle) the expert oracle on the SAME fights ──
     int RunScenarios(const Data& D, const std::vector<SimClass>& classes, const std::string& which, std::uint64_t seed, int fights, int threads, bool oracle, const OracleCfg& oc, bool g10Sticky, int trace, Results& out, bool estimates, bool scrollRoad) {
@@ -844,7 +845,7 @@ static int RealMain(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--env-hold") && i + 1 < argc) { const char* v = argv[++i]; g_envHold = !std::strcmp(v, "all") ? 0 : !std::strcmp(v, "train") ? 1 : !std::strcmp(v, "heldout") ? 2 : -1; if (g_envHold < 0) { std::fprintf(stderr, "--env-hold all|train|heldout\n"); return 2; } }   // batch C: the held-out places of the library (Env.h g_envHold)
         else if (!std::strcmp(argv[i], "--spell-regret")) spellRegret = true;                  // batch C: the gap pass also prints the subject's spell regret (SPELLFIGHT / SPELLREG / SPELLDEC, Oracle.h RegretLog) and its table
         else if (!std::strcmp(argv[i], "--regret-alt") && i + 1 < argc) altSets.push_back(argv[++i]);   // batch C: an alternate table (a --set list) priced on the same oracle decisions; repeatable
-        else if (!std::strcmp(argv[i], "--oracle-prune") && i + 1 < argc) { const std::string v = argv[++i]; if (v != "on" && v != "off") { std::fprintf(stderr, "--oracle-prune on|off\n"); return 2; } g_oraclePrune = v == "on"; }   // DIAGNOSTIC off: dominated offense spells are raced too
+        else if (!std::strcmp(argv[i], "--oracle-prune") && i + 1 < argc) { const std::string v = argv[++i]; if (v != "on" && v != "off" && v != "target") { std::fprintf(stderr, "--oracle-prune on|off|target\n"); return 2; } g_oraclePrune = v == "target" ? 2 : v == "on" ? 1 : 0; }   // DIAGNOSTIC off: dominated offense spells are raced too. target: dominance on the foe's own resists (Oracle.h, the cost cuts)
         else if (!std::strcmp(argv[i], "--gap-arm") && i + 1 < argc) { const std::string v = argv[++i]; if (v != "both" && v != "iaus") { std::fprintf(stderr, "--gap-arm both|iaus\n"); return 2; } gapIausOnly = v == "iaus"; }   // batch C: iaus = the gap pass plays its fights with IAUS only and prints GAPIAUS lines (tune_driver.py stage follow)
         else if (!std::strcmp(argv[i], "--engage-on-sight")) g_engageOnSight = true;   // ch.21 EngageOnSight modelled in every fight (ships OFF)
         else if (!std::strcmp(argv[i], "--mirror") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "off")) g_mirror = false; else if (!std::strcmp(v, "on")) g_mirror = true; else { std::fprintf(stderr, "--mirror on|off\n"); return 2; } }
@@ -951,6 +952,8 @@ static int RealMain(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--trace") && i + 1 < argc) trace = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--oracle-k") && i + 1 < argc) { oc.K = std::atoi(argv[++i]); }   // DIAGNOSTIC: a fixed ceiling of K streams instead of the stopping rule
         else if (!std::strcmp(argv[i], "--oracle-h") && i + 1 < argc) { oc.H = std::atof(argv[++i]); }   // DIAGNOSTIC below Fight::maxSec: a rollout is cut there
+        else if (!std::strcmp(argv[i], "--oracle-pair") && i + 1 < argc) oc.pair = std::atof(argv[++i]);   // the race's pairwise indifference width in U (Oracle.h OracleCfg::pair; < 0 = off, 0 = twins only)
+        else if (!std::strcmp(argv[i], "--oracle-nmin") && i + 1 < argc) oc.nMin = std::max(2, std::atoi(argv[++i]));   // streams before the race's first look (8)
         else if (!std::strcmp(argv[i], "--oracle-ceiling") && i + 1 < argc) oc.ceiling = std::max(1, std::atoi(argv[++i]));   // the stopping rule's safety ceiling (Oracle.h OracleCfg)
         else if (!std::strcmp(argv[i], "--damage-report") && i + 1 < argc) damageN = std::max(1, std::atoi(argv[++i]));   // incoming damage on followers in the field logs' terms (DamageReport; calib_damage.py reads the field side)
         else if (!std::strcmp(argv[i], "--gap-bracket") && i + 1 < argc) { const char* v = argv[++i]; bool ok = false; for (std::size_t b = 0; b < std::size(kBrackets); ++b) if (!std::strcmp(v, kBrackets[b].name)) { g_gapBracket = static_cast<int>(b); ok = true; } if (!ok) { std::fprintf(stderr, "unknown --gap-bracket '%s'\n", v); return 2; } }

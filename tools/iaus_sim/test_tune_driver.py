@@ -89,6 +89,12 @@ class ChoiceBatch(unittest.TestCase):   # sim v4 batch C (iaus-sim-v4.md 14): th
         self.assertIn("--spell-regret", a)                          # every oracle run prints the regret: one cache entry for gap, follow and spells
         i = T.gap_cmd("builtin", "knight", tab, 6001, arm="iaus")
         self.assertTrue("--gap-arm" in i and "--spell-regret" not in i)
+        # the race's cost cuts ride on every oracle run and on no IAUS arm, and one switch takes them off (iaus-sim-v4.md 15.7)
+        self.assertEqual(a[a.index("--oracle-pair") + 1], "0.10")
+        self.assertTrue("--oracle-nmin" in a and a[a.index("--oracle-prune") + 1] == "target" and not any(x.startswith("--oracle-p") or x == "--oracle-nmin" for x in i))
+        T.A.oracle_cuts = ""
+        self.assertFalse(any(x in T.gap_cmd("builtin", "knight", tab, 6001) for x in ("--oracle-pair", "--oracle-nmin", "--oracle-prune")))
+        del T.A.oracle_cuts
 
     def plant(self, gain, fresh_gain=None, hold_gain=None, gap_after=None):
         """A class with a gap of 4 U on 8 fights; candidate spec -> what it adds to IAUS's U on the search fights (gain), on fresh fights and

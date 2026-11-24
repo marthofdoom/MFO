@@ -204,6 +204,10 @@ def key_of(world, classes, cfg, curves, sets, binary):
 
 V4_TRAIN = ["--env-set", "all", "--env-hold", "train", "--books", "field"]   # the tune's world since sim v4 batch C: the library's train places, field-size books
 HOLD_FLAGS = ["--env-hold", "heldout", "--books", "heldout"]                 # the check: places and spell records no search saw (the simulator takes the LAST of a repeated switch)
+# THE ORACLE RACE'S COST CUTS (Oracle.h, the block above g_oraclePrune; iaus-sim-v4.md 15.7): dominance on the foe's own resists, pairwise
+# indifference 0.10 U with twins retired, a first look at 4 streams. The ceiling, the rollouts, the decision points and the candidates are
+# the full oracle's. `--oracle-cuts ""` runs the race without them (about 3 to 4 times the oracle stages' cost on a caster cell).
+ORACLE_CUTS = "--oracle-prune target --oracle-pair 0.10 --oracle-nmin 4"
 
 
 def env_index():
@@ -1371,6 +1375,8 @@ def gap_cmd(world, cls, curves, seed, subject_only=True, arm="both", sets=None, 
     cmd = [hold_bin() if hold else A.bin, "--no-json", "--threads", "1", "--seed", str(seed), "--classes", cls, "--fights", "1", "--rating", "0",
            "--class-oracle", str(CFG["gap_nat"]), "--gap-scenarios", str(CFG["gap_scen"]), "--gap-dump"] + (["--oracle-subject-only"] if subject_only else []) + world_args(world)
     cmd += ["--gap-arm", "iaus"] if arm == "iaus" else ["--spell-regret"]
+    if arm != "iaus":
+        cmd += getattr(A, "oracle_cuts", ORACLE_CUTS).split()   # only where the oracle runs: the IAUS arm's command and cache key do not move with them
     for c in table_slice(cls, curves):
         cmd += ["--curve", c]
     if sets:
@@ -2748,6 +2754,7 @@ def main():
     ap.add_argument("--no-race", action="store_true", help="measure every candidate of a sweep on every train seed (the pre-2.11.1 driver; the racing proof's reference)")
     ap.add_argument("--sim-flags", default="", help="simulator switches for EVERY run of this driver (batch 3 models, e.g. '--ranged-perks --point-blank'); they go into a wrapper in --out whose text names the binary's sha256, so they are part of every cache key")
     ap.add_argument("--world", choices=("v2", "v3", "v4"), default="v4", help="v4 (the default since sim v4 batch C, iaus-sim-v4.md 14): the environment world on the library's TRAIN places (MFO_ENV_CACHE, default ~/.cache/mfo-env) with field-size books; the follow and spells stages check on the held-out places and books. Older text: the simulator's world for EVERY run of this driver (iaus-sim-v3.md): v3 (the default since the sim mirror batch of 11-17, marth 11-16 'v3 default after data': the field cast delay and the chase-waiver fix are in), the positional world; v2 = the lab every tuning up to 2.11.5 was searched in, kept working. Passed to the simulator as --world, through the same wrapper as --sim-flags")
+    ap.add_argument("--oracle-cuts", default=ORACLE_CUTS, help="simulator switches of the oracle race's cost cuts, on every oracle run of the gap, follow and spells stages (default: %(default)s; iaus-sim-v4.md 15.7). '' = the race without them")
     ap.add_argument("--knobs", help="a regular expression: the classes / edge / gap stages search only the knobs whose name matches (e.g. '^equip\\.' for the posture curves); the gates are unchanged")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 16)
     ap.add_argument("--decisions", choices=("auto", "ask"), default="auto", help="auto (default): every former open decision is decided by a rule (class card + potion gates, tuner-auto-decisions.md) or is a report-only note, all in summary.json auto_decisions; ask: the old open decisions, no card / potion gate")
