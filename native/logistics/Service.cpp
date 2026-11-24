@@ -7,6 +7,7 @@
 #include "PCH.h"
 #include "Logistics.h"
 #include "Logistics_internal.h"
+#include "probes/Probes.h"   // N0 [probe-trust]: the lived signs of an ended ch.19 leg (log only)
 #include "GemRules.h"   // the split modules' shared substrate
 #include "Evaluator.h"
 #include "Vocabulary.h"
@@ -769,6 +770,10 @@ namespace MFO::Logistics {
                                           leg19.stall.z,
                                           leg19.blockerKind < std::size(kBlk) ? kBlk[leg19.blockerKind] : "?",
                                           leg19.blocker);
+                    if (ch19Blocked && leg19.blockerKind == APMF_API::kBlocker_None)   // N0 passive: the plan said walkable, a STATIC stopped him
+                        Probes::NoteLived(Probes::Lived::LegBlockedStatic, id, fmt::format("leg->{:08X} blocked {:.1f}s at ({:.0f},{:.0f},{:.0f}), no actor in the lane", tref->GetFormID(), leg19.blockedMs / 1000.0f, leg19.stall.x, leg19.stall.y, leg19.stall.z).c_str());
+                    else if (leg19.state == APMF_API::kLeg_StuckTimeout)
+                        Probes::NoteLived(Probes::Lived::LegStuckTimeout, id, fmt::format("leg->{:08X} STUCK-TIMEOUT after {:.1f}s in that state", tref->GetFormID(), leg19.msInState / 1000.0f).c_str());
                     spdlog::info("[loot] {:08X} leg->{:08X}: CH19 leg ended {} ({:.1f}s in that state, seq {}, "
                                  "gait {}{}) -- {}",
                                  id, tref->GetFormID(), leg19.state < std::size(kEnd) ? kEnd[leg19.state] : "?",

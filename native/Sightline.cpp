@@ -1,5 +1,6 @@
 #include "PCH.h"
 #include "Sightline.h"
+#include "probes/Probes.h"   // N0 [probe-ray]: times the engine rays this file already casts (counters only)
 #include "MainThread.h"
 #include "Runtime.h"   // G1: Runtime::Known(), the exact-build gate
 #include "Followers.h"   // TeammateInFireLine walks the maintained party list
@@ -158,7 +159,7 @@ namespace MFO::Sightline {
                 pick.rayInput.enableShapeCollectionFilter = false;
                 pick.rayInput.filterInfo = rayFilter;
 
-                world->PickObject(pick);
+                { Probes::RayTimer rt(Probes::RaySite::OwnRay); world->PickObject(pick); }
                 if (!pick.rayOutput.HasHit()) return Ray::Clear;  // a clear sample -> visible, done
             }
             return Ray::Blocked;  // every sample blocked
@@ -201,7 +202,7 @@ namespace MFO::Sightline {
                         // Principle 7: say so, then use the engine's cached answer for this
                         // one measurement. Main thread only, so a plain static is safe.
                         bool arg2 = false;
-                        los = vf->HasLineOfSight(tf, arg2);
+                        { Probes::RayTimer rt(Probes::RaySite::EngineLos); los = vf->HasLineOfSight(tf, arg2); }
                         static std::unordered_map<std::uint64_t, Clock::time_point> s_unavailLog;
                         if (s_unavailLog.size() > 256) s_unavailLog.clear();
                         auto& last = s_unavailLog[Key(a_viewer, tid)];
@@ -221,7 +222,7 @@ namespace MFO::Sightline {
                     // is only ever reached through MainThread::Post, which is a
                     // documented no-op on VR (pump refused), so VR never gets here.
                     bool arg2 = false;
-                    los = vf->HasLineOfSight(tf, arg2);
+                    { Probes::RayTimer rt(Probes::RaySite::EngineLos); los = vf->HasLineOfSight(tf, arg2); }
                     // Cheap engine check FIRST; the ray runs ONLY on a CLEAR, fails OPEN.
                     const char* why = nullptr;
                     if (los && CustomRay(vf, tf, /*a_strict=*/false, why) == Ray::Blocked) los = false;
@@ -380,7 +381,7 @@ namespace MFO::Sightline {
                 pick.rayInput.to   = pt * scale;
                 pick.rayInput.enableShapeCollectionFilter = false;
                 pick.rayInput.filterInfo = rayFilter;
-                world->PickObject(pick);
+                { Probes::RayTimer rt(Probes::RaySite::PointRay); world->PickObject(pick); }
                 if (!pick.rayOutput.HasHit()) break;   // nothing (more) between the eye and that part of him
                 const auto* coll  = pick.rayOutput.rootCollidable;
                 const auto  layer = static_cast<std::uint32_t>(coll->GetCollisionLayer());
