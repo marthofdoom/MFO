@@ -141,11 +141,19 @@ class WaterAndComponents(unittest.TestCase):
         self.assertEqual(w[0], 0)    # biggest component is id 0
     def test_displaced_mesh_rule(self):
         import library
-        def mesh(dz): return S.nvnm([(x, y, z + dz) for x, y, z in SQ], [(0, 1, 2, -1, -1, -1, 0, 0)], cell=0x55)
+        def mesh(dz, flat=False): return S.nvnm([(x, y, (0 if flat else (100 if (x, y) == (0, 100) else 0)) + dz) for x, y, z in SQ], [(0, 1, 2, -1, -1, -1, 0, 0)], cell=0x55)
         sc = dict(navm={1: (0, mesh(0)), 2: (0, mesh(10)), 3: (0, mesh(-20000)), 4: (0, mesh(5))}, navinfo={k: (0, None, None, 0x55) for k in (1, 2, 3, 4)})
         self.assertEqual(library.displaced_meshes(sc), {3})
         sc2 = dict(navm={1: (0, mesh(0)), 2: (0, mesh(-20000))}, navinfo={k: (0, None, None, 0x55) for k in (1, 2)})
         self.assertEqual(library.displaced_meshes(sc2), set())      # too few neighbours to judge
+        # override rule: winner from another plugin (pi 1 != owner 0), flat, far from the original; works with a single neighbour,
+        # and two parked meshes do not shield each other
+        sc3 = dict(navm={1: (0, mesh(0)), 2: (1, mesh(-30000, True)), 3: (1, mesh(-30000, True))}, navinfo={k: (0, None, None, 0x55) for k in (1, 2, 3)},
+                   navorig={1: (0, 100), 2: (0, 100), 3: (0, 100)})
+        self.assertEqual(library.displaced_meshes(sc3), {2, 3})
+        # a flat override that stays near its original height (a small edit) is kept
+        sc4 = dict(navm={1: (0, mesh(0)), 2: (1, mesh(40, True))}, navinfo={k: (0, None, None, 0x55) for k in (1, 2)}, navorig={1: (0, 100), 2: (0, 100)})
+        self.assertEqual(library.displaced_meshes(sc4), set())
 
 
 class CppReader(unittest.TestCase):

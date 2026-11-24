@@ -89,7 +89,7 @@ and the community enum, NOT from in-game observation):
 
 | kind | meaning | how a consumer treats it |
 |---|---|---|
-| 0 | two-way portal between meshes: cell borders and mesh seams. dz stays within about +-50 units (5 to 95 percentile) | an ordinary walk edge |
+| 0 | two-way portal between meshes: cell borders and mesh seams. dz stays within about +-50 units (5 to 95 percentile); rare outliers up to +491 | an ordinary walk edge |
 | 1 | ledge UP: always the reverse of a kind 2 link (Vanilla 2350 of 2351 reciprocate as 1<->2) | never a walk edge: jump up only, pay a jump cost, cap dz |
 | 2 | one-way DROP down (dz negative). Vanilla 2351 links, 82 percent target the SAME mesh, median drop 122 units, 5 percent worse than 612 | allowed downward only; pay a jump / fall cost and cap the drop; the sim must not walk it as flat ground |
 | 3 | enable/disable portal (LoreRim: 393). dz is meaningless (+-20000) | closed by default; never a geometric step; ignore unless something enables it |
@@ -146,10 +146,12 @@ For navmeshes, cells and refs the LAST record of a FormID wins whole. A record w
 Compressed records (0x40000) are inflated. Light plugins resolve with 12-bit local ids. A ref moved to another cell by a later
 plugin follows its winning record's cell. Persistent exterior refs go into the grid cell their position falls in.
 
-DISPLACED navmeshes: a plugin "removes" a navmesh by moving it far below the map. Relative rule, no absolute height and no list
-value: an interior mesh whose highest vertex is more than 3000 units under the lowest vertex of every other mesh of its cell
-(cell has at least 3 meshes), or an exterior mesh more than 3000 under the 5th percentile of the lowest vertices of its 3x3 cells'
-meshes (at least 3 neighbours). They are dropped before classification and export; the count per environment is in
+DISPLACED navmeshes: a plugin "removes" a navmesh by moving it far below the map. Relative rules, no absolute height and no list
+value. (1) Override rule: the winning record comes from a plugin that is not the record's owner, it is flat (highest minus lowest
+vertex under 16 units) and its height is more than 3000 units from the FIRST record of that mesh (the owner's version, kept by the
+scan); no neighbour count is needed and parked meshes cannot shield each other. (2) Median rule, for meshes parked by their own plugin
+or without history: highest vertex more than 12000 under the MEDIAN of the lowest vertices of the other, non-flat, not-already-dropped
+meshes of the cell (interior, at least 2 others) or of the 3x3 cells (exterior, at least 3 others). They are dropped before classification and export; the count per environment is in
 `META.counts.displacedMeshesDropped`.
 
 ## How the library is picked (measured geometry, no names, no list-specific ids)
@@ -157,7 +159,7 @@ meshes (at least 3 neighbours). They are dropped before classification and expor
 CAVEAT: a class name says what was MEASURED, not what the place is. `exterior_multilevel_statics` is not necessarily a fort and
 `exterior_actors_containers` is not necessarily a camp (wildlife counts as actors). Nothing here reads a name.
 
-Candidates: each interior cell with a navmesh that can be reached on foot from an exterior cell through load doors that do not
+Candidates: each interior cell (its CELL record must carry the interior flag 0x1, else the mesh is dropped so META never contradicts the cell) with a navmesh that can be reached on foot from an exterior cell through load doors that do not
 start disabled (interiors that cannot are dropped; reachability uses the doors the scan kept, so an interior only reachable
 through a navmesh-less exterior cell is dropped too), and each exterior 3x3 grid-cell window (about 12000 units) with at least
 12.3M square units of walkable area and under 50 percent water-flagged area (lakes are not places to fight). Features come from

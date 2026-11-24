@@ -30,6 +30,14 @@ def key_of(pg, i, raw):
     return (_G['idx'].get(owner, 4095) << 24) | local
 
 
+def _zrange(nv):
+    """(min z, max z) of the vertices of an NVNM blob (16 byte header, then u32 vertex count: same offsets interior and exterior)"""
+    n = struct.unpack_from('<I', nv, 16)[0]
+    if n == 0: return (0.0, 0.0)
+    zs = struct.unpack_from('<%df' % (3 * n), nv, 20)[2::3]
+    return (min(zs), max(zs))
+
+
 def pass1(i):
     pg = P.Plugin(_G['where'][_G['names'][i]]); out = dict(cells=[], navm=[], bases={}, worlds=[])
     cache = {}
@@ -130,7 +138,7 @@ def _pool_run(fn, n, procs):
 def scan_set(order, where, procs=6, log=print):
     """-> dict with the merged winners.  Slow part: two passes over every plugin."""
     _ctx(order); _G['where'] = where; n = len(order); t0 = time.time()
-    cells = {}; navm = {}; bases = {}; worlds = {}; plugins = []
+    cells = {}; navm = {}; bases = {}; worlds = {}; plugins = []; navorig = {}
     p1 = [None] * n
     for i, out in _pool_run(pass1, n, procs): p1[i] = out
     log('pass 1: %d plugins in %.0fs' % (n, time.time() - t0))
@@ -143,7 +151,9 @@ def scan_set(order, where, procs=6, log=print):
             else: cells[k] = v
         for k, v in o['navm']:
             if v is None: navm.pop(k, None)
-            else: navm[k] = v
+            else:
+                if k not in navm and k not in navorig: navorig[k] = _zrange(v[1])     # the first record of the mesh: its own height
+                navm[k] = v
         for k, v in o['bases'].items():
             if v is None: bases.pop(k, None)
             else: bases[k] = v
@@ -193,7 +203,7 @@ def scan_set(order, where, procs=6, log=print):
             if dele: states[rkey] = None          # deleted elsewhere
             else: states[rkey] = (dis, ep)
     log('pass 2: %d refs in %.0fs' % (len(refs), time.time() - t1))
-    return dict(order=order, plugins=plugins, cells=cells, navm=navm, navinfo=navinfo, bases=bases, worlds=worlds, refs=refs, states=states,
+    return dict(order=order, plugins=plugins, cells=cells, navm=navm, navinfo=navinfo, bases=bases, worlds=worlds, refs=refs, states=states, navorig=navorig,
                 nameidx=nameidx, want=want)
 
 

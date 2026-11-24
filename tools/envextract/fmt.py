@@ -1,4 +1,4 @@
-"""MFOENV v1 writer and reader (format documented in README.md; C++ reader in envfile.h)."""
+"""MFOENV v2 writer and reader (format documented in README.md; C++ reader in envfile.h)."""
 import struct, json
 
 MAGIC = b'MFOENV\0\0'; VERSION = 2

@@ -61,7 +61,8 @@ def _export(a, sc, units, cands, cls, outdir):
 
 def _index_update(a, sc, rows):
     p = os.path.join(CACHE, 'index.json')
-    idx = json.load(open(p)) if os.path.exists(p) else {'formatVersion': 1, 'sets': {}}
+    idx = json.load(open(p)) if os.path.exists(p) else {'sets': {}}
+    idx['formatVersion'] = 2
     s = idx['sets'].setdefault(a.set, {})
     s['plugins'] = [x['name'] for x in sc['plugins']]
     if a.mode == 'library': s['envs'] = rows

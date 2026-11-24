@@ -38,6 +38,12 @@ enum RefFlag : uint16_t { kPersistent = 1, kLeveledActor = 2, kHasEnableParent =
 
 class Env {
 public:
+    Env() = default;
+    Env(const Env&) = delete;               // the accessors point into buf_: a copy would dangle
+    Env& operator=(const Env&) = delete;
+    Env(Env&&) = default;                   // a moved vector keeps its heap block, the pointers stay valid
+    Env& operator=(Env&&) = default;
+
     bool load(const char* path, std::string* err = nullptr) {
         FILE* f = std::fopen(path, "rb");
         if (!f) return fail(err, "cannot open");
@@ -52,6 +58,12 @@ public:
     }
 
     bool loadBuffer(std::vector<uint8_t> b, std::string* err = nullptr) {
+        if (loadImpl(std::move(b), err)) return true;
+        *this = Env();                       // a failed load leaves an empty, safe object
+        return false;
+    }
+
+    bool loadImpl(std::vector<uint8_t> b, std::string* err) {
         *this = Env();
         buf_ = std::move(b); const uint64_t n = buf_.size();
         if (n < 16) return fail(err, "file too short");
@@ -112,7 +124,8 @@ public:
         if (vEnd != vertN_ || tEnd != triN_ || lEnd != linkN_ || dEnd != doorN_) return fail(err, "mesh ranges do not cover tables");
         for (uint32_t i = 0; i < linkN_; ++i) {
             const Link& l = link_[i]; const Mesh& m = mesh_[l.meshIdx];
-            if (!(l.flags & kNoOwnerEdge) && (l.tri >= m.triCount || l.edge > 2)) return fail(err, "link triangle or edge");
+            if (l.flags & kNoOwnerEdge) { if (l.edge != 0xFF) return fail(err, "owner-less link edge"); }
+            else if (l.tri >= m.triCount || l.edge > 2) return fail(err, "link triangle or edge");
             if (l.targetMeshIdx < -1 || l.targetMeshIdx >= (int64_t)meshN_) return fail(err, "link target mesh");
             if (l.targetMeshIdx >= 0 && !(l.flags & kStaleTarget) && l.targetTri >= mesh_[l.targetMeshIdx].triCount) return fail(err, "link target triangle");
             if (!idOk(l.targetMeshId)) return fail(err, "link id plugin index");

@@ -10,14 +10,19 @@ MIN_WINDOW_CELLS = 3000    # raster cells (64u) of walkable area a window needs 
 _S = {}
 
 
-DISPLACED_GAP = 3000.0     # a mesh this far below its neighbours is a "removed" navmesh parked under the map (relative rule)
+DISPLACED_GAP = 3000.0     # a mesh this far below its neighbours / its own original is a "removed" navmesh parked under the map
+MEDIAN_GAP = 12000.0       # rule 2 needs a bigger gap: ordinary mountain terrain differs by several thousand units from its neighbours
+FLAT = 16.0                # a parked mesh is flat: highest minus lowest vertex under this many units
 
 
 def displaced_meshes(sc):
-    """Navmeshes a plugin 'removed' by moving them far below the rest of their cell.  Relative rule, no absolute height:
-    an interior mesh whose highest vertex is more than DISPLACED_GAP under the lowest vertex of every other mesh of the cell
-    (cell has >= 3 meshes), or an exterior mesh more than DISPLACED_GAP under the 5th percentile of the lowest vertices
-    of the meshes in its 3x3 cells (>= 3 neighbours)."""
+    """Navmeshes a plugin 'removed' by moving them far below where they belong.  Relative rules, no absolute height, no list value.
+    (1) OVERRIDE rule: the winning record comes from a plugin that is not the record's owner, it is flat (height range < FLAT) and it
+        sits more than DISPLACED_GAP away from the first record of that mesh (the owner's version, kept by the scan).  No neighbour
+        count needed, and parked meshes cannot shield each other because the comparison is with the mesh's own history.
+    (2) MEDIAN rule (meshes parked by their own plugin, or with no history): the mesh's highest vertex is more than MEDIAN_GAP (12000) under
+        the MEDIAN of the lowest vertices of the other meshes of its cell (interior, >= 2 others) or of its 3x3 cells (exterior, >= 3
+        others), where meshes already caught by rule 1 and flat meshes do not count as others."""
     if '_displaced' in sc: return sc['_displaced']
     from collections import defaultdict
     info = {}; grp = defaultdict(list)
@@ -29,27 +34,38 @@ def displaced_meshes(sc):
         info[k] = (float(v[:, 2].min()), float(v[:, 2].max()))
         if ni[0]: grp[('x', ni[0], ni[1], ni[2])].append(k)
         elif ni[3]: grp[('i', ni[3])].append(k)
-    out = set()
+    out = set(); orig = sc.get('navorig', {})
+    for k, (zlo, zhi) in info.items():
+        pi = sc['navm'][k][0]
+        if (k >> 24) != pi and zhi - zlo < FLAT and k in orig:
+            olo, ohi = orig[k]
+            if abs((zlo + zhi) / 2 - (olo + ohi) / 2) > DISPLACED_GAP: out.add(k)
+    r1 = len(out)
+    def others_min(ks, k): return [info[j][0] for j in ks if j != k and j not in out and info[j][1] - info[j][0] >= FLAT]
     for u, ks in grp.items():
         if u[0] == 'i':
             for k in ks:
-                o = [info[j][0] for j in ks if j != k]
-                if len(o) >= 2 and info[k][1] < min(o) - DISPLACED_GAP: out.add(k)
+                if k in out: continue
+                o = others_min(ks, k)
+                if len(o) >= 2 and info[k][1] < float(np.median(o)) - MEDIAN_GAP: out.add(k)
         else:
             nb = [j for dx in (-1, 0, 1) for dy in (-1, 0, 1) for j in grp.get(('x', u[1], u[2] + dx, u[3] + dy), ())]
             for k in ks:
-                o = [info[j][0] for j in nb if j != k]
-                if len(o) >= 3 and info[k][1] < float(np.percentile(o, 5)) - DISPLACED_GAP: out.add(k)
-    sc['_displaced'] = out
+                if k in out: continue
+                o = others_min(nb, k)
+                if len(o) >= 3 and info[k][1] < float(np.median(o)) - MEDIAN_GAP: out.add(k)
+    sc['_displaced'] = out; sc['_displaced_rule1'] = r1
     return out
 
 
 def make_groups(sc):
     """unit -> [navmesh keys], without the displaced ones"""
-    bad = displaced_meshes(sc); groups = {}
+    bad = displaced_meshes(sc); groups = {}; sc['_noflag'] = 0
     for k in sc['navm']:
         ni = sc['navinfo'].get(k)
         if ni is None or (ni[3] is None and not ni[0]) or k in bad: continue
+        if not ni[0] and not sc['cells'].get(ni[3], {}).get('flags', 0) & 1:    # an "interior" mesh whose cell is not flagged interior: META would contradict the cell
+            sc['_noflag'] += 1; continue
         groups.setdefault(unit_of_mesh(sc, k), []).append(k)
     return groups
 
@@ -148,8 +164,8 @@ def build_candidates(sc, procs=6, log=print):
     reach = reachable_cells(sc); n0 = len(cands)
     for u in [u for u in cands if u[0] == 'i' and u[1] not in reach]: del cands[u]
     stats['unreachable_interiors'] = n0 - len(cands)
-    log('candidates: %d (%d interior) in %.0fs; displaced meshes dropped %d, interiors not reachable from an exterior cell dropped %d' % (
-        len(cands), sum(1 for u in cands if u[0] == 'i'), time.time() - t0, stats['displaced'], stats['unreachable_interiors']))
+    log('candidates: %d (%d interior) in %.0fs; displaced meshes dropped %d, interiors not reachable from an exterior cell dropped %d; meshes of cells without the interior flag dropped %d' % (
+        len(cands), sum(1 for u in cands if u[0] == 'i'), time.time() - t0, stats['displaced'], stats['unreachable_interiors'], sc.get('_noflag', 0)))
     return groups, cands
 
 

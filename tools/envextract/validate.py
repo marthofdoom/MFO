@@ -177,6 +177,7 @@ def run_file(path):
     for l in L:
         if l[7] & 1: stale += 1
         if l[7] & 2: noowner += 1
+        if l[7] & 2 and l[2] != 0xFF: bad.append('owner-less link edge')
         if l[0] >= len(M): bad.append('link owner')
         elif l[5] >= len(M): bad.append('link target idx')
         elif l[5] >= 0 and l[6] >= M[l[5]][8] and not l[7] & 1: bad.append('link target tri')
