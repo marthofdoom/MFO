@@ -331,7 +331,7 @@ namespace MFO::Scheduler {
         if (m_postureKnown)
             m_posture = Iaus::DecidePosture(Iaus::Engine::MindFor(a_id), m_set.gen.postures, ProfileOf(m_set.gate), T,
                                             a_rapportRank);
-        Iaus::Candidates::NoteDecision(a_id, m_d, acts);
+        Iaus::Candidates::NoteDecision(a_id, m_d, acts, m_set.gen.capQueued);
         // Log the spells-stay-on-spells posture gate once per change (per follower; the tick is serial on the one worker).
         if (m_postureKnown) {
             static std::unordered_map<RE::FormID, bool> s_spellsHold;

@@ -48,7 +48,7 @@ namespace MFO::Iaus::Candidates {
     // WORKER, after Decide: remember the top-6 cast-offense / cast-control (spell, target) pairs, so the NEXT
     // Gather asks cast/WillWork for those (design 1.5; a call there is also the prefetch). Unknown passes. A pair
     // answered No stays on the list while the refusal stands (Generate.h NextAskList, sim finding D1).
-    void NoteDecision(RE::FormID a_follower, const Decision& a_d, std::span<const Candidate> a_cands);
+    void NoteDecision(RE::FormID a_follower, const Decision& a_d, std::span<const Candidate> a_cands, std::span<const SpellTarget> a_extra = {});   // a_extra: Generated::capQueued (F2)
 
     // WORKER. THE ONE READER of how long a_self's OWN ray to a_foe has read Occluded without a break (the same record Gather feeds
     // the picker's los term and keep-current-attack hold with, Snapshot Combatant::occludedSec). 0 = not occluded, never

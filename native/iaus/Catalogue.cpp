@@ -119,7 +119,7 @@ namespace MFO::Iaus {
         const float v[] = { f.dist, f.reach, f.foeLevelRatio, f.foeHpPct, f.cost, f.magicka, f.magickaMax,
                             f.hardCooldownSec, f.hardCooldownLeft, f.resist, f.foesInArea, f.selfHp, f.selfStamina,
                             f.selfMagicka, f.recipientHp, f.combatSec, f.emergency,
-                            f.expDamage, f.bestDamage, f.foeHealth, f.expHeal, f.recipientMissing, f.chase, f.tauntChance,
+                            f.expDamage, f.bestDamage, f.expRate, f.foeHealth, f.expHeal, f.recipientMissing, f.chase, f.tauntChance,
                             f.controlSec, f.castsWanted, f.backOffNeed, f.buffThreat, f.buffRegenPct, f.consumableWorth, f.spellPerkEdge, f.handLost,
                             f.healRate, f.bestHealRate, f.effectRate };
         for (const float x : v)
@@ -810,8 +810,9 @@ namespace MFO::Iaus {
                 // a spell that does no damage (a noise, a debuff) is 0 against it: unmeasured must not read as "as good as any".
                 // MFO-B684: a spell whose own damage was NOT measured (expDamage < 0) is not applicable either. Only a
                 // MEASURED 0 scores 0.
-                if (!(f.bestDamage > 0.0f) || f.expDamage < 0.0f) return In::Off();
-                return Clamp(f.expDamage / f.bestDamage, 0.0f, 1.0f);
+                // fix/spell-worth F5: both sides in effect per CAST SECOND (a stream, a bolt and a long DoT compare on one unit); Overkill keeps the raw cast.
+                if (!(f.bestDamage > 0.0f) || f.expRate < 0.0f) return In::Off();
+                return Clamp(f.expRate / f.bestDamage, 0.0f, 1.0f);
             case Cons::Overkill:
                 if (!(f.expDamage > 0.0f) || !(f.foeHealth > 0.0f)) return In::Off();
                 return Clamp(f.foeHealth / f.expDamage, 0.0f, 1.0f);

@@ -641,9 +641,12 @@ namespace MFO::Iaus::Candidates {
         return true;
     }
 
-    void NoteDecision(RE::FormID a_follower, const Decision& a_d, std::span<const Candidate> a_cands) {
+    void NoteDecision(RE::FormID a_follower, const Decision& a_d, std::span<const Candidate> a_cands, std::span<const SpellTarget> a_extra) {
         auto& asked = g_wants[a_follower];
-        asked = NextAskList(asked, TopSpellPairs(a_d, a_cands), NowSec(), kRefusedKeepSec);
+        std::vector<SpellTarget> top = TopSpellPairs(a_d, a_cands);
+        for (const SpellTarget& x : a_extra)   // fix/spell-worth F2: the pairs the book's level cap would bar, asked so the next lap knows
+            if (std::find(top.begin(), top.end(), x) == top.end()) top.push_back(x);
+        asked = NextAskList(asked, top, NowSec(), kRefusedKeepSec);
         // Q-I-2: the first-ranked candidate, when it is a cast (a spell form), is "the cast IAUS chose" for the touch range.
         std::uint32_t chosen = 0;
         if (!a_d.ranked.empty() && a_d.ranked.front().idx < a_cands.size()) {

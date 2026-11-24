@@ -146,6 +146,21 @@ namespace MFO::Actuation {
             return false;
         }
 
+        // fix/spell-worth SEV-4: a working HEALTH damage effect (hostile value modifier on health, not itself level-capped, conditions not false for the target).
+        // A spell that has one is a damage spell: a level-capped rider on it (Tuxborn puts one on nearly every Destruction spell) cannot make it "not work".
+        bool HasWorkingHealthDamage(RE::SpellItem* a_spell, RE::Actor* a_target, RE::Actor* a_caster) {
+            for (const auto* e : a_spell->effects) {
+                const auto* b = e ? e->baseEffect : nullptr;
+                if (!b || !b->IsHostile() || LevelCapped(b->GetArchetype())) continue;
+                const auto a = b->GetArchetype();
+                if (!(a == Arch::kValueModifier || a == Arch::kPeakValueModifier || a == Arch::kDualValueModifier)) continue;
+                if (b->data.primaryAV != RE::ActorValue::kHealth) continue;
+                if (CondFalse(e->conditions, a_target, a_caster) || CondFalse(b->conditions, a_target, a_caster)) continue;
+                return true;
+            }
+            return false;
+        }
+
         // MAIN THREAD ONLY. Returns the verdict and, for No, the reason.
         WillWorkResult Measure(RE::Actor* a_caster, RE::SpellItem* a_spell, RE::Actor* a_target) {
             WillWorkResult out;
@@ -156,7 +171,9 @@ namespace MFO::Actuation {
             // spell's caster row (Calm / Frenzy / Demoralize / Rally / Turn Undead / Reanimate are control effects). When ANY of
             // them cannot land the spell does not work, even though an uncapped companion effect (Turn Lesser Undead's second
             // effect, 0004D3F9, field 1119: Jesper at a level-30 Deathlord) would, and wherever the engine lists it.
+            const bool damageSpell = HasWorkingHealthDamage(a_spell, a_target, a_caster);   // exempt from the cap rule (a control spell, Turn Lesser Undead included, has none)
             for (const auto* e : a_spell->effects) {
+                if (damageSpell) break;
                 if (!e || !e->baseEffect) continue;
                 const auto* base = e->baseEffect;
                 if (!LevelCapped(base->GetArchetype())) continue;

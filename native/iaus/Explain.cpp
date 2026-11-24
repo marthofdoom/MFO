@@ -108,7 +108,7 @@ namespace MFO::Iaus {
                 bool found = false;
                 for (std::size_t i = 0; i < d.ranked.size(); ++i)
                     if (d.ranked[i].idx == idx) { pos = i + 1; found = true; break; }
-                s += std::format(" bestDmg[{} dmg {:.1f}", Label(*bestC), bestC->f.expDamage);
+                s += std::format(" bestDmg[{} dmg {:.1f} ({})", Label(*bestC), bestC->f.expDamage, bestC->f.effectRate > 0.0f ? "measured" : "placeholder");   // effectRate is 0 for an unmeasured spell
                 if (found) s += std::format(" score {:.3f} rank {}/{}]", d.ranked[pos - 1].score, pos, d.ranked.size());
                 else s += " not ranked (vetoed, pruned or under the floor)]";
             }

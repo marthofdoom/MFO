@@ -36,6 +36,14 @@
 
 namespace MFO::Iaus {
 
+    // G10 (design 1.5): the (spell, target) pairs of the first a_n ranked cast-offense / cast-control candidates of
+    // a decision. The engine side asks cast/WillWork for these only, so the next lap has their answers.
+    struct SpellTarget {
+        std::uint32_t spell = 0;
+        std::uint32_t target = 0;
+        bool operator==(const SpellTarget&) const = default;
+    };
+
     struct Generated {
         std::vector<Candidate> actions;    // for Decide (every family except Posture)
         std::vector<Candidate> postures;   // for DecidePosture
@@ -50,6 +58,7 @@ namespace MFO::Iaus {
         bool  spellsHold = false;          // Postures: a Mage-line class (ClassGate::casterLine) with an affordable kept offense / control spell -> no melee / silver posture candidate wins
         bool  healRefused = false;         // Casts: a concentration / touch heal was dropped because its recipient is in a foe's reach and would not survive (the heal safety rule)
         std::vector<std::pair<std::uint32_t, std::uint32_t>> fireBlocked;   // (spell form, foe id) pairs refused this lap for a party member in the line of fire; Candidates remembers them
+        std::vector<SpellTarget> capQueued;   // fix/spell-worth F2: (spell, foe) pairs the BOOK's level cap would bar and WillWork has not answered: kept this lap, asked for the next (NoteDecision)
         std::array<std::uint16_t, kFamilies> perFamily{};   // candidates per family (the over-cap WARN, tests)
         // P1 / P2 drops, for the generation log line: spells dropped as unaffordable, off-class, two-handed with a
         // hand held; pairs dropped by a target rule (undead only, already active, live summon).
@@ -59,13 +68,6 @@ namespace MFO::Iaus {
     [[nodiscard]] Generated Generate(const Snapshot& a_s, const ClassGate& a_gate,
                                      const Tuning& a_t = DefaultTuning());
 
-    // G10 (design 1.5): the (spell, target) pairs of the first a_n ranked cast-offense / cast-control candidates of
-    // a decision. The engine side asks cast/WillWork for these only, so the next lap has their answers.
-    struct SpellTarget {
-        std::uint32_t spell = 0;
-        std::uint32_t target = 0;
-        bool operator==(const SpellTarget&) const = default;
-    };
     [[nodiscard]] std::vector<SpellTarget> TopSpellPairs(const Decision& a_d, std::span<const Candidate> a_cands,
                                                           std::size_t a_n = 6);
 

@@ -479,7 +479,8 @@ namespace MFO::Iaus {
         float emergency = 0.0f;
         // estimates (iaus/Estimate.h). 0 / +inf = not measured: the considerations that read them do not apply.
         float expDamage = 0.0f;           // this cast's expected health damage on this target; < 0 = this spell is not measured
-        float bestDamage = 0.0f;          // the best expDamage among his castable offense spells on this target
+        float bestDamage = 0.0f;          // the best expected damage PER CAST SECOND (Generate.cpp EffectRate's unit) among his castable offense spells on this target (fix/spell-worth F5)
+        float expRate = -1.0f;            // this spell's expDamage in that same unit, an unmeasured spell's placeholder included (DamageValue's numerator); < 0 = not known
         float foeHealth = 0.0f;           // the target's health now, absolute
         float expHeal = 0.0f;             // this cast's expected healing
         float healRate = 0.0f;            // this heal's expected healing per second of cast (Generate.cpp EffectRate); 0 = not measured

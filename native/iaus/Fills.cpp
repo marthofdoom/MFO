@@ -881,12 +881,15 @@ namespace MFO::Iaus::Fills {
         // cloak's second spell, a script, an enchantment it puts on the weapon) has damage that is not readable here. With NO direct damage at all
         // writing a measured 0 would score a Wall of Flames 0 against his best (MFO-B684), so it stays UNMEASURED. With direct damage (a bolt that
         // carries a rider: Tuxborn gives nearly every Destruction spell one) the direct damage is a LOWER BOUND of the cast and is written as measured.
-        // A conditional direct effect (a CTDA on the effect or its MGEF) is counted: this reader has no target, and the per-foe gate (WillWork,
-        // which reads those conditions for the pair) already drops the pair it cannot hit.
+        // A conditional direct effect (a CTDA on the effect or its MGEF) cannot be judged here (no target), and conditions are PER FOE: WillWork says Yes for
+        // a pair when ANY one effect works, so a failing conditional damage effect does not drop the pair. So the unconditional damage effects are summed
+        // and the CONDITIONAL ones count only as their single largest (a lower bound: mutually exclusive conditional effects, as the Elemental Bolt / Flare
+        // style spells may carry, are never summed). The records of those two spells were NOT verifiable from the log evidence.
         bool hasIndirect = false;
         std::string indirectBy;   // the effects that carry damage elsewhere: MGEF name + archetype (the log)
         // C5: the lowest level cap of the spell's capped effects, through WillWork's own reader (0 = none).
         float levelCap = 0.0f;
+        float condRaw = 0.0f, condDamage = 0.0f;   // the largest conditional damage effect (above)
         for (const auto* e : a_spell->effects) {
             if (!e || !e->baseEffect) continue;
             const auto arch = e->baseEffect->GetArchetype();
@@ -904,7 +907,7 @@ namespace MFO::Iaus::Fills {
             default: break;
             }
             if (Actuation::LevelCappedEffect(e)) {
-                const float cap = Actuation::WillWorkLevelCap(a_caster, a_spell, e, foe.get());
+                const float cap = Actuation::WillWorkLevelCap(a_caster, a_spell, e, epOk ? foe.get() : nullptr);
                 if (std::isfinite(cap)) levelCap = levelCap > 0.0f ? (std::min)(levelCap, (std::max)(cap, 1.0f)) : (std::max)(cap, 1.0f);
             }
             const Fx fx = Classify(e->baseEffect);
@@ -912,6 +915,7 @@ namespace MFO::Iaus::Fills {
             if (fx == Fx::Control) { controlSec = (std::max)(controlSec, e->GetDuration()); continue; }
             const float mag0 = e->GetMagnitude();
             float mag = mag0;
+            const bool conditional = fx == Fx::Damage && (e->conditions || e->baseEffect->conditions);
             RE::Actor* target = fx == Fx::Damage ? foe.get() : a_caster;
             if (epOk && target && std::isfinite(mag) && mag > 0.0f) {
                 RE::BGSEntryPoint::HandleEntryPoint(RE::BGSEntryPoint::ENTRY_POINT::kModSpellMagnitude, a_caster,
@@ -920,9 +924,19 @@ namespace MFO::Iaus::Fills {
                 if (!std::isfinite(mag) || mag < 0.0f) mag = mag0;   // a perk gave nonsense: the record value stands
                 epRan = true;
             }
+            if (conditional) {   // the largest single conditional damage effect, added after the loop
+                condRaw = (std::max)(condRaw, Total(e, mag0, conc));
+                condDamage = (std::max)(condDamage, Total(e, mag, conc));
+                continue;
+            }
             (fx == Fx::Damage ? rawDamage : rawHeal) += Total(e, mag0, conc);
             (fx == Fx::Damage ? damage : heal) += Total(e, mag, conc);
         }
+        rawDamage += condRaw;
+        damage += condDamage;
+        // SEV-4: a level-capped rider must not remove a damage spell: a spell with a working health damage effect carries no cap (WillWork's own rule
+        // exempts it the same way); a control spell keeps it.
+        if (damage > 0.0f) levelCap = 0.0f;
         const bool offense = a_e.nature == Prune::Nature::Offense;
         const bool indirect = Estimate::DamageUnmeasurable(offense, hasIndirect, damage);   // C1: only when the direct damage is 0
 
@@ -936,7 +950,10 @@ namespace MFO::Iaus::Fills {
             a_e.levelCap   = levelCap;   // form data + the perk entry point: read whether or not the damage was measurable
             a_e.poisonType = a_spell->data.spellType == RE::MagicSystem::SpellType::kPoison;
         }
-        if (probe || write) {
+        // SEV-5: print once per spell AFTER the perk read ran: with a combat target missing the magnitude perks did not run and the numbers are the record's
+        // (the line would print twice, before and after)
+        const bool perkPending = epOk && !epRan && (damage > 0.0f || heal > 0.0f);
+        if ((probe || write) && !perkPending) {
             // ONE LINE PER SPELL when the book is built (fix/spell-worth): what the scorer will read, and why a damage is missing. The ledger key
             // (SpellBook.cpp) makes each print once per follower and spell per session.
             a_probeKey = (epRan ? 0x46494C31u : 0x46494C30u) ^ (indirect ? 0x100u : 0u);
