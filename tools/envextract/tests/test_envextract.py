@@ -36,7 +36,7 @@ class Navmesh(unittest.TestCase):
 
 def build_world(tmp):
     """master.esm: interior cell 0x100 with navmesh 0x200, a door base 0x300 + two REFRs, an actor; override.esp deletes one, disables one."""
-    cellrec = S.rec(b'CELL', 0x100, [(b'EDID', b'TestCell\0'), (b'DATA', b'\x01\x00')])
+    cellrec = S.rec(b'CELL', 0x100, [(b'EDID', b'TestCell\0'), (b'DATA', b'\x01\x00'), (b'XOWN', struct.pack('<I', 0x302))])
     navm = S.rec(b'NAVM', 0x200, [(b'NVNM', S.nvnm(SQ, [(0, 1, 2, -1, -1, 1, 0x800, 0), (0, 2, 3, 0, -1, -1, 0x800, 0)], cell=0x100))])
     def refr(fid, base, pos, extra=(), flags=0, comp=False):
         return S.rec(b'REFR', fid, [(b'NAME', struct.pack('<I', base)), (b'DATA', struct.pack('<6f', *pos, 0, 0, 0))] + list(extra), flags, comp)
@@ -45,7 +45,7 @@ def build_world(tmp):
         + refr(0x410, 0x300, (1, 1, 0), flags=0x800) \
         + refr(0x411, 0x300, (2, 2, 0), [(b'XESP', struct.pack('<IB3x', 0x410, 0))], flags=0x800) \
         + refr(0x412, 0x300, (3, 3, 0), [(b'XESP', struct.pack('<IB3x', 0x410, 1))]) \
-        + refr(0x413, 0x300, (4, 4, 0), [(b'XESP', struct.pack('<IB3x', 0x14, 0))], flags=0x800)
+        + refr(0x413, 0x300, (4, 4, 0), [(b'XESP', struct.pack('<IB3x', 0x14, 0)), (b'XOWN', struct.pack('<I', 0x302)), (b'XACT', struct.pack('<I', 0x0D))], flags=0x800)
     achr = S.rec(b'ACHR', 0x403, [(b'NAME', struct.pack('<I', 0x302)), (b'DATA', struct.pack('<6f', 5, 5, 0, 0, 0, 0))])
     cellgrp = S.group(0x100, 6, S.group(0x100, 9, S.rec(b'NAVM', 0x200, [(b'NVNM', S.nvnm(SQ, [(0, 1, 2, -1, -1, 1, 0x800, 0), (0, 2, 3, 0, -1, -1, 0x800, 0)], cell=0x100))]) + refs + achr))
     interior = S.group(b'CELL', 0, S.group(0, 2, S.group(0, 3, cellrec + cellgrp)))
@@ -55,7 +55,7 @@ def build_world(tmp):
     m = S.plugin([], S.group(b'DOOR', 0, door) + S.group(b'STAT', 0, stat) + S.group(b'NPC_', 0, npc) + interior, flags=1)
     # override: delete ref 0x402, disable 0x401, move nothing
     cellgrp2 = S.group(0x100, 6, S.group(0x100, 9, S.rec(b'REFR', 0x402, [], flags=0x20) + refr(0x401, 0x300, (50, 50, 0), flags=0x800)))
-    ov = S.plugin(['master.esm'], S.group(b'CELL', 0, S.group(0, 2, S.group(0, 3, S.rec(b'CELL', 0x100, [(b'EDID', b'TestCell\0'), (b'DATA', b'\x01\x00')]) + cellgrp2))))
+    ov = S.plugin(['master.esm'], S.group(b'CELL', 0, S.group(0, 2, S.group(0, 3, S.rec(b'CELL', 0x100, [(b'EDID', b'TestCell\0'), (b'DATA', b'\x01\x00'), (b'XOWN', struct.pack('<I', 0x302))]) + cellgrp2))))
     for n, d in (('master.esm', m), ('override.esp', ov)):
         with open(os.path.join(tmp, n), 'wb') as f: f.write(d)
 
@@ -120,6 +120,139 @@ class Format(unittest.TestCase):
             e = fmt.read(p); door = [r for r in e['refs'] if r[3] == R.K_DOOR and r[20] == 50][0]
             self.assertEqual(door[20], 50); self.assertTrue(door[5] & 16 and door[5] & 8)   # lock level, teleport + locked flags
             self.assertEqual(e['str'](door[34]), 'door.nif')
+
+
+class Round4(unittest.TestCase):
+    def _env(self, tmp):
+        import scan, library, export
+        build_world(tmp); order = ['master.esm', 'override.esp']; where = {n: os.path.join(tmp, n) for n in order}
+        sc = scan.scan_set(order, where, procs=1, log=lambda *a: None); unit = ('i', next(iter(sc['cells'])))
+        by = library.ref_features(sc, {unit: {'areaUnits2': 1e6}}, 256.0)
+        p = os.path.join(tmp, 'e.mfoenv'); meta = export.export(sc, unit, {unit: list(sc['navm'])}, by, 'interior_small', {}, p, 'T')
+        return sc, p, meta
+    def test_owner_xact_and_door_rows(self):
+        import validate
+        with tempfile.TemporaryDirectory() as tmp:
+            sc, p, meta = self._env(tmp); e = fmt.read(p)
+            own = [r for r in e['refs'] if r[35]]
+            self.assertEqual(len(own), len(e['refs']))                       # own owner or the cell owner for every ref
+            mine = [r for r in e['refs'] if (r[0] & 0xFFFFFF) == 0x413][0]
+            self.assertTrue(mine[5] & 128 and not mine[5] & 256)             # own XOWN, base is an NPC_
+            other = [r for r in e['refs'] if (r[0] & 0xFFFFFF) == 0x400][0]
+            self.assertTrue(other[5] & 256 and other[5] & 128)               # inherited from the cell
+            self.assertEqual(meta['cells'][0]['owner'] & 0xFFFFFF, 0x302)
+            d = {x[0]: x for x in e['dref']}                                 # every door ref has a row
+            self.assertEqual(len(e['dref']), sum(1 for r in e['refs'] if r[3] == R.K_DOOR))
+            ri = [i for i, r in enumerate(e['refs']) if (r[0] & 0xFFFFFF) == 0x413][0]
+            self.assertEqual(d[ri][4], 1)                                    # XACT 0x0D has the open-by-default bit
+            self.assertEqual(d[[i for i, r in enumerate(e['refs']) if (r[0] & 0xFFFFFF) == 0x411][0]][4], 0)
+            self.assertEqual(validate.run_file(p), 0)
+    def test_door_rows_join(self):
+        import export
+        verts = [(0, 0, 0), (100, 0, 0), (0, 100, 0), (1000, 0, 0), (1100, 0, 0), (1000, 100, 0)]
+        tris = [(0, 1, 2, -1, -1, -1, 0, 0), (0, 1, 2, -1, -1, -1, 0, 0)]
+        meshes = [(1, 0, 0, 0, 0, 0, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1), (2, 0, 0, 0, 0, 3, 3, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1)]
+        doors = [(1, 0, 0, 5, 7, 1)]       # mesh 1 tri 0 belongs to ref row 1
+        info = [(0, (30, 30, 0), True, 25, 0, 0, 9), (1, (5000, 0, 0), False, 0, 1, 0, 0), (2, (1030, 20, 0), False, 0, 0, 1, 0)]
+        rows = export.door_rows(info, doors, meshes, verts, tris)
+        self.assertEqual(rows[0][1:3], (0, 0)); self.assertEqual(rows[0][4:], (1, 25, 0, 0, 9))          # nearest tri, open default, lock, key
+        self.assertEqual(rows[1][1:3], (1, 0)); self.assertEqual(rows[1][3], 0.0)                         # exact join through the DOOR row
+        self.assertEqual(rows[2][1:3], (1, 0))         # within 200 units of the second triangle
+    def test_seam_rows(self):
+        import export
+        verts = [(0, 0, 0), (100, 0, 0), (0, 100, 0), (110, 0, 0), (200, 0, 0), (110, 100, 0)]   # mesh B starts 10 units to the east of A's edge
+        tris = [(0, 1, 2, -1, -1, -1, 1, 0), (0, 1, 2, -1, -1, -1, 0, 0)]
+        meshes = [(1, 0, 0, 0, 0, 0, 3, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1), (2, 0, 0, 0, 0, 3, 3, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1)]
+        links = [(0, 0, 0, 0, 0, 1, 0, 0, 0.0)]          # mesh 0 tri 0 edge 0 (v0-v1, y=0) -> mesh 1 tri 0
+        s = export.seam_rows(links, meshes, verts, tris)
+        self.assertEqual(len(s), 1); self.assertAlmostEqual(s[0][1], 10.0, 3)
+        links2 = [(0, 0, 0, 0, 0, 1, 0, 0, 0.0)]; verts2 = list(verts); verts2[3] = (100, 0, 0); verts2[4] = (200, 0, 0)
+        self.assertEqual(export.seam_rows(links2, meshes, verts2, tris), [])                               # edges meet: no row
+    def test_land_decode_and_file(self):
+        import land, validate
+        vh = struct.pack('<f', 10.0) + bytes([1] + [2] * 32) + bytes([3] + [0] * 32) + bytes(33 * 31) + b'\0\0\0'
+        g = land.decode_vhgt(vh)
+        self.assertEqual(g[0][0], (10 + 1) * 8.0); self.assertEqual(g[0][1], (10 + 1 + 2) * 8.0)          # row 0: offset + first byte, then cumulative
+        self.assertEqual(g[1][0], (10 + 1 + 3) * 8.0); self.assertEqual(g[1][1], (10 + 1 + 3) * 8.0)      # next row starts from the previous row's first value
+        self.assertAlmostEqual(land.height_at(g, 128.0, 0.0), g[0][1], 3)
+        s = fmt.Strings(); pn = s.add('skyrim.esm')
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, 'l.mfoenv')
+            fmt.write(p, dict(name='t'), [pn], s, [(1, 0, 0, 3, -2, 0, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1)], [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)],
+                      [(0, 1, 2, -1, -1, -1, 0, 0)], [], [], [], None, [], [], [(3, -2, *[h for row in g for h in row])])
+            e = fmt.read(p); self.assertEqual(len(e['land']), 1); self.assertEqual(e['land'][0][:2], (3, -2)); self.assertEqual(validate.run_file(p), 0)
+    def test_moved_refs_flag_places(self):
+        import library
+        sc = dict(navm={}, navinfo={}, cells={5: dict(flags=1, persist=False, grid=None, world=0)}, movedfrom={5: 2}, _displaced=set(), _doubtful=set())
+        self.assertEqual(library.place_flags(sc, [('i', 5), ('i', 6)]), {('i', 5): {'plugin_moved_refs'}, ('i', 6): set()})
+
+
+class Anomalies(unittest.TestCase):
+    def mesh(self, nv):
+        import features as F
+        return F.parse_np(nv)
+    def test_counts(self):
+        import anomaly as AN
+        sq = [(0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0)]
+        good = S.nvnm(sq, [(0, 1, 2, -1, -1, 1, 0, 0), (0, 2, 3, 0, -1, -1, 0, 0)], cell=1)
+        r = AN.analyze_mesh(self.mesh(good), lambda raw: raw, lambda k: None)
+        self.assertEqual((r['oneway'], r['notswapped'], r['stale'], r['kind3'], r['ownerless']), (0, 0, 0, 0, 0))
+        oneway = S.nvnm(sq, [(0, 1, 2, -1, -1, 1, 0, 0), (0, 2, 3, -1, -1, -1, 0, 0)], cell=1)
+        self.assertEqual(AN.analyze_mesh(self.mesh(oneway), lambda raw: raw, lambda k: None)['oneway'], 1)
+        bad = S.nvnm(sq, [(0, 1, 2, 1, -1, -1, 0, 0), (0, 2, 3, -1, -1, 0, 0, 0)], cell=1)      # neighbours by index but the wrong edges
+        self.assertEqual(AN.analyze_mesh(self.mesh(bad), lambda raw: raw, lambda k: None)['notswapped'] >= 1, True)
+        links = S.nvnm(sq, [(0, 1, 2, 0, 1, 2, 7, 0)], links=[(3, 9, 0), (0, 9, 99), (2, 9, 0)], cell=1)   # three external edges: kind 3, stale target, kind 2 drop
+        tgt = self.mesh(S.nvnm(sq, [(0, 1, 2, -1, -1, -1, 0, 0)], cell=1))
+        r = AN.analyze_mesh(self.mesh(links), lambda raw: raw, lambda k: tgt)
+        self.assertEqual((r['kind3'], r['stale'], r['dropLow']), (1, 1, 1))
+    def test_components_and_graph(self):
+        import anomaly as AN, features as F
+        sq = [(0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0)]
+        a = F.parse_np(S.nvnm(sq, [(0, 1, 2, -1, -1, 1, 0, 0), (0, 2, 3, 0, -1, -1, 0, 0)], cell=1))
+        far = F.parse_np(S.nvnm([(x + 5000, y, z) for x, y, z in sq], [(0, 1, 2, -1, -1, -1, 0, 0)] * 1, cell=1))
+        share, isl, comp, off = AN.place_components([(1, a), (2, far)], {1: 0, 2: 1}, lambda k, raw: raw)
+        self.assertAlmostEqual(share, 10000 / 15000.0, 2); self.assertEqual(isl, 0)        # the lone triangle is a small island (< 30 triangles)
+        g = AN.coarse_graph_features([(1, a)], {1: 0}, lambda k, raw: raw)
+        self.assertGreaterEqual(g['nodes'], 1)
+    def test_reject_and_tags(self):
+        import coverage as CV
+        f = dict(interior=True, oneway=0, notswapped=0, stale=0, ownerless=0, kind3=0, mainShare=1.0)
+        self.assertEqual(CV.reject_reasons(f, set(), 0.6), [])
+        f2 = dict(f, oneway=2, kind3=1, mainShare=0.3)
+        self.assertEqual(CV.reject_reasons(f2, {'displaced_mesh'}, 0.6), ['displaced_mesh', 'one_way_or_not_swapped_edges', 'kind3_portals', 'small_main_component'])
+    def test_coverage_pick(self):
+        import coverage as CV
+        rng = random.Random(3); cands = {}; tagsets = {}
+        names = CV.TAGNAMES
+        for i in range(120):
+            u = ('x', 60, i % 30, i // 30); cands[u] = {}
+            tagsets[u] = frozenset(rng.sample(names, 5))
+        pairs = CV.common_pairs(list(tagsets.values()), 0.02)
+        ch, unmet = CV.pick(cands, tagsets, 2, 100, 7, 0.02)
+        self.assertEqual(ch, CV.pick(cands, tagsets, 2, 100, 7, 0.02)[0])                  # deterministic
+        for t in names:
+            if any(t in tagsets[u] for u in cands): self.assertGreaterEqual(sum(1 for u in ch if t in tagsets[u]), 2) if not unmet else None
+        ch2, _ = CV.pick(cands, tagsets, 2, 5, 7, 0.02); self.assertLessEqual(len(ch2), 5)  # the cap wins, the rest is reported unmet
+        ch3, un3 = CV.pick(cands, tagsets, 2, 100, 7, 0.02, exclude=set(ch)); self.assertFalse(set(ch) & set(ch3))   # held-out never reuses a library place
+
+
+class CppNewSections(unittest.TestCase):
+    def test_old_v2_file_without_new_sections_loads_and_new_ones_fuzz(self):
+        if not shutil.which('g++'): self.skipTest('no g++')
+        import land
+        with tempfile.TemporaryDirectory() as tmp:
+            s = fmt.Strings(); pn = s.add('skyrim.esm'); g = land.decode_vhgt(struct.pack('<f', 1.0) + bytes(1092))
+            kw = [(1, 0, 0, 3, -2, 0, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1)]
+            p = os.path.join(tmp, 'n.mfoenv')
+            fmt.write(p, dict(name='t'), [pn], s, kw, [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)], [(0, 1, 2, -1, -1, -1, 0, 0)], [], [], [], None, [], [], [(3, -2, *[h for row in g for h in row])])
+            exe = os.path.join(tmp, 'chk'); r = subprocess.run(['g++', '-std=c++17', '-fsanitize=address,undefined', '-fno-sanitize-recover=undefined', os.path.join(HERE, 'envfile_check.cpp'), '-o', exe], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr[:1500])
+            r = subprocess.run([exe, p, '1500'], capture_output=True, text=True); self.assertEqual(r.returncode, 0, r.stdout + r.stderr[:1500])
+            with open(p, 'rb') as fh: raw = bytearray(fh.read())
+            n = struct.unpack_from('<I', raw, 12)[0]; struct.pack_into('<I', raw, 12, n - 3)      # an older v2 file: no DREF/SEAM/LAND entries
+            q = os.path.join(tmp, 'old.mfoenv')
+            with open(q, 'wb') as fh: fh.write(raw)
+            r = subprocess.run([exe, q, '300'], capture_output=True, text=True); self.assertEqual(r.returncode, 0, r.stdout + r.stderr[:1500])
 
 
 class WaterAndComponents(unittest.TestCase):

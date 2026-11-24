@@ -57,7 +57,8 @@ def pass1(i):
                         world=K(c['world']), flags=dat[0] | (dat[1] << 8 if len(dat) > 1 else 0),
                         grid=struct.unpack_from('<ii', cl, 0) if cl and len(cl) >= 8 and not fl & P.F_PERSISTENT else None, persist=bool(fl & P.F_PERSISTENT),
                         water=struct.unpack('<f', d[b'XCLW'])[0] if b'XCLW' in d and len(d[b'XCLW']) >= 4 else None,
-                        edid=d.get(b'EDID', b'').split(b'\0')[0].decode('latin-1'), plugin=i)))
+                        edid=d.get(b'EDID', b'').split(b'\0')[0].decode('latin-1'), plugin=i,
+                        owner=K(struct.unpack_from('<I', d[b'XOWN'], 0)[0]) if b'XOWN' in d and len(d[b'XOWN']) >= 4 else 0)))
                 elif sig == b'WRLD':
                     if fl & P.F_DELETED: continue
                     d = dict(P.subrecords(pg.data, o, size, fl)); dn = d.get(b'DNAM')
@@ -88,7 +89,7 @@ def _has_xesp(pg, o, size, fl):
 
 def pass2(i):
     want = _G['want']; pg = P.Plugin(_G['where'][_G['names'][i]])
-    refs = []; moved = []; cache = {}; wc = {}
+    refs = []; moved = []; cache = {}; wc = {}; lands = []
     def K(raw):
         if raw == 0: return 0
         k = cache.get(raw)
@@ -97,6 +98,15 @@ def pass2(i):
     for lab, s, e in pg.top_groups():
         if lab != b'CELL' and lab != b'WRLD': continue
         for sig, fl, fid, o, size, c in pg.walk(s, e):
+            if sig == b'LAND':
+                ck = wc.get(c['cell'])
+                if ck is None: ck = wc[c['cell']] = K(c['cell'])
+                if ck in want:
+                    if fl & P.F_DELETED: lands.append((ck, None))
+                    else:
+                        vh = dict(P.subrecords(pg.data, o, size, fl)).get(b'VHGT')
+                        if vh is not None and len(vh) >= 1093: lands.append((ck, bytes(vh[:1093])))
+                continue
             if sig != b'REFR' and sig != b'ACHR': continue
             craw = c['cell']
             ck = wc.get(craw)
@@ -115,7 +125,7 @@ def pass2(i):
                 continue
             if fl & P.F_DELETED:
                 refs.append((rk, ck, fl, None)); continue
-            nm = None; pos = rot = None; scale = 1.0; ep = None; tel = None; lock = None; cnt = 1
+            nm = None; pos = rot = None; scale = 1.0; ep = None; tel = None; lock = None; cnt = 1; owner = 0; xact = 0
             for t, d in P.subrecords(pg.data, o, size, fl):
                 if t == b'NAME': nm = K(struct.unpack_from('<I', d, 0)[0])
                 elif t == b'DATA' and len(d) >= 24: v = struct.unpack_from('<6f', d, 0); pos, rot = v[:3], v[3:]
@@ -125,9 +135,11 @@ def pass2(i):
                     v = struct.unpack_from('<I6fI', d, 0); tel = (K(v[0]),) + tuple(v[1:7]) + (v[7],)
                 elif t == b'XLOC' and len(d) >= 8: lock = (d[0], K(struct.unpack_from('<I', d, 4)[0]), d[8] if len(d) > 8 else 0)
                 elif t == b'XCNT' and len(d) >= 4: cnt = struct.unpack_from('<i', d, 0)[0]
+                elif t == b'XOWN' and len(d) >= 4: owner = K(struct.unpack_from('<I', d, 0)[0])
+                elif t == b'XACT' and len(d) >= 4: xact = struct.unpack_from('<I', d, 0)[0]
             if nm is None or pos is None: continue
-            refs.append((rk, ck, fl, (sig == b'ACHR', nm, pos, rot, scale, ep, tel, lock, cnt)))
-    return i, refs, moved
+            refs.append((rk, ck, fl, (sig == b'ACHR', nm, pos, rot, scale, ep, tel, lock, cnt, owner, xact)))
+    return i, refs, moved, lands
 
 
 def _pool_run(fn, n, procs):
@@ -193,17 +205,24 @@ def scan_set(order, where, procs=6, log=print):
     log('%d navmeshes, %d cells, %d with navmesh (+persistent), %d bases' % (len(navm), len(cells), len(navcells), len(bases)))
     # pass 2
     _G['want'] = want; t1 = time.time(); refs = {}; states = {}
-    for i, rr, moved in _pool_run(pass2, n, procs):
+    land = {}; movedfrom = {}
+    for i, rr, moved, lands in _pool_run(pass2, n, procs):
+        for ck, vh in lands:
+            if vh is None: land.pop(ck, None)
+            else: land[ck] = vh
         for rkey, ck, fl, body in rr:
+            old = refs.get(rkey)
+            if old is not None and old[0] != ck: movedfrom[old[0]] = movedfrom.get(old[0], 0) + 1; movedfrom[ck] = movedfrom.get(ck, 0) + 1   # a plugin moved it between cells
             states.pop(rkey, None)
             if body is None: refs.pop(rkey, None); states[rkey] = None
             else: refs[rkey] = (ck, fl) + body
         for rkey, ck, dele, dis, ep in moved:
-            refs.pop(rkey, None)
+            old = refs.pop(rkey, None)
+            if old is not None and not dele: movedfrom[old[0]] = movedfrom.get(old[0], 0) + 1     # moved out of a kept cell by a later plugin
             if dele: states[rkey] = None          # deleted elsewhere
             else: states[rkey] = (dis, ep)
     log('pass 2: %d refs in %.0fs' % (len(refs), time.time() - t1))
-    return dict(order=order, plugins=plugins, cells=cells, navm=navm, navinfo=navinfo, bases=bases, worlds=worlds, refs=refs, states=states, navorig=navorig,
+    return dict(order=order, plugins=plugins, cells=cells, navm=navm, navinfo=navinfo, bases=bases, worlds=worlds, refs=refs, states=states, navorig=navorig, land=land, movedfrom=movedfrom,
                 nameidx=nameidx, want=want)
 
 

@@ -7,10 +7,13 @@ VERT = struct.Struct('<3f')
 TRI = struct.Struct('<3H3hHH')
 LINK = struct.Struct('<IHBBIiHHf')
 TCMP = struct.Struct('<HH')
+DREF = struct.Struct('<IiifBBBBI')      # door ref joined to its navmesh triangle (appended section)
+SEAM = struct.Struct('<If3f3f')         # link seam: linkIdx, gap, from, to
+LAND = struct.Struct('<hh1089f')        # LAND heights of one exterior cell (33x33, 128 units apart)
 DOOR = struct.Struct('<IHHIIi')
 REF = struct.Struct('<IIIBBH3f3ff3f3fIBBHI3f3fIIIIII')
 PLUG = struct.Struct('<I')
-for _s, _n in ((TCMP, 4), (MESH, 72), (VERT, 12), (TRI, 16), (LINK, 24), (DOOR, 20), (REF, 128)): assert _s.size == _n, (_s.format, _s.size)
+for _s, _n in ((DREF, 24), (SEAM, 32), (LAND, 4360), (TCMP, 4), (MESH, 72), (VERT, 12), (TRI, 16), (LINK, 24), (DOOR, 20), (REF, 128)): assert _s.size == _n, (_s.format, _s.size)
 NOGRID = 0x7FFF
 
 
@@ -22,7 +25,7 @@ class Strings:
         return self.at[s]
 
 
-def write(path, meta, plugins, strings, meshes, verts, tris, links, doors, refs, tcmp=None):
+def write(path, meta, plugins, strings, meshes, verts, tris, links, doors, refs, tcmp=None, dref=(), seam=(), land=()):
     """meshes/verts/tris/links/doors/refs: lists of tuples matching the structs; plugins: list of str offsets (u32)."""
     secs = [(b'META', json.dumps(meta, separators=(',', ':')).encode('utf-8'), 1, len(json.dumps(meta, separators=(',', ':')).encode('utf-8'))),
             (b'STRS', bytes(strings.buf), 1, len(strings.buf)),
@@ -33,7 +36,10 @@ def write(path, meta, plugins, strings, meshes, verts, tris, links, doors, refs,
             (b'LINK', b''.join(LINK.pack(*r) for r in links), 24, len(links)),
             (b'DOOR', b''.join(DOOR.pack(*r) for r in doors), 20, len(doors)),
             (b'REFS', b''.join(REF.pack(*r) for r in refs), 128, len(refs)),
-            (b'TCMP', b''.join(TCMP.pack(*r) for r in (tcmp if tcmp is not None else [(0, 0)] * len(tris))), 4, len(tris))]
+            (b'TCMP', b''.join(TCMP.pack(*r) for r in (tcmp if tcmp is not None else [(0, 0)] * len(tris))), 4, len(tris)),
+            (b'DREF', b''.join(DREF.pack(*r) for r in dref), 24, len(dref)),
+            (b'SEAM', b''.join(SEAM.pack(*r) for r in seam), 32, len(seam)),
+            (b'LAND', b''.join(LAND.pack(*r) for r in land), 4360, len(land))]
     hdr = 16 + 16 * len(secs); off = (hdr + 3) & ~3; table = []; body = bytearray()
     for tag, data, rec, cnt in secs:
         table.append(struct.pack('<4sIII', tag, off + len(body), cnt, rec)); body += data; body += b'\0' * (-len(body) % 4)
@@ -57,4 +63,7 @@ def read(path):
     out['meshes'] = rows(b'MESH', MESH); out['verts'] = rows(b'VERT', VERT); out['tris'] = rows(b'TRIS', TRI)
     out['links'] = rows(b'LINK', LINK); out['doors'] = rows(b'DOOR', DOOR); out['refs'] = rows(b'REFS', REF)
     out['tcmp'] = rows(b'TCMP', TCMP)
+    out['dref'] = rows(b'DREF', DREF) if b'DREF' in sec else []      # appended sections: older v2 files do not have them
+    out['seam'] = rows(b'SEAM', SEAM) if b'SEAM' in sec else []
+    out['land'] = rows(b'LAND', LAND) if b'LAND' in sec else []
     return out

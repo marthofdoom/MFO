@@ -1,6 +1,6 @@
 """Write one .mfoenv for a candidate unit from a scan."""
 import math, struct
-import fmt, navm as N, refs as R, features as F
+import fmt, navm as N, refs as R, features as F, land
 
 TOOL_VERSION = 2
 LF_STALE_TARGET, LF_NO_OWNER_EDGE, LF_DZ_UNKNOWN = 1, 2, 4   # LINK.flags bits
@@ -69,6 +69,56 @@ def components(tris, links, mesh_tri_base, kinds):
     return [min(rank[find(g)], 65535) for g in range(n)]
 
 
+def _seg_pt(p, a, b):
+    """closest point on segment ab to p, and its distance"""
+    ax, ay, az = a; dx, dy, dz = b[0] - ax, b[1] - ay, b[2] - az; L = dx * dx + dy * dy + dz * dz
+    t = 0.0 if L == 0 else max(0.0, min(1.0, ((p[0] - ax) * dx + (p[1] - ay) * dy + (p[2] - az) * dz) / L))
+    q = (ax + t * dx, ay + t * dy, az + t * dz)
+    return q, ((p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2 + (p[2] - q[2]) ** 2) ** 0.5
+
+
+def seam_rows(links, meshes, verts, tris, min_gap=0.25):
+    """SEAM rows for kind 0 links whose edge does not meet the target triangle: (linkIdx, gap, from[3], to[3]).  gap = nearest approach between the
+    owner edge and the edges of the target triangle (endpoint to edge pairs); from = the point on the owner edge, to = the point on the target edge."""
+    out = []
+    for li, l in enumerate(links):
+        mi, ti, e, kind, _, tmi, tt, lf, _dz = l
+        if kind != 0 or tmi < 0 or lf & (LF_STALE_TARGET | LF_NO_OWNER_EDGE): continue
+        m = meshes[mi]; t = tris[m[7] + ti]; vb = m[5]
+        a = verts[vb + t[e]]; b = verts[vb + t[(e + 1) % 3]]
+        tm = meshes[tmi]; tv = [verts[tm[5] + i] for i in tris[tm[7] + tt][:3]]
+        best = None
+        for j in range(3):
+            c, d = tv[j], tv[(j + 1) % 3]
+            for p, seg, flip in ((a, (c, d), False), (b, (c, d), False), (c, (a, b), True), (d, (a, b), True)):
+                q, dist = _seg_pt(p, *seg)
+                if best is None or dist < best[0]: best = (dist, (q, p) if flip else (p, q))
+        if best[0] > min_gap: out.append((li, best[0], *best[1][0], *best[1][1]))
+    return out
+
+
+def door_rows(doorinfo, doors, meshes, verts, tris):
+    """DREF rows: every door ref joined to its navmesh triangle: the exact one from a DOOR row when the ref has one, else the nearest triangle
+    centroid within 200 units (-1 when none).  doorinfo = [(refIdx, pos, openDefault, lockLevel, teleport, startsDisabled, keyId)]."""
+    import numpy as np
+    exact = {d[5]: (d[0], d[1]) for d in doors if d[5] >= 0}
+    cent = []; owner = []
+    if tris:
+        V = np.asarray(verts, dtype=np.float64)
+        for mi, m in enumerate(meshes):
+            T = np.asarray([t[:3] for t in tris[m[7]:m[7] + m[8]]], dtype=np.int64)
+            if len(T): cent.append(V[m[5] + T].mean(1)); owner += [(mi, i) for i in range(len(T))]
+    C = np.concatenate(cent) if cent else np.zeros((0, 3))
+    out = []
+    for ri, pos, openDef, lock, tele, off, key in doorinfo:
+        if ri in exact: mi, ti = exact[ri]; out.append((ri, mi, ti, 0.0, int(openDef), lock, tele, off, key)); continue
+        if len(C):
+            d = np.linalg.norm(C - np.asarray(pos), axis=1); j = int(d.argmin())
+            if d[j] <= 200.0: out.append((ri, owner[j][0], owner[j][1], float(d[j]), int(openDef), lock, tele, off, key)); continue
+        out.append((ri, -1, -1, 0.0, int(openDef), lock, tele, off, key))
+    return out
+
+
 def unit_cells(unit, win):
     if unit[0] == 'i': return [unit]
     return [('x', unit[1], unit[2] + dx, unit[3] + dy) for dx in range(-win, win + 1) for dy in range(-win, win + 1)]
@@ -88,14 +138,17 @@ def export(sc, unit, groups, by, cls, feat, path, setname, win=1, name=None):
     ext = {}
     for ck, c in cells.items():
         if c['grid'] is not None and not c['flags'] & 1 and not c['persist']: ext[(c['world'], c['grid'][0], c['grid'][1])] = ck
-    refrows = []; refidx = {}; nstart_off = 0
+    refrows = []; refidx = {}; nstart_off = 0; doorinfo = []
     for u in units:
         for rk, (kind, sig, bmin, bmax) in by.get(u, ()):
-            ref = sc['refs'][rk]; (ck, fl, isactor, nm, pos, rot, scale, ep, tel, lock, cnt) = ref
+            ref = sc['refs'][rk]; (ck, fl, isactor, nm, pos, rot, scale, ep, tel, lock, cnt) = ref[:11]
+            owner = ref[11] if len(ref) > 11 else 0; xact = ref[12] if len(ref) > 12 else 0; inherited = 0
+            if not owner: owner = cells.get(ck, {}).get('owner', 0); inherited = 1 if owner else 0
+            ownbit = (128 if owner and sc['bases'].get(owner, ('',))[0] == 'NPC_' else 0) | (256 if inherited else 0)
             b = sc['bases'][nm]
             off = R.start_disabled(sc, rk); nstart_off += off
             flags = (1 if fl & 0x400 else 0) | (2 if sig == 'LVLN' else 0) | (4 if ep else 0) | (8 if lock else 0) | (16 if tel else 0) | \
-                    (32 if ep and ep[1] & 1 else 0) | (64 if off else 0)
+                    (32 if ep and ep[1] & 1 else 0) | (64 if off else 0) | ownbit
             cid = ck if u[0] == 'i' else ext.get((u[1], u[2], u[3]), ck)
             tcell = 0
             if tel and tel[0] in sc['refs']: tcell = sc['refs'][tel[0]][0]
@@ -104,7 +157,8 @@ def export(sc, unit, groups, by, cls, feat, path, setname, win=1, name=None):
                             bmin[0], bmin[1], bmin[2], bmax[0], bmax[1], bmax[2],
                             eid(lock[1]) if lock else 0, lock[0] if lock else 0, lock[2] if lock else 0, min(max(cnt, 0), 65535),
                             eid(tel[0]) if tel else 0, *(tel[1:7] if tel else (0.0,) * 6), tel[7] if tel else 0, eid(tcell) if tcell else 0,
-                            eid(ep[0]) if ep else 0, S.add(b[1]), S.add(b[3] or ''), 0))
+                            eid(ep[0]) if ep else 0, S.add(b[1]), S.add(b[3] or ''), eid(owner) if owner else 0))
+            if kind == R.K_DOOR: doorinfo.append((len(refrows) - 1, pos, (xact & 8) != 0, lock[0] if lock else 0, 1 if tel else 0, 1 if off else 0, eid(lock[1]) if lock else 0))
     tri_base_of = []
     for mi, k in enumerate(mkeys):
         pi, nv = sc['navm'][k]; m = pm(k); rk = _res(sc, pi)
@@ -149,6 +203,14 @@ def export(sc, unit, groups, by, cls, feat, path, setname, win=1, name=None):
     walk = components(tris, links, tri_base_of, (0,))
     weak = components(tris, links, tri_base_of, (0, 1, 2))
     tcmp = list(zip(walk, weak))
+    dref = door_rows(doorinfo, doors, meshes, verts, tris)
+    seam = seam_rows(links, meshes, verts, tris)
+    land_rows = []
+    if unit[0] == 'x':
+        for u in units:
+            ck = ext.get((u[1], u[2], u[3]))
+            if ck in sc.get('land', {}):
+                land_rows.append((u[2], u[3], *[h for row in land.decode_vhgt(sc['land'][ck]) for h in row]))
     # component summary (area from the triangles)
     area = {}; ntri = {}
     mi = 0
@@ -163,7 +225,7 @@ def export(sc, unit, groups, by, cls, feat, path, setname, win=1, name=None):
     for ck, c in sorted(cellinfo.items()):
         wh, src = water_height(sc, c)
         cell_meta.append(dict(id='%08X' % eid(ck), edid=c['edid'], interior=bool(c['flags'] & 1), gridX=c['grid'][0] if c['grid'] else None,
-                              gridY=c['grid'][1] if c['grid'] else None, flags=c['flags'], waterHeight=wh, waterSource=src))
+                              gridY=c['grid'][1] if c['grid'] else None, flags=c['flags'], waterHeight=wh, waterSource=src, owner=eid(c['owner']) if c.get('owner') else 0))
     order = sorted(env['plug'].items(), key=lambda kv: kv[1]); plugs = [S.add(n) for n, _ in order]
     kinds = {}
     for r in refrows: kinds[r[3]] = kinds.get(r[3], 0) + 1
@@ -173,8 +235,8 @@ def export(sc, unit, groups, by, cls, feat, path, setname, win=1, name=None):
     meta = dict(tool='envextract', formatVersion=fmt.VERSION, toolVersion=TOOL_VERSION, name=name or '', set=setname, **{'class': cls},
                 interior=unit[0] == 'i', unit=list(unit[1:]) if unit[0] == 'x' else ['%08X' % unit[1]],
                 plugins=[n for n, _ in order], cells=cell_meta, features=feat, refCountsByKind={str(k): v for k, v in sorted(kinds.items())},
-                counts=dict(meshes=len(meshes), verts=len(verts), tris=len(tris), links=len(links), doors=len(doors), refs=len(refrows),
+                counts=dict(landCells=len(land_rows), doorRefs=len(dref), seams=len(seam), meshes=len(meshes), verts=len(verts), tris=len(tris), links=len(links), doors=len(doors), refs=len(refrows),
                             refsStartDisabled=nstart_off, displacedMeshesDropped=ndisp, components=len(set(walk)), weakComponents=len(set(weak))),
                 walkComponents=comp_meta)
-    fmt.write(path, meta, plugs, S, meshes, verts, tris, links, doors, refrows, tcmp)
+    fmt.write(path, meta, plugs, S, meshes, verts, tris, links, doors, refrows, tcmp, dref, seam, land_rows)
     return meta
