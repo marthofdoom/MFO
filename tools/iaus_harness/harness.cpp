@@ -1724,6 +1724,20 @@ namespace {
             in.nature = Prune::Nature::Unknown; in.weighable = false;
             Check(Prune::StaticDrop(in) == Prune::Drop::UnknownNature, "item 6: an unknown nature keeps its own reason");
         }
+        {   // MFO-B865: the Wall shape rule. Firebolt / Flames / Fireball carry an impact hazard that does NOT drop to the ground
+            Check(!Prune::IsWallShape(false, false, false), "B865: a bolt whose impact hazard does not drop to the ground is not a wall (kept)");
+            Check(!Prune::IsWallShape(false, true, false), "B865: a stream with no drop-to-ground hazard is not a wall");
+            Check(!Prune::IsWallShape(true, false, false), "B865: a fire-and-forget spell with a drop hazard is not a wall");
+            Check(Prune::IsWallShape(true, true, false), "B865: a concentration stream whose impact hazard drops to the ground stays a Wall");
+            Check(!Prune::IsWallShape(true, true, true), "B865: a Self concentration spell is not a wall");
+            Prune::StaticIn in; in.nature = Prune::Nature::Offense; in.weighable = true;
+            in.targetLocation = Prune::IsWallShape(true, true, false);
+            Check(Prune::StaticDrop(in) == Prune::Drop::Placement, "B865: a real wall is still dropped as Placement (unchanged)");
+            in.targetLocation = Prune::IsWallShape(false, false, false);
+            Check(Prune::StaticDrop(in) == Prune::Drop::Keep, "B865: a bolt with an impact hazard is kept");
+            in.targetLocation = true;   // a rune: delivery TargetLocation, not read from the impact hazard
+            Check(Prune::StaticDrop(in) == Prune::Drop::Placement, "B865: a rune is unchanged");
+        }
         // ---- item 4: the block family ----
         ClassGate knight; knight.resolved = true; knight.treeOn = true; knight.block = true;
         ClassGate warrior; warrior.resolved = true; warrior.treeOn = true;

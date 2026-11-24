@@ -935,6 +935,7 @@ per concern:
   Wall = any effect whose `impactDataSet` (+0x90) holds an impact with `hazard` (+0x80) set; `Script` = costliest effect is Script,
   new `ScriptRider` = a Script effect that is not the costliest; new `SelfHazard` = kSpawnHazard effect on a Self spell (hazard spell
   hostility printed). `chargeTime` now from `GetChargeTime()`; `[archetype]` gains `impactHazard= spawnHazard=`. **What breaks:** a
+  **MFO-B865 (2026-11-24, `fix/impact-hazard-shape`):** the Wall shape is now `Iaus::Prune::IsWallShape` (`iaus/Prune.h`): a CONCENTRATION, non-Self spell whose impact data set holds an IPCT hazard with BGSHazardData flag kDropToGround (16) (`SpellArchetype::impactHazardDrops`). A bolt's impact hazard (Firebolt, Flames, Fireball, Frostbite, Ice Spike, Ice Storm, Incinerate) no longer makes it a Wall, so it keeps its AimedAoE / Plain shape and `SpellBook.cpp` no longer drops it as Placement. Only consumer of Wall: `SpellBook.cpp:255` (drop) plus the census/log; `classes/Defaults.cpp` reads Reanimate/BoundWeapon/Ward only. To change what counts as a wall, edit `IsWallShape`; the lab mirror is `iaus_sim World.h LaysHazard`.
   road that starts reading `SpellShape::Wall` / `ScriptRider` / `SelfHazard` is a behaviour change, not a log fix.
   **ROW ALIAS (fix/spell-row-alias-shape-census, C1):** `LookupAv` also matches every ValueModifier `kRows` entry for archetypes
   4 / 5 / 32 / 34 (`IsVmAlias`; Harbinger `CastClassify.cpp:91-98`), so Oakflesh / Stoneflesh / Dragonhide / wards (archetype 34)

@@ -3821,7 +3821,7 @@ Verbatim, choice review, raised on the batch C branch:
 
 ### MFO-B865 (OPEN, found by `feat/sim-v4-pretune`, 2026-11-24; NATIVE, not touched; needs marth's ruling on 1; iaus-sim-v4.md 16.6)
 1. `iaus/Prune.h:93` with `iaus/SpellBook.cpp:253`: a Target Location conjuration is dropped as Placement. Vanilla 14 of 14 taught conjurations, Tuxborn 307 of 311. A field log names one (Summon the Udefrykte Matron).
-2. `cast/Archetype.cpp:214 HasImpactHazard`: any IPCT hazard makes shape Wall, so Vanilla's Firebolt, Flames, Fireball, Frostbite, Ice Spike, Ice Storm, Incinerate, Expel / Banish Daedra are dropped. Masked where the spell also has a Script effect (Tuxborn, most of LoreRim).
+2. **CLOSED 2026-11-24 on `fix/impact-hazard-shape` (item 2 only; item 1 and the real-wall note stay OPEN).** Was: `cast/Archetype.cpp:214 HasImpactHazard`: any IPCT hazard makes shape Wall, so Vanilla's Firebolt, Flames, Fireball, Frostbite, Ice Spike, Ice Storm, Incinerate, Expel / Banish Daedra are dropped. Masked where the spell also has a Script effect (Tuxborn, most of LoreRim). Now: Wall = `Prune::IsWallShape` (concentration, non-Self, impact hazard with kDropToGround). Checked on Skyrim.esm: Firebolt / Flames / Frostbite impact hazards have flag 16 clear; only the Barrier* MGEFs (Fire, Frost, Shock walls) reach a flag-16 hazard.
 
 ## feat/sim-v4-pretune review (Opus 5.5, 2026-11-24, raised against 28c805e6; verbatim file)
 
