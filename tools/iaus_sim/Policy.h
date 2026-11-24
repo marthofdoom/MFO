@@ -418,6 +418,9 @@ namespace Sim {
                 thrashed = true;
             }
             const std::uint32_t target = hostile ? tg->c.id : (k.target ? k.target : x.c.id);
+            // cast/CastOn.cpp:744: past Tuning::occludedClaimReleaseSec of his OWN ray reading the foe occluded the pair is held off while it still reads so, "so the next lap picks another foe, a buff or a reposition"
+            if (g_v4.caststart && hostile) { const auto oi = c.occSince.find(tg->c.id); const float lim = ActiveTuning()->occludedClaimReleaseSec;
+                if (lim > 0.0f && oi != c.occSince.end() && F.now - oi->second >= static_cast<double>(lim)) { if (subj) ++t.castOccRelease; return Fired::Declined; } }
             if (g_v4.caststart && hostile && c.CastHeld(k.form, tg->c.id)) { if (subj) ++t.castHeldTurns; return Fired::Declined; }   // SIM V4: held off this fight (cast/CastOn.cpp:470 "offense claim never started this fight: held off"). The picker still ranks it and the refusal COSTS THE TURN, as in the game (review F4)
             if (hostile) {   // cast/Fire.cpp:430: a spell that can never affect this target is passed over, transparently, once the mirror has a verdict
                 const SpellTarget pr{ k.form, tg->c.id }; const bool known = std::find(c.wwMirror.begin(), c.wwMirror.end(), pr) != c.wwMirror.end();

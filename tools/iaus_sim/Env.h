@@ -100,7 +100,7 @@ namespace Sim {
         double blockSince = -1, passUntil = 0; std::uint32_t blocker = 0;                                          // a body in his way
         std::int32_t door = -1; double doorAt = 0;                                                               // the door he is opening
         double dropUntil = 0; EQ::Vec3 dropTo; std::int32_t dropTri = -1;                                          // a drop in flight
-        double legAt = -1e9; float legDx = 0, legDy = 0, legSx = 0, legSy = 0, legGx = 0, legGy = 0, legG0x = 0, legG0y = 0, walked = 0; bool legOpen = false, legReach = false, legLong = false, away = false, exact = false /* his last leg ended STUCK: the next route is searched from where he stands */; float legLen = 0; double awayUntil = 0;
+        double legAt = -1e9; float legDx = 0, legDy = 0, legSx = 0, legSy = 0, legGx = 0, legGy = 0, legG0x = 0, legG0y = 0, walked = 0; bool legOpen = false, legReach = false, legLong = false, away = false, exact = false /* his last leg ended STUCK: the next route is searched from where he stands */; float legLen = 0; double awayUntil = 0, exactUntil = 0;
         float blockX = 0, blockY = 0; bool hadBlock = false;
     };
 

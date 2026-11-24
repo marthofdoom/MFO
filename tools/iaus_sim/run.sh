@@ -127,6 +127,13 @@ if [[ -n "${SIM_CLITEST:-}" ]]; then
     chk "sim v4 world: the same run at 1 thread and at 16 (the route cache is keyed centroid to centroid)" '[[ "$("$OUT" --no-json --threads 1 --world v4 --classes knight,evoker,healer --seeds 3 2>&1 | head -1)" == "$("$OUT" --no-json --threads 16 --world v4 --classes knight,evoker,healer --seeds 3 2>&1 | head -1)" ]]'
     chk "sim v4 world: a blade reaches a tower top by its ramp, is pinned under a floor nothing joins (the field case, measured), and pushes at a wall the mesh does not know" 'X="$(R --world v4 --scenario env-tower-stairs,env-island,trust-ignored-wall --fights 8)"; A="$(echo "$X" | grep -A2 "^env-tower-stairs" | tail -1 | awk "{print \$3}")"; B="$(echo "$X" | grep -A2 "^env-island" | tail -1 | awk "{print \$2, \$5}")"; C="$(echo "$X" | grep -A2 "^trust-ignored-wall" | tail -1 | awk "{print \$2}")"; awk -v a="$A" -v b="$B" -v c="$C" "BEGIN { split(b, q, \" \"); exit !(a < 20 && q[1] > 60 && q[2] > 60 && c > 20) }"'
     chk "sim v4 world: the pathing gate prints its cells, counts no off-mesh body and no follower stuck for good, and --path-gate is the exit code" 'X="$(R --world v4 --path-report 4 --classes knight,archer --path-gate)"; [[ "$X" == *"PATH GATES: 14 cell(s)"* && "$X" == *"env.bad 0 (must be 0)  stuck forever 0 (must be 0)"* ]] && R --path-report 2 | grep -q "needs an environment"'
+    chk "sim v4 world: the solo walk on the fixtures: every trip with a route ends AT its goal, its height included (review F1)" 'R --solo-walk 60 | grep -q "WRONG 0 (0.000%), of them over or under the goal 0  off-mesh steps 0  => PASS"'
+    chk "sim v4 world: a compare across two sets of places is refused (the library hash is in the world tag)" 'R --world v4 --env "$FX/open-room.mfoenv" --classes beta1 --compare "'"$ROOT"'/tools/iaus_sim/baseline_v4_builtin.txt" | grep -q "COMPARE REFUSED"'
+    # needs the extracted library (never in git): MFO_ENV_CACHE, default ~/.cache/mfo-env. Without it the check says so and passes.
+    LIB="${MFO_ENV_CACHE:-$HOME/.cache/mfo-env}"
+    if [[ -f "$LIB/index.json" ]]; then
+        chk "sim v4 world: the solo walk over the whole library: under a tenth of a percent of trips end anywhere but their goal, none off the mesh" 'R --solo-walk 170 --env-set all | grep -q "^SOLO-WALK  .*=> PASS"'
+    else echo "CLI-CHECK SKIPPED (no library at $LIB; set MFO_ENV_CACHE): the solo walk over the whole library"; fi
     chk "sim v4: the field-rate tool for the pathing numbers starts" 'python3 "'"$ROOT"'/tools/iaus_sim/calib_path.py" --help >/dev/null'
     # needs the saved field logs (never in git): SIM_EVIDENCE, default <repo>/_evidence. Without them the check says so and passes.
     EV="${SIM_EVIDENCE:-$ROOT/_evidence}"
