@@ -2396,8 +2396,7 @@ namespace MFO::Logistics {
             // genuinely-unreachable body can't drive a re-attempt loop.
             if (!AnyTravelActive()) {
                 const int ic = ++g_idleCycles[id];
-                // 11-17g: the idle reassess also lifts the GATED records HE made (they are not in g_travelFailed, so this is independent of it).
-                if (ic >= kIdleReassessCycles && g_gateCount.load(std::memory_order_relaxed) > 0) ClearGatesBy(id);
+                // GATED records are NOT lifted here (marth 2026-11-24: real events or the player moving through only; GateReadmitSweep).
                 if (ic >= kIdleReassessCycles && !g_travelFailed.empty() &&
                     (g_lastBlocklistReassess.time_since_epoch().count() == 0 ||
                      now - g_lastBlocklistReassess >= kReassessCooldown)) {

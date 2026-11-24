@@ -342,8 +342,22 @@ namespace MFO::SelfTest {
                     && Iaus::SetLootKnob(lt, "batchHoldMinSec", 3.0f) && Iaus::SetLootKnob(lt, "guardFreshSec", 2.0f) && !Iaus::SetLootKnob(lt, "guardFreshSec", 0.0f, &why)
                     && Iaus::LootTuning{}.gateReadmitMoveU == 0.0f   // N6: a gate lifts on real events only by default
                     && Iaus::SetLootKnob(lt, "gateReadmitMoveU", 1024.0f) && !Iaus::SetLootKnob(lt, "gateConeDeg", 120.0f, &why);
-                r.text += std::format("; e: bar held={} lifted={} unseenNotHostile={} knob={}", held, lifted, unseen, knob);
-                if (!(held && lifted && unseen && knob)) r.fail = true;
+                // the "player moved through" lift (pure geometry): block B at the origin, target T 1000u east (+x); near side is x < 0
+                using P = Iaus::GatePt;
+                const P B{ 0, 0, 0 }, T{ 1000, 0, 0 };
+                const auto cross = [&](P a, P b) { return Iaus::GatePassCrossed(B, T, a, b, 150.0f, 256.0f); };
+                const bool pass = cross({ -300, 0, 0 }, { 300, 0, 0 })            // near -> far through the point lifts
+                    && cross({ -300, 100, 0 }, { 300, -100, 0 })                  // through, 100u beside the point (inside the tolerance)
+                    && !cross({ 300, 0, 0 }, { -300, 0, 0 })                      // far -> near does not
+                    && !cross({ -300, 600, 0 }, { 300, 600, 0 })                  // passes by beside it (600u off the line) does not
+                    && !cross({ 100, 0, 0 }, { 400, 0, 0 })                       // started on the far side does not
+                    && !cross({ -300, 0, 0 }, { -50, 0, 0 })                      // stays near does not
+                    && !cross({ -300, 0, 900 }, { 300, 0, 900 })                  // another floor does not
+                    && !Iaus::GatePassStepPlausible(5000.0f, 1.0f, 1000.0f, 64.0f) // a 5000u step in 1 s is a teleport
+                    && Iaus::GatePassStepPlausible(600.0f, 1.0f, 1000.0f, 64.0f)
+                    && Iaus::LootTuning{}.gatePassU > 0.0f && Iaus::SetLootKnob(lt, "gatePassU", 100.0f);
+                r.text += std::format("; e: bar held={} lifted={} unseenNotHostile={} knob={} passGeometry={}", held, lifted, unseen, knob, pass);
+                if (!(held && lifted && unseen && knob && pass)) r.fail = true;
             }
             if (r.fail) return Step::Fail(r.text);
             if (r.info) return Step::Info(r.text);   // a-c judged above; d could not be (sneak-always class, or no 3D)
