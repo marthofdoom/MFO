@@ -3,8 +3,21 @@ import os
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QFontDatabase
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QFileDialog, QHBoxLayout, QHeaderView, QLineEdit, QListWidget, QListWidgetItem,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QLineEdit, QListWidget, QListWidgetItem,
                                QPushButton, QTableWidget, QTableWidgetItem, QWidget)
+
+
+class FocusCombo(QComboBox):
+    """A drop-down that ignores the mouse wheel unless it has keyboard focus (scrolling a form or the run list must never change a priority)."""
+    def __init__(self):
+        super().__init__()
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def wheelEvent(self, e):
+        if self.hasFocus():
+            super().wheelEvent(e)
+        else:
+            e.ignore()
 
 
 def mono():

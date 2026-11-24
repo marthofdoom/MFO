@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QLabel, QLineE
                                QVBoxLayout, QWidget)
 
 from .. import prio, procs, runreader
-from . import widgets
+from . import bg, widgets
 
 
 class CurrentTab(QWidget):
@@ -15,6 +15,8 @@ class CurrentTab(QWidget):
         super().__init__()
         self.ctx = ctx
         self.sel = None
+        self._prio_seq = self._prio_pending = 0
+        self._prio_busy = False
         self._cache = {}                  # run dir -> ((mtime, size), entries)
         lay = QVBoxLayout(self)
         sp = QSplitter(Qt.Vertical)
@@ -30,7 +32,7 @@ class CurrentTab(QWidget):
         self.head.setWordWrap(True)
         top.addWidget(self.head, 1)
         top.addWidget(QLabel("Priority"))
-        self.prio = QComboBox()                      # the levels of live/priority.py ORDER, filled by _prio_levels()
+        self.prio = widgets.FocusCombo()             # the levels of live/priority.py ORDER, filled by _prio_levels()
         self.prio.activated.connect(self.change_priority)   # `activated` = the user picked one; a refresh setting the box does not fire it
         top.addWidget(self.prio)
         self.prio_note = QLabel("")
@@ -119,7 +121,7 @@ class CurrentTab(QWidget):
         now = time.time()
         for d in self.ctx.run_dirs:
             ents = self.entries(d)
-            running = self.ctx.driver_procs_for(d)
+            running = self.ctx.round_procs_for(d)
             act = runreader.current_activity(ents)
             e, _ = runreader.eta(ents, self.planned(d))
             cores = sum(self.ctx.cpu_rate.get(g, 0) for g in {p["pgid"] for p in running})
@@ -153,11 +155,12 @@ class CurrentTab(QWidget):
         if not d:
             return
         ents = self.entries(d)
-        running = self.ctx.driver_procs_for(d)
+        running = self.ctx.round_procs_for(d)
         e, note = runreader.eta(ents, self.planned(d))
         st = runreader.last_start(ents)
-        self.head.setText("<b>%s</b>  %s<br>%s" % (os.path.basename(d), "RUNNING (pid %s)" % ",".join(str(p["pid"]) for p in running) if running else "not running",
-                                                    "ETA %s (%s)" % (widgets.age(e), note) if running and e else (st["msg"][:200] if st else "")))
+        self.head.setText("<b>%s</b>  %s<br>%s<br>%s" % (os.path.basename(d), "RUNNING (pid %s)" % ",".join(str(p["pid"]) for p in running) if running else "not running",
+                                                          "ETA %s (%s)" % (widgets.age(e), note) if running and e else (st["msg"][:200] if st else ""),
+                                                          self.round_state(d, bool(running))))
         self.stop.setEnabled(bool(running))
         self.show_priority(d)
         hist = runreader.stage_timings(ents)
@@ -166,6 +169,27 @@ class CurrentTab(QWidget):
             rows.append(["phase " + name, (secs, str(secs)), "rc=%d" % rc])
         widgets.fill(self.stages, rows)
         self.render_log()
+
+    def round_state(self, d, running):
+        """run_round.py's <out>/round-status.json in one line: state (running / stopped / failed / done / refused), exit codes, times. A 'running' state
+        with no process alive is shown as such (the runner was killed without a word)."""
+        rs = prio.read_json(d, "round-status.json")
+        if not rs:
+            return ""
+        state = rs.get("state", "?")
+        bits = ["round state: <b>%s</b>" % state]
+        if state == "running" and not running:
+            bits.append("(no round process is alive: the runner was killed without writing a stop)")
+        for k in ("driver_exit", "generator_exit"):
+            if rs.get(k) is not None:
+                bits.append("%s %s" % (k.replace("_", " "), rs[k]))
+        if state == "refused":
+            bits.append("(the round finished but the generator refused to write tuning files: see driver.out)")
+        if state == "failed":
+            bits.append("(the driver failed: see driver.out and progress.log)")
+        if rs.get("updated"):
+            bits.append("at " + str(rs["updated"]))
+        return "  ".join(bits)
 
     def _prio_levels(self):
         """-> priority module (its ORDER fills the drop-down), or None with the reason in prio_note."""
@@ -182,25 +206,48 @@ class CurrentTab(QWidget):
         return m
 
     def show_priority(self, d):
-        """The selected run's current level in the drop-down (read from <out>/priority and the unit each refresh, so a change made elsewhere shows).
-        Disabled, with the plain reason beside it, when the run has no unit or is not running."""
-        if self.prio.view().isVisible():
-            return                                   # the user is choosing: do not pull the list from under the pointer
+        """The selected run's level in the drop-down: the LIVE level of its unit while it runs (with the remembered one beside it when they differ), else
+        the remembered level. The systemctl reads run off the GUI thread (bg.run_bg); a stale answer for another run is dropped. Disabled, with the
+        plain reason beside it, when the unit is not this round's, the run has no unit, or it is not running."""
+        if self.prio.view().isVisible() or self._prio_busy:
+            return                                   # the user is choosing / a change is being applied: do not pull the list from under the pointer
         m = self._prio_levels()
         if not m:
             return
+        self._prio_seq += 1
+        seq = self._prio_seq
+        self._prio_pending += 1
         try:
-            st = m.get(d)
-        except Exception as e:                       # systemctl missing / hung: shown, not swallowed
-            self.prio.setEnabled(False)
-            self.prio_note.setText("priority not read: %s" % e)
-            return
-        ok, why = prio.can_change(st)
-        self.prio.blockSignals(True)
-        self.prio.setCurrentIndex(max(0, self.prio.findText(st["level"])))
-        self.prio.blockSignals(False)
-        self.prio.setEnabled(ok)
-        self.prio_note.setText("" if ok else why)
+            expected = prio.unit_name(self.ctx.s, d)
+        except (ImportError, OSError, SyntaxError, AttributeError) as e:
+            expected = None
+            self.prio_note.setText("run_round.py unit name not read: %s" % e)
+
+        def read():
+            return m.get(d)
+
+        def done(st, err):
+            self._prio_pending -= 1
+            if seq != self._prio_seq or d != self.sel:
+                return
+            if err is not None:                      # systemctl missing / hung: shown, not swallowed
+                self.prio.setEnabled(False)
+                self.prio_note.setText("priority not read: %s" % err)
+                return
+            ok, why = prio.can_change(st, expected) if expected else (False, "run_round.py unit name not read")
+            live, rem = prio.live_level(m, st), st["level"]
+            show = live if (st["active"] and live) else rem
+            self.prio.blockSignals(True)
+            self.prio.setCurrentIndex(max(0, self.prio.findText(show)))
+            self.prio.blockSignals(False)
+            self.prio.setEnabled(ok)
+            note = why
+            if ok and live and live != rem:
+                note = "live: %s, remembered for the next start: %s" % (live, rem)
+            elif ok and st["active"] and not live:
+                note = "live weights match no level (%s); remembered: %s" % (", ".join("%s=%s" % kv for kv in sorted((st.get("live") or {}).items())), rem)
+            self.prio_note.setText(note)
+        bg.run_bg(read, done)
 
     def change_priority(self, *_):
         d = self.sel
@@ -208,15 +255,28 @@ class CurrentTab(QWidget):
         if not m:
             return
         level = self.prio.currentText()
-        try:
-            st = m.set_level(d, level)
-        except (ValueError, RuntimeError, OSError) as e:
-            QMessageBox.critical(self, "Priority not changed", str(e))
-            self.show_priority(d)
-            return
-        if not st.get("applied"):
-            QMessageBox.warning(self, "Priority remembered only", "The run is not running, so nothing was changed live. The level %s is remembered for its next start." % level)
-        self.show_priority(d)
+        self._prio_busy = True
+        self._prio_pending += 1
+
+        def done(st, err):
+            self._prio_busy = False
+            self._prio_pending -= 1
+            if err is not None:                      # ValueError / RuntimeError / OSError / SubprocessError (a hung systemctl): shown, never swallowed
+                QMessageBox.critical(self, "Priority not changed", "%s: %s" % (type(err).__name__, err))
+            elif not st.get("applied"):
+                QMessageBox.warning(self, "Priority remembered only", "The run is not running, so nothing was changed live. The level %s is remembered for its next start." % level)
+            if d == self.sel:
+                self.show_priority(d)
+        def apply():
+            try:
+                expected = prio.unit_name(self.ctx.s, d)
+            except (ImportError, OSError, SyntaxError, AttributeError) as e:
+                raise RuntimeError("run_round.py's unit name could not be read: %s" % e)
+            ok, why = prio.can_change(m.get(d), expected)
+            if not ok and "not running" not in why:
+                raise RuntimeError(why)              # another scope's unit file, no unit, or no systemd: nothing is written or applied
+            return m.set_level(d, level)
+        bg.run_bg(apply, done)
 
     def render_log(self, *_):
         d = self.sel
@@ -242,7 +302,7 @@ class CurrentTab(QWidget):
         bar.setValue(bar.maximum() if (self.tail.isChecked() and at_end) or self.tail.isChecked() else pos)
 
     def stop_run(self):
-        running = self.ctx.driver_procs_for(self.sel) if self.sel else []
+        running = self.ctx.round_procs_for(self.sel) if self.sel else []
         if not running:
             return
         pg = sorted({p["pgid"] for p in running})

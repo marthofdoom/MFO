@@ -3,7 +3,7 @@ import os
 
 from PySide6.QtCore import QObject, Signal
 
-from .. import catalog, procs, runreader, settings
+from .. import catalog, prio, procs, runreader, settings
 
 
 class Ctx(QObject):
@@ -72,5 +72,10 @@ class Ctx(QObject):
         a = os.path.abspath(run_dir)
         return [p for p in self.procs if p["is_driver"] and p.get("out") and os.path.abspath(p["out"]) == a]
 
+    def round_procs_for(self, run_dir):
+        """The round's own processes: its driver AND its run_round.py wrapper (alive while it builds, hashes, or writes the tuning files)."""
+        a = os.path.abspath(run_dir)
+        return [p for p in self.procs if p["kind"] in ("driver", "wrapper") and p.get("out") and os.path.abspath(p["out"]) == a]
+
     def is_running(self, run_dir):
-        return bool(self.driver_procs_for(run_dir))
+        return bool(self.round_procs_for(run_dir)) or prio.lock_held(run_dir)

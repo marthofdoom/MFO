@@ -103,7 +103,7 @@ def main():
     pm = prio.load(st)
     check("priority table from priority.py: idle first and default", list(pm.ORDER) == ["idle", "low", "normal", "high"] and pm.DEFAULT == "idle")
     scope_out = tempfile.mkdtemp(prefix="mfo-selftest-run-")
-    unit = "mfo-tune-selftest-%d.scope" % os.getpid()
+    unit = prio.unit_name(st, scope_out)             # the unit run_round.py would name: a live change is only allowed on THAT one
     sleeper = None
     if pm.have_systemd():
         sleeper = subprocess.Popen(["systemd-run", "--user", "--scope", "--quiet", "--unit=" + unit, "-p", "CPUWeight=idle", "-p", "IOWeight=1", "sleep", "600"])
@@ -116,9 +116,10 @@ def main():
         open(os.path.join(scope_out, "progress.log"), "w").write("")
     else:
         print("SKIP priority live change: no systemd user manager here")
-    SCOPE = (sleeper, unit, scope_out)
     # GUI
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
     app = QApplication([])
     from mfo_tune.ui.mainwindow import MainWindow
     w = MainWindow()
@@ -128,7 +129,25 @@ def main():
         w.tabs.setCurrentIndex(i)
         app.processEvents()
     check("GUI built, %d tabs" % w.tabs.count(), w.tabs.count() == 7)
+    C = w.current
     L = w.launch
+
+    def wait_prio():
+        t0 = time.time()
+        while C._prio_pending and time.time() - t0 < 20:
+            app.processEvents()
+            time.sleep(0.02)
+        app.processEvents()
+
+    boxes = []
+    for n in ("critical", "warning", "information"):
+        setattr(QMessageBox, n, staticmethod(lambda parent, title, text, *a, _n=n, **k: boxes.append((_n, title, text)) or QMessageBox.Ok))
+    QMessageBox.question = staticmethod(lambda parent, title, text, *a, **k: boxes.append(("question", title, text)) or QMessageBox.Yes)
+
+    def pick(level):
+        L.prio.setCurrentIndex(L.prio.findText(level))
+        L.prio.activated.emit(L.prio.currentIndex())     # what the user's choice emits
+
     check("Launch tab: priority drop-down lists the levels, default idle, no nice field", [L.prio.itemText(i) for i in range(L.prio.count())] == ["idle", "low", "normal", "high"]
           and L.prio.currentText() == "idle" and not hasattr(L, "nice"))
     L.out.setText("/tmp/zz-selftest-out")
@@ -139,28 +158,155 @@ def main():
     L.out.setText(rem)
     app.processEvents()
     check("Launch tab: resuming a run shows its remembered level", L.prio.currentText() == "high")
-    L.prio.setCurrentText("low")
-    app.processEvents()
+    check("item 3: untouched drop-down sends NO --priority (the file is followed)", "--priority" not in L.preview.toPlainText())
+    pick("low")
     check("Launch tab: the user's change wins in the command", "--priority low" in L.preview.toPlainText())
-    sleeper, unit, scope_out = SCOPE
-    C = w.current
+    fresh = tempfile.mkdtemp(prefix="mfo-selftest-fresh-")
+    L.out.setText(fresh)
+    app.processEvents()
+    check("item 2: a NEW out dir resets the drop-down to idle (the pick was for the other dir) and sends nothing",
+          L.prio.currentText() == "idle" and "--priority" not in L.preview.toPlainText(), L.prio.currentText())
+    L.out.setText(rem)
+    app.processEvents()
+    check("item 2: the dir the user picked for keeps the pick", L.prio.currentText() == "low" and "--priority low" in L.preview.toPlainText())
+    L.out.setText(fresh)
+    L.smoke.setChecked(True)
+    L.new_args.setChecked(True)
+    L.new_bin.setChecked(True)
+    app.processEvents()
+    pv = L.preview.toPlainText().split()
+    j = pv.index("--")
+    check("item 6: smoke sends --no-generate; New arguments / New binary go BEFORE --", "--no-generate" in pv[:j] and "--new-args" in pv[:j] and "--new-bin" in pv[:j] and "--smoke" in pv[j:], L.preview.toPlainText())
+    L.smoke.setChecked(False)
+    L.new_args.setChecked(False)
+    L.new_bin.setChecked(False)
+    # item 1: a resume that run_round.py would refuse is refused HERE, with the reason, and nothing starts
+    fake_bin = os.path.join(fresh, "fakesim")
+    open(fake_bin, "w").write("#!/bin/sh\n")
+    os.chmod(fake_bin, 0o755)
+    L.bin.setText(fake_bin)
+    ref = tempfile.mkdtemp(prefix="mfo-selftest-refuse-")
+    import json as _json
+    _json.dump({"driver_args": ["--classes", "healer"], "bin_sha": "0" * 16}, open(os.path.join(ref, "round.json"), "w"))
+    L.out.setText(ref)
+    L.classes.item(0).setCheckState(Qt.Checked)
+    app.processEvents()
+    am, bm = prio.resume_conflicts(ref, L._drv_args(), fake_bin)
+    check("item 1: resume_conflicts sees changed args and a changed binary", am and bm, (am, bm))
+    check("item 1: the preview warns that run_round.py will refuse", "REFUSE" in L.warn.text(), L.warn.text()[:80])
+    boxes.clear()
+    L.launch()
+    check("item 1: Launch refuses a changed resume, names both, starts nothing", boxes and boxes[0][0] == "critical" and "New arguments" in boxes[0][2] and "New binary" in boxes[0][2]
+          and not os.path.exists(os.path.join(ref, "driver.out")) and not L._procs, boxes[:1])
+    # a failing launch: the child ends nonzero, driver.out's new text is shown (a fake run_round, nothing real starts)
+    real_launch = commands.launch_detached_proc
+    commands.launch_detached_proc = lambda argv, log, cwd=None: real_launch(["sh", "-c", "echo 'run_round: refused: simulated'; exit 1"], log, cwd)
+    open(os.path.join(ref, "driver.out"), "w").write("OLD TEXT FROM AN EARLIER LAUNCH\n")
+    L.new_args.setChecked(True)
+    L.new_bin.setChecked(True)
+    boxes.clear()
+    L.launch()
+    t0 = time.time()
+    while L._procs and time.time() - t0 < 10:
+        app.processEvents()
+        time.sleep(0.05)
+    app.processEvents()
+    ends = [b for b in boxes if "exit 1" in b[1]]
+    check("item 1: after launch a nonzero exit shows driver.out's NEW text only", ends and "simulated" in ends[0][2] and "OLD TEXT" not in ends[0][2], boxes)
+    commands.launch_detached_proc = real_launch
+    L.new_args.setChecked(False)
+    L.new_bin.setChecked(False)
+    # item 1: round-status.json state on the Current tab
+    open(os.path.join(ref, "progress.log"), "w").write("")
+    _json.dump({"state": "refused", "driver_exit": 0, "generator_exit": 1, "updated": "2026-11-24 00:00:00"}, open(os.path.join(ref, "round-status.json"), "w"))
+    w.ctx.s["extra_run_roots"] = [ref]
+    w.ctx.refresh()
+    C.select_dir(ref)
+    C.detail()
+    wait_prio()
+    check("item 1: Current tab shows round-status.json state", "refused" in C.head.text() and "generator exit 1" in C.head.text(), C.head.text()[:120])
+    # item 5: a live wrapper (building / hashing / generating) counts as running; Launch disabled, Stop enabled
+    wd = tempfile.mkdtemp(prefix="mfo-selftest-wrapper-")
+    open(os.path.join(wd, "progress.log"), "w").write("")
+    open(os.path.join(wd, "run_round.py"), "w").write("import time\ntime.sleep(600)\n")
+    wrap = subprocess.Popen([sys.executable, os.path.join(wd, "run_round.py"), "--out", wd, "--"], start_new_session=True)
+    time.sleep(0.4)
+    w.ctx.s["extra_run_roots"] = [wd]
+    w.ctx.refresh()
+    L.out.setText(wd)
+    L.bin.setText(fake_bin)
+    app.processEvents()
+    C.select_dir(wd)
+    C.detail()
+    wait_prio()
+    check("item 5: wrapper alive = running: Launch disabled, Stop enabled, no driver yet", not w.ctx.driver_procs_for(wd) and w.ctx.is_running(wd) and not L.go.isEnabled() and C.stop.isEnabled(),
+          (L.go.isEnabled(), C.stop.isEnabled()))
+    wrap.terminate()
+    wrap.wait(timeout=10)
+    w.ctx.refresh()
+    L.update_preview()
+    check("item 5: wrapper gone -> not running, Launch enabled", not w.ctx.is_running(wd) and L.go.isEnabled() and not C.stop.isEnabled())
+    import fcntl
+    lk = open(os.path.join(wd, "round.lock"), "a+")
+    fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    check("item 5: a held round.lock alone counts as running", w.ctx.is_running(wd) and prio.lock_held(wd))
+    lk.close()
+    check("item 5: lock released -> not running", not prio.lock_held(wd))
     if sleeper:
         w.ctx.s["extra_run_roots"] = [scope_out]
         w.ctx.refresh()
         C.select_dir(scope_out)
         C.detail()
-        app.processEvents()
+        wait_prio()
         check("Current tab: drop-down shows idle, enabled for a running unit", C.prio.currentText() == "idle" and C.prio.isEnabled(), C.prio_note.text())
         C.prio.setCurrentIndex(C.prio.findText("normal"))
         C.change_priority()
+        wait_prio()
         live = pm.live_weights(unit)
         check("Current tab: change applied LIVE to the unit (CPUWeight=100 IOWeight=100)", live.get("CPUWeight") == "100" and live.get("IOWeight") == "100", live)
-        pm.set_level(scope_out, "low")             # a change made elsewhere
+        open(os.path.join(scope_out, "priority"), "w").write("low\n")   # remembered differs from what the unit has live (normal)
         C.detail()
-        check("Current tab: a change made elsewhere shows on refresh", C.prio.currentText() == "low")
+        wait_prio()
+        check("item 6: live level (normal) is shown against the remembered one (low)", C.prio.currentText() == "normal" and "remembered" in C.prio_note.text() and "low" in C.prio_note.text(), (C.prio.currentText(), C.prio_note.text()))
         C.prio.setCurrentIndex(C.prio.findText("idle"))
         C.change_priority()
+        wait_prio()
         check("Current tab: back to idle on the unit", pm.live_weights(unit).get("CPUWeight") == "idle", pm.live_weights(unit))
+        # item 4: a unit file naming a scope that is not this out dir's own is never changed
+        alien = tempfile.mkdtemp(prefix="mfo-selftest-alien-")
+        open(os.path.join(alien, "unit"), "w").write(unit + "\n")
+        open(os.path.join(alien, "progress.log"), "w").write("")
+        w.ctx.s["extra_run_roots"] = [alien]
+        w.ctx.refresh()
+        C.select_dir(alien)
+        C.detail()
+        wait_prio()
+        check("item 4: another scope's unit file -> disabled with the reason", not C.prio.isEnabled() and "not the unit run_round.py names" in C.prio_note.text(), C.prio_note.text())
+        C.prio.setEnabled(True)
+        C.prio.setCurrentIndex(C.prio.findText("high"))
+        boxes.clear()
+        C.change_priority()
+        wait_prio()
+        check("item 4: a forced change on it is refused and the foreign unit keeps its weights", pm.live_weights(unit).get("CPUWeight") == "idle" and boxes and boxes[0][0] == "critical"
+              and not os.path.exists(os.path.join(alien, "priority")), (pm.live_weights(unit), boxes[:1]))
+        shutil.rmtree(alien, ignore_errors=True)
+        w.ctx.s["extra_run_roots"] = [scope_out]
+        w.ctx.refresh()
+        C.select_dir(scope_out)
+        C.detail()
+        wait_prio()
+        # item 6: a hung / missing systemctl is shown, not swallowed
+        real_get = pm.get
+
+        def hung(out):
+            raise subprocess.TimeoutExpired("systemctl", 10)
+        pm.get = hung
+        C.detail()
+        wait_prio()
+        check("item 6: SubprocessError from the read is shown", not C.prio.isEnabled() and "priority not read" in C.prio_note.text(), C.prio_note.text())
+        pm.get = real_get
+        C.detail()
+        wait_prio()
         if A.shot:
             w.tabs.setCurrentWidget(C)
             app.processEvents()
@@ -168,7 +314,15 @@ def main():
         subprocess.run(["systemctl", "--user", "stop", unit], capture_output=True)   # our own sleep scope only
         sleeper.wait(timeout=20)
         C.detail()
+        wait_prio()
         check("Current tab: disabled with a reason once the run is not running", not C.prio.isEnabled() and "not running" in C.prio_note.text(), C.prio_note.text())
+    # item 7: the wheel does nothing unless the drop-down has focus; Settings changes rebuild the list
+    L.prio.setCurrentIndex(0)
+    ev = QWheelEvent(QPointF(5, 5), QPointF(5, 5), QPoint(0, 0), QPoint(0, -120), Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase, False)
+    app.sendEvent(L.prio, ev)
+    check("item 7: wheel over an unfocused priority drop-down changes nothing", L.prio.currentText() == "idle" and not ev.isAccepted())
+    w.ctx.settings_changed.emit()
+    check("item 7: Settings change rebuilds the priority list", [L.prio.itemText(i) for i in range(L.prio.count())] == ["idle", "low", "normal", "high"])
     open(os.path.join(rem, "progress.log"), "w").write("")
     nu = tempfile.mkdtemp(prefix="mfo-selftest-nounit-")
     open(os.path.join(nu, "progress.log"), "w").write("")
@@ -176,6 +330,7 @@ def main():
     w.ctx.refresh()
     C.select_dir(nu)
     C.detail()
+    wait_prio()
     check("Current tab: disabled with a reason for a run without a unit", not C.prio.isEnabled() and "no priority unit" in C.prio_note.text(), C.prio_note.text())
     if A.shot:
         base = A.shot[:-4]
@@ -183,7 +338,7 @@ def main():
             w.tabs.setCurrentIndex(i)
             app.processEvents()
             w.grab().save("%s-%d-%s.png" % (base, i, w.tabs.tabText(i).split()[0].lower()))
-    for d in (scope_out, rem, nu):
+    for d in (scope_out, rem, nu, fresh, ref, wd):
         shutil.rmtree(d, ignore_errors=True)
     sys.exit(0 if ok else 1)
 
