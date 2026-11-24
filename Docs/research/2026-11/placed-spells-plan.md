@@ -12,7 +12,7 @@ from the code but nobody has watched it run (principle 5). NEW = read for this p
 
 - **L1 built.** `Prune::IsPlacement` (`iaus/Prune.h`) is the one rule, `SpellBook.cpp StaticOf` fills it. The lab (`Data.h Classify`) now calls
   `Prune::ClassifyNature`, `IsPlacement`, `StaticDrop` and the Magelight rule from extracted record bits (`extract_world.py placed_row`, joined by
-  `compile_world.py` as `placed`, `placedSchema` 1). A list without it is refused by the sim and by `tune_driver.py check_world`. Count test:
+  `compile_world.py` as `placed`, `placedSchema` 2). A list without it is refused by the sim and by `tune_driver.py check_world`. Count test:
   `tools/list_balance/book_census.py` (an independent derivation) and the `[spellbook]` lines of deck log 1123. Numbers in section 11.
 - **M1 built.** A summon is never a placement drop. No road change. F1 (the field look) is still the proof the claim fires.
 - **D2 ruled (marth: "Block them for now") and built.** The AI picks no Self, fire-and-forget, hostile AREA spell until M2 and M4 land
@@ -344,4 +344,15 @@ natures differ between `book_census.py` and the lab, after L1, after M1 and afte
 taught spell, 0 differ from L1's lab verdict. Blocked although their own flags say Buff (only the spawned hazard's spell is hostile): Tuxborn `MAG_Blizzard`,
 the Apocalypse circles, `WB_A100_TalonsOfNirn_Spell_PC`, `ArnimaCircleMaraSpellDark`. LoreRim: the same circles and Talons, `_LIP_Sanctuary`, `_K01_StormZone`,
 `TVR_Cleric_D050_Spell_ConsecratedGround`, `TVR_Cleric_D100_Spell_StormOfVengeance`, `TVR_Shadow_D100_Spell_DrainingMist`. A hostile effect on a townsman is a crime
-whatever the caster calls it. If a circle must stay, ask for `a_offense` on that arm of `IsSelfBlastPlacement`.
+whatever the caster calls it. The hazard arm cannot tell a circle from Blizzard: both are a benign Spawn
+Hazard whose spell carries hostile effects and no condition (Circle of Strength absorbs stamina, Glory and the Moons absorb, Talons of Nirn, Sanctuary and
+Consecrated Ground damage). A circle stays only if marth rules that a harm other than health is allowed, and Sanctuary / Consecrated Ground not even then.
+
+**Review F4 (2026-11-24, after the table above): the rule is per effect and reads the hostile FLAG** (`Prune::HostileAreaEffect`: hostile flag AND its own EFIT
+area, impact hazard or payload explosion; nature Offense / Control only, or a hostile hazard). Blocked: Vanilla 7 -> 6, Tuxborn 49 -> 42, LoreRim 62 -> 57.
+Released and candidates: Vanilla `Harmony`. Tuxborn `MAG_Harmony`, `XWB_R075_HallowedWeapon_Spell_PC`. LoreRim `WB_I000_DispelMagic_Spell_PC`,
+`WB_I075_Vanish_Spell_PC`, `XWB_R075_HallowedWeapon_Spell_PC`, `_BL_MassInhibition`. Released, then dropped as script-only: Tuxborn Dispel Magic, Vanish,
+Bone Storm, Entanglement, Devastating Corpse Explosion. LoreRim Bone Storm. Still blocked because conditions are not read: Bane of the Undead, Turn
+(undead only), `MAG_CircleofProtection` (a hostile flagged 50 ft effect beside the benign hazard).
+**Review F1:** a summon the claim road can never serve (`SummonClaimUnservedWhy`) is `Drop::Unanimated`: Tuxborn and Vanilla none, LoreRim 3 (FylgjaWind,
+FylgjaSun, Pride of Hirstaang), so LoreRim summons kept = 221. Conjure Staada is served (Spawn Scripted Ref has no caster row, so one row, Summon).

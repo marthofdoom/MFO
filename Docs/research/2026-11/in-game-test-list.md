@@ -434,4 +434,5 @@ One conjurer on Sentient AI with Conjure Familiar and Flame Atronach taught, one
 4. **Back to a cliff.** Stand him facing a wall: where does the creature land.
 5. **Thrall (both hands), gambit.** Report only: does it raise both hands and fire, or `NEVER FIRED`.
 6. **Self blast blocked.** Frost Nova / Fire Storm known, Sentient AI: `[spellbook] ... no IAUS candidate: hostile area around himself: blocked for now ...`, never picked, also in Whiterun with townsfolk near. A gambit rule still casts it. A tome of it in your pack: Classes tab, Teach spells, the row is grey with the reason.
+   Opener: before his own combat starts the line is `[buff] <id> summon <form> DEFERRED -- no combat controller ...`, then the claim. Never `UNANIMATED road 'summon-oneshot'` for an IAUS pick.
 7. **Self-test** `t2.spell_weighing`: PASS with `0 dropped as placement` and `0 kept`.
