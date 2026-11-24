@@ -14,6 +14,7 @@
 #include "iaus/Disengage.h"  // card G3: the pure questions the disengage gate asks
 #include "iaus/Reposition.h" // batch I: spell range, back-off, hidden step
 #include "iaus/ClassCurves.h" // per-class curve rows (ruling Q-class-curves)
+#include "cast/SeatRows.h"   // ABI v46 adoption: the seated-row rule, the need of a target, the zero-effect reading rules
 #include "iaus/LootNeed.h"    // IAUS looting: category + consumable scores (ClickUp 1dfcuabd18f)
 
 #include <limits>
@@ -2572,6 +2573,62 @@ void CastStutterRows() {
     Check(!SetTuningScalar(t, "t.occClaimRelease", -1.0f, &why), "a negative bound is refused");
 }
 
+
+// ABI v46 adoption (cast/SeatRows.h): the pure parts. A row is seated on its own bit AND TypeEquip, only from ABI 46; the need of a
+// target; the zero-effect reading rules.
+static void SeatRowRules() {
+    using namespace MFO::SeatRows;
+    const std::uint32_t all = (1u << 10) | (1u << 11) | (1u << 12) | (1u << 13) | kTypeEquipBit;
+    Check(RowSeated(46, all, Row::Stagger) && RowSeated(46, all, Row::Disarm) && RowSeated(46, all, Row::TargetEffect) && RowSeated(46, all, Row::Paralyze),
+          "v46: every hostile row is seated on its bit and TypeEquip");
+    Check(!RowSeated(45, all, Row::Disarm), "v46: below ABI 46 no row is seated, whatever the mask says (an older Harbinger)");
+    Check(!RowSeated(46, 0, Row::Stagger), "v46: an empty coverage seats nothing");
+    Check(!RowSeated(46, all & ~kTypeEquipBit, Row::Paralyze), "v46: the row bit without TypeEquip is not served");
+    Check(!RowSeated(46, (1u << 11) | kTypeEquipBit, Row::Stagger) && RowSeated(46, (1u << 11) | kTypeEquipBit, Row::Disarm),
+          "v46: a row is seated by its OWN bit only");
+    Check(NeedMet(Need::Weapon, true, false) && !NeedMet(Need::Weapon, false, true), "v46: Disarm needs a droppable right-hand weapon");
+    Check(NeedMet(Need::Summoned, false, true) && !NeedMet(Need::Summoned, true, false), "v46: Command needs a summoned target");
+    Check(NeedMet(Need::None, false, false), "v46: a row with no need always passes");
+    {   // the zero-effect reading (review F2 / F3)
+        ReadInput w; w.keyedDurationSec = 20.0f; w.ageSec = 3.0f;
+        Check(Judge(w) == Reading::Zero, "zero-effect: a lasting keyed effect absent after the settle time reads Zero");
+        w.landed = true;
+        Check(Judge(w) == Reading::Landed, "zero-effect: the effect on the target reads Landed");
+        w.landed = false; w.ageSec = 1.0f;
+        Check(Judge(w) == Reading::Inconclusive, "zero-effect: read before the settle time is inconclusive");
+        w.ageSec = 7.0f;
+        Check(Judge(w) == Reading::Inconclusive, "zero-effect: read after the upper age is inconclusive");
+        w.ageSec = 3.0f; w.keyedDurationSec = 3.5f;
+        Check(Judge(w) == Reading::Inconclusive, "zero-effect: a duration that may already have ended (age + margin) is inconclusive");
+        w.keyedDurationSec = 0.0f;
+        Check(Judge(w) == Reading::Inconclusive, "zero-effect: an instant keyed effect is never judged");
+        w.keyedDurationSec = 20.0f; w.concentration = true;
+        Check(Judge(w) == Reading::Inconclusive, "zero-effect: a concentration spell is never judged");
+        w.concentration = false; w.otherHostileInstant = true;
+        Check(Judge(w) == Reading::Inconclusive, "zero-effect: a spell with another hostile instant effect is never judged");
+        ReadInput d; d.disarm = true; d.ageSec = 3.0f; d.landed = false;
+        Check(Judge(d) == Reading::Zero, "zero-effect: Disarm with the weapon still in the right hand reads Zero (instant is fine for Disarm)");
+        d.hadSubject = false;
+        Check(Judge(d) == Reading::Inconclusive, "zero-effect: Disarm with no weapon seen at the fire reads nothing");
+        int z = 0;
+        z = Tally(z, Reading::Zero);
+        Check(z < kZerosToHold, "zero-effect: one zero reading holds nothing (a miss or one resist)");
+        z = Tally(z, Reading::Inconclusive);
+        Check(z == 1, "zero-effect: an inconclusive reading leaves the count");
+        z = Tally(z, Reading::Landed);
+        Check(z == 0, "zero-effect: a landed reading resets the count");
+        z = Tally(Tally(z, Reading::Zero), Reading::Zero);
+        Check(z >= kZerosToHold, "zero-effect: two consecutive zero readings hold the pair");
+    }
+    HoldLedger h;
+    Check(!h.Held(1, 2, 3), "zero-effect: nothing held at the start");
+    Check(h.Hold(1, 2, 3) && !h.Hold(1, 2, 3), "zero-effect: the first hold is new (logged once), the repeat is not");
+    Check(h.Held(1, 2, 3) && !h.Held(1, 2, 4) && !h.Held(1, 9, 3) && !h.Held(7, 2, 3), "zero-effect: the hold is per follower, spell AND target");
+    h.Hold(1, 2, 4);
+    h.ClearFollower(1);
+    Check(!h.Held(1, 2, 3) && h.Size(1) == 0, "zero-effect: the hold ends with the fight (the follower's pairs)");
+}
+
 int main() {
     std::printf("IAUS core harness (card I2). Curves and weights = DefaultTuning() (native/iaus/Catalogue.cpp).\n");
     MageLowMagickaFireWeak();
@@ -2600,6 +2657,7 @@ int main() {
     BuffPotions();
     ConsumablesWorth();
     LootNeedScores();
+    SeatRowRules();
     std::printf("\n%d check(s) failed\n", g_failed);
     return g_failed;
 }

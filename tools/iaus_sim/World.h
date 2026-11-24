@@ -351,11 +351,12 @@ namespace Sim {
     inline constexpr double kBurstKeepSec = 30.0;   // the longest window the lab honours for Tuning::grossWindowSec / maxHitWindowSec (4 and 8 s shipped; a larger --set value is read as this)
     // ONE HARD BURST FROM DOWN (CALIBRATED, iaus-sim-v4.md 9.2; was 0.30 from the 16 windows of one fight, iaus-sim-v3.md 15.5). The 90th
     // percentile of the field's health-loss WINDOWS on followers (a window = the drop between two worker samples around a foe's hit, 0.12 to
-    // 0.55 s: one burst, whatever it holds: several events, riders, a power attack, a spell) is 34.5 % of the target's health: 139 windows of
-    // five sessions, `calib_damage.py` FIELD HIT WINDOWS, the largest 100 %. It is a WINDOW statistic on purpose: the game's own read
-    // (Estimate::HitsToDown) is the largest burst inside Tuning::burstWindowSec, not one event. A recipient under this share of his health can
-    // be downed by the next such burst, and a heal takes about 1.8 s from the pick to landing (the Opus heal-timing diagnosis of 11-17, 1.0 to
-    // 2.9 s), so a heal that BEGINS under the line is late. Heal timing is judged by this (healLate%), not by the mean health at the heal.
+    // 0.55 s: one blow with whatever rides on it, a power attack, a spell) is 34.5 % of the target's health: 139 windows of five sessions,
+    // `calib_damage.py` FIELD HIT WINDOWS, the largest 100 %. The plain blows alone read 33.0 % (n = 27), so the line does not rest on what a
+    // window holds. It is the window figure because the game's own read (Estimate::HitsToDown) is the largest burst inside
+    // Tuning::burstWindowSec. A recipient under this share of his health can be downed by the next such burst, and a heal takes about 1.8 s
+    // from the pick to landing (the Opus heal-timing diagnosis of 11-17, 1.0 to 2.9 s), so a heal that BEGINS under the line is late. Heal
+    // timing is judged by this (healLate%), not by the mean health at the heal.
     // ASSUMPTION inside it: the target's maximum health is the largest health the session's hit lines show for him (no line prints it).
     inline constexpr float kOneHitLine = 0.35f;
 
@@ -810,20 +811,19 @@ namespace Sim {
         // one physical hit that has connected in time and space
         // THE FIELD'S HIT-SIZE SPREAD (SIM V3 `hittail`; CALIBRATED on a small sample, iaus-sim-v4.md 9.2; it replaces the table of iaus-sim-v3.md 15.5).
         // A foe's physical hit on the party is multiplied by one of these, drawn evenly. PER EVENT since sim v4 slice 1 (Opus review F-A of 610e2952:
-        // the first table was 16 health-loss WINDOWS of one fight, several of them holding two to five events, a power attack and enchantment
-        // riders, stacked on the lab's own power attacks and per-arrow hits). Now: `calib_damage.py <run dirs>` (its HITS section; the last line it
-        // prints is this row) over the five sessions that carry the fill probe's hit lines (_evidence/deck-run-1117c, 1117f, 1117g,
-        // 1118-adelinda, 1119-jesper): 139 windows with a loss, of which 27 hold ONE plain blow of ONE foe (the attacker's weapon sampled, every
-        // source of the blow that weapon, no power attack, sneak attack, bash, block or rider), of which 10 belong to an attacker kind with three
-        // or more such blows (4 arrows of the Ravager Archers, 6 blows of Silver Hand with one weapon). Each is the health it took before armor
-        // over the median of its kind, divided by the mean of the ten (1.260) so the mean is 1. MEAN 1 ON PURPOSE (15.4: at matched pressure the
-        // lab's damage per second agrees with the field; what differs is how it arrives).
-        // HONEST SIZE: ten blows, two kinds. The logs do not support more: lines are rate limited, most windows hold a rider or a second
-        // event, and a blow can land one sample late (calib_damage.py MIN_SHARE, an ASSUMPTION). What this table no longer carries, and the lab
-        // does not model yet: the damage of enchantment / poison riders on a foe's blow and the large foe spells (the field's biggest windows:
-        // a Bandit Chief's spell took 292 and 302). Those are the bursts of the field (window p90 34.5 % of the target's health, n = 139) and are
-        // listed in the design doc as a world gap, not folded into a multiplier.
-        static constexpr float kFieldHit[] = { 0.56f, 0.56f, 0.75f, 0.79f, 0.79f, 0.79f, 0.84f, 1.31f, 1.64f, 1.97f };
+        // the first table was 16 health-loss WINDOWS of one fight, with power attacks and enchantment riders among them, stacked on the lab's own
+        // power attacks). Now: `calib_damage.py <run dirs>` (its HITS section; the last line it prints is this row) over the five sessions that carry
+        // the fill probe's hit lines (_evidence/deck-run-1117c, 1117f, 1117g, 1118-adelinda, 1119-jesper): 139 windows with a loss, of which 27 are
+        // PLAIN (one plain weapon blow of one foe: the attacker's weapon sampled, every source of the blow that weapon, no power attack, sneak
+        // attack, bash, block or rider). Each plain blow is the health it took over the ATTACKER'S OWN printed estimate after armor (the line's
+        // hit x (1 - armor share)), so all 27 count whatever the attacker, then divided by the mean of the 27 (2.202: the game's estimate reads
+        // that far under a real plain blow) so the mean is 1. MEAN 1 ON PURPOSE (15.4: at matched pressure the lab's damage per second agrees
+        // with the field; what differs is how it arrives).
+        // HONEST SIZE: 27 blows, and part of the spread is the estimate's own error from one attacker to the next. What this table does NOT
+        // carry, each kept as its own figure by the tool (FIELD HIT KIND) for the day it is modelled: riders on a foe's blow (35 windows, 25 %),
+        // power attacks (15, which the lab models itself), foe spells (14, p90 71 % of the target's health), unsampled attackers (37). No window
+        // holds blows of several attackers or instants (0 of 139), so nothing here or in the lab models a multi-blow window.
+        static constexpr float kFieldHit[] = { 0.35f, 0.38f, 0.38f, 0.43f, 0.44f, 0.51f, 0.51f, 0.57f, 0.68f, 0.90f, 0.90f, 0.90f, 0.90f, 0.91f, 0.95f, 1.02f, 1.10f, 1.14f, 1.22f, 1.28f, 1.34f, 1.36f, 1.48f, 1.53f, 1.85f, 1.85f, 2.10f };
         static constexpr int kFieldHitN = static_cast<int>(sizeof(kFieldHit) / sizeof(kFieldHit[0]));
         float Physical(Body& a, Body& d, float dmg, bool power, bool ranged, bool fromIaus) {
             if (g_v3.hittail && a.role == Role::Foe && d.Party()) dmg *= kFieldHit[std::min(kFieldHitN - 1, static_cast<int>(VU(a, 37, 0.0f, static_cast<float>(kFieldHitN))))];

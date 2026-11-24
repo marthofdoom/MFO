@@ -2,7 +2,7 @@
 """iaus_sim/live/run_round.py -- one tune round, start to tuning files, STOP / RESUME SAFE, at idle priority by default.
 
 usage: run_round.py --out <round dir> [--priority idle|low|normal|high] [--bin <sim>] [--dest <dir>] [--label <text>] [--no-generate]
-                    [--unshipped] [--] <tune_driver.py arguments, without --bin and --out>
+                    [--unshipped] [--accept-log-mismatch] [--smoke-ok] [--new-args] [--new-bin] [--] <tune_driver.py arguments, without --bin and --out>
 
   example   run_round.py --out /mnt/.../tune-rounds/r3 -- --cells all --worlds builtin,LoreRim,Tuxborn,Vanilla
   STOP      SIGTERM or Ctrl-C to this process (or `systemctl --user stop $(cat <out>/unit)`): the whole round stops, the simulators too.
@@ -10,10 +10,13 @@ usage: run_round.py --out <round dir> [--priority idle|low|normal|high] [--bin <
             the result is the one an uninterrupted round gives (test_live.py proves it on a small round).
 
 WHAT IT DOES, IN ORDER
-  1. <out>/round.json holds the driver arguments of the round. A resume with OTHER arguments is refused (a round is one question):
-     use a new --out, or --new-args to say the change is meant.
-  2. The simulator: --bin, or <out>/bin/sim, built ONCE by tools/iaus_sim/run.sh (the cache is keyed by the binary's hash, so a round keeps
-     its binary; delete <out>/bin to rebuild on purpose).
+  0. ONE RUNNER PER ROUND. <out>/round.lock is held (flock) for the life of this process. A second run_round.py on the same --out exits
+     at once with code 3 and touches NOTHING: not round.json, not round-status.json, not the unit. This holds with and without systemd.
+  1. <out>/round.json holds the round's ORIGINAL driver arguments and the simulator's sha256. A resume with OTHER arguments is refused
+     (a round is one question): use a new --out, or --new-args to say the change is meant (the original is kept under "history").
+     A resume with ANOTHER SIMULATOR BINARY is refused too (--new-bin to mean it): the driver's cache is keyed by the binary's hash, so
+     nothing of the stopped round would be reused, and the driver then carries nothing over from the old summary (tune_driver.carry_over).
+  2. The simulator: --bin, or <out>/bin/sim, built ONCE by tools/iaus_sim/run.sh (delete <out>/bin to rebuild on purpose).
   3. A cache.jsonl that a kill cut off mid-line gets its newline, so the next result does not join the broken line.
   4. The driver and every simulator it starts run inside ONE systemd user scope, `mfo-tune-<out name>-<6 hex of its path>`, whose name is
      written to <out>/unit. Its priority is a LEVEL of priority.py (the one table): chosen by --priority, else the level remembered in
@@ -22,9 +25,11 @@ WHAT IT DOES, IN ORDER
      NO SYSTEMD USER MANAGER: the round runs at nice 19 in its own process group and says loudly that live change is off (<out>/unit = none).
   5. When the driver ends with 0: gen_class_files.py writes <dest> (default <out>/MFO_Tuning). Its refusals are this command's exit code 2.
   6. <out>/round-status.json: state (running / stopped / failed / done / refused), the unit, the level, times, the driver's exit code.
+     A round stopped from outside (`systemctl --user stop <unit>`, a kill of the driver) is recorded as stopped, like a signal to this process.
 
-Exit codes: 0 done, 2 the generator refused, 130 / 143 stopped by a signal, else the driver's.
+Exit codes: 0 done, 2 the generator refused, 3 another runner holds this round, 130 / 143 stopped, else the driver's.
 """
+import fcntl
 import hashlib
 import json
 import os
@@ -75,7 +80,7 @@ def split_args(argv):
         i = argv.index("--")
         return argv[:i], argv[i + 1:]
     own, i, takes = [], 0, {"--out", "--priority", "--bin", "--dest", "--label"}
-    flags = {"--no-generate", "--unshipped", "--new-args", "--accept-log-mismatch"}
+    flags = {"--no-generate", "--unshipped", "--new-args", "--new-bin", "--accept-log-mismatch", "--smoke-ok"}
     while i < len(argv):
         if argv[i] in takes and i + 1 < len(argv):
             own += argv[i:i + 2]
@@ -127,34 +132,65 @@ def main(argv):
     ap.add_argument("--unshipped", action="store_true")
     ap.add_argument("--accept-log-mismatch", action="store_true")
     ap.add_argument("--new-args", action="store_true", help="this resume changes the driver arguments on purpose")
+    ap.add_argument("--new-bin", action="store_true", help="this resume changes the simulator binary on purpose (nothing of the earlier run is reused)")
+    ap.add_argument("--smoke-ok", action="store_true", help="tests only: let the generator write files from a --smoke round, marked SMOKE")
     a = ap.parse_args(own)
     if any(x in ("--bin", "--out") or x.startswith(("--bin=", "--out=")) for x in drv):
         raise SystemExit("run_round: the driver arguments may not name --bin or --out (this command owns both)")
     out = os.path.abspath(a.out)
     os.makedirs(out, exist_ok=True)
 
-    # 1. one round = one set of driver arguments
-    rj = os.path.join(out, "round.json")
-    if os.path.exists(rj):
-        try:
-            old = json.load(open(rj)).get("driver_args")
-        except ValueError:
-            old = None
-        if old is not None and old != drv and not a.new_args:
-            raise SystemExit("run_round: %s was started with other driver arguments:\n  then: %s\n  now:  %s\nResume with the same command, use a new --out, or pass --new-args."
-                             % (out, " ".join(old), " ".join(drv)))
-    write_json(rj, {"driver_args": drv, "started_or_resumed": time.strftime("%Y-%m-%d %H:%M:%S")})
+    # 0. one runner per round: the lock is taken BEFORE anything is read or written, and kept until this process ends
+    lock = open(os.path.join(out, "round.lock"), "a+")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("run_round: another run_round.py holds this round (%s). Nothing was changed. Stop that one first (SIGTERM to it)." % out, file=sys.stderr)
+        return 3
+    lock.seek(0)
+    lock.truncate()
+    lock.write("%d\n" % os.getpid())
+    lock.flush()
 
     unit = unit_name(out)
     if P.unit_active(P.unit_of(out)) or P.unit_active(unit):
-        raise SystemExit("run_round: this round is already running (unit %s). Stop it first: systemctl --user stop %s" % (unit, unit))
+        raise SystemExit("run_round: this round's unit is still running with no runner (unit %s). Stop it first: systemctl --user stop %s" % (unit, unit))
 
     binary = ensure_bin(out, a.bin)
+    bin_sha = hashlib.sha256(open(binary, "rb").read()).hexdigest()[:16]
+
+    # 1. one round = one set of driver arguments and one simulator binary; the ORIGINAL arguments are kept
+    rj = os.path.join(out, "round.json")
+    rec = {}
+    if os.path.exists(rj):
+        try:
+            rec = json.load(open(rj))
+        except ValueError:
+            rec = {}
+    old, old_sha = rec.get("driver_args"), rec.get("bin_sha")
+    if old is not None and old != drv and not a.new_args:
+        raise SystemExit("run_round: %s was started with other driver arguments:\n  then: %s\n  now:  %s\nResume with the same command, use a new --out, or pass --new-args."
+                         % (out, " ".join(old), " ".join(drv)))
+    if old_sha and old_sha != bin_sha and not a.new_bin:
+        raise SystemExit("run_round: %s was started with another simulator binary (sha256 %s, now %s). Its cached results cannot be reused. "
+                         "Resume with the same binary, use a new --out, or pass --new-bin." % (out, old_sha, bin_sha))
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    hist = rec.get("history", [])
+    if old is None:
+        rec = {"driver_args": drv, "bin_sha": bin_sha, "started": now, "history": hist}
+    else:
+        if old != drv or (old_sha and old_sha != bin_sha):
+            hist.append({"at": now, "driver_args": drv, "bin_sha": bin_sha, "why": "--new-args" if old != drv else "--new-bin"})
+        rec.update({"history": hist, "last_resumed": now, "bin_sha_now": bin_sha, "driver_args_now": drv})
+        rec.setdefault("bin_sha", bin_sha)
+    write_json(rj, rec)
+
     fix_cache_tail(out)
 
     # 4. the level: asked, else remembered, else the default
     level = a.priority or P.get(out)["level"]
-    cmd = [sys.executable, os.path.join(SIM_DIR, "tune_driver.py"), "--bin", binary, "--out", out] + drv
+    # MFO_LIVE_TEST_DRIVER: test_live.py's stand-in for the driver (the lock, stop and bookkeeping tests need no simulator)
+    cmd = [sys.executable, os.environ.get("MFO_LIVE_TEST_DRIVER") or os.path.join(SIM_DIR, "tune_driver.py"), "--bin", binary, "--out", out] + drv
     use_systemd = P.have_systemd()
     if use_systemd:
         with open(os.path.join(out, "unit"), "w") as f:
@@ -199,6 +235,11 @@ def main(argv):
         status(out, state="stopped", driver_exit=rc, stopped=time.strftime("%Y-%m-%d %H:%M:%S"))
         say("STOPPED. Resume with the same command.")
         return 128 + stopped["sig"]
+    if rc in (-signal.SIGTERM, -signal.SIGINT, -signal.SIGKILL, 128 + signal.SIGTERM, 128 + signal.SIGINT, 128 + signal.SIGKILL):
+        # stopped from OUTSIDE this process: `systemctl --user stop <unit>` or a kill of the driver. A stop, not a failure.
+        status(out, state="stopped", driver_exit=rc, stopped=time.strftime("%Y-%m-%d %H:%M:%S"), stopped_by="outside (systemctl stop or a kill of the driver)")
+        say("STOPPED from outside (the unit was stopped or the driver was killed). Resume with the same command.")
+        return 128 + signal.SIGTERM
     if rc != 0:
         status(out, state="failed", driver_exit=rc)
         say("the driver ended with exit %d (its message is above; <out>/progress.log has the last stage). Fix the cause and run the same command: finished results are kept." % rc)
@@ -208,7 +249,7 @@ def main(argv):
         say("DONE (no tuning files asked: --no-generate)")
         return 0
     gen = [sys.executable, os.path.join(HERE, "gen_class_files.py"), "--out", out] + (["--dest", a.dest] if a.dest else []) + (["--label", a.label] if a.label else []) \
-        + (["--unshipped"] if a.unshipped else []) + (["--accept-log-mismatch"] if a.accept_log_mismatch else [])
+        + (["--unshipped"] if a.unshipped else []) + (["--accept-log-mismatch"] if a.accept_log_mismatch else []) + (["--smoke-ok"] if a.smoke_ok else [])
     g = subprocess.run(gen)
     status(out, state="done" if g.returncode == 0 else "refused", driver_exit=0, generated=a.dest or os.path.join(out, "MFO_Tuning") if g.returncode == 0 else None, generator_exit=g.returncode)
     say("DONE" if g.returncode == 0 else "the round finished and the generator REFUSED to write tuning files (its reason is above)")

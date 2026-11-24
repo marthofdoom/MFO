@@ -1048,11 +1048,20 @@ def final_curves(with_withheld=False):
     out = []
     for cls, r in SUMMARY["stages"].get("classes", {}).items():
         out += r.get("kept", [])
+    # ONE VALUE PER KNOB. The rejudge stage and the classes stage can both accept a value for the same knob of one class (the default
+    # rejudge spec warrior:6.32.b is also a classes knob). The classes stage searched the knob's whole range after it, so ITS value is the
+    # table's and the rejudged one is dropped. The gap stage's search never takes a knob the table already holds (gap_search `taken`),
+    # and a value it does hold for a taken knob (an older summary) is dropped the same way.
+    have = {k.split("=")[0] for k in out}
     for r in SUMMARY["stages"].get("rejudge", []):
-        if r.get("accepted") and r["spec"] not in out:
+        if r.get("accepted") and r["spec"].split("=")[0] not in have:
             out.append(r["spec"])
+            have.add(r["spec"].split("=")[0])
     for cls, v in SUMMARY["stages"].get("gap", {}).get("kept", {}).items():   # the gap stage's (a) search
-        out += [k for k in v if k not in out]
+        for k in v:
+            if k.split("=")[0] not in have:
+                out.append(k)
+                have.add(k.split("=")[0])
     if not with_withheld:
         wh = set(SUMMARY.get("withheld", []))
         out = [k for k in out if k not in wh]
@@ -2160,22 +2169,45 @@ def replay(path):
     return 0
 
 
-def carry_over(old, cells_now):
+def rerun_after(name, done, rest):
+    """The stages that must run AGAIN after stage `name` finished, given the stages `done` so far and those still to come (`rest`).
+    -> (stages, why).
+      recalib withheld a value after the joint gate graded the larger table: joint, on the table without it, in this same run, so the
+        round ends with a verdict on exactly the table it would ship and the caller never changes its arguments (backlog 2026-11-19).
+      the gap search moved the table (G2, review of 7e883a9a): a stage that reads the final table and already ran describes the table
+        from before it (the default order puts gap first, so this is a custom order only)."""
+    if name == "recalib" and SUMMARY.get("withheld") and "joint" in done and "joint" not in rest:
+        return ["joint"], "recalib withheld %d value(s), the table changed" % len(SUMMARY["withheld"])
+    if name == "gap" and SUMMARY["stages"].get("gap", {}).get("search_changed"):
+        again = [x for x in ("floor", "rating", "recalib") if x in done and x not in rest]
+        return again, "gap search moved the table"
+    return [], ""
+
+
+def carry_over(old, cells_now, bin_sha_now=None):
     """What a resumed or one-stage run takes from the summary.json already in --out: every stage's result, the decisions, the withheld
-    list. EXCEPT when that summary is of a run with ANOTHER CELL SET (--cells 15 against all; a summary from before the driver recorded
+    list. NOTHING when that summary was made by ANOTHER SIMULATOR BINARY (config.bin_sha, recorded since sim v4 slice 1): every number in
+    it is another world's, and the cache (keyed by the binary's hash) replays none of it, so the round starts clean and says so. A
+    summary with no recorded hash (an older driver) is carried with a warning. EXCEPT also when that summary is of a run with ANOTHER CELL SET (--cells 15 against all; a summary from before the driver recorded
     its cells counts as 15): its joint and recalib stages graded a table of other classes, so both are dropped with the withheld list,
     and this run decides them again. (Round 2 of 11-19: a summary seeded from a 15-cell round carried recalib rows of 15 classes into a
     38-cell round.) Returns the lines to log."""
+    lines = []
+    was_bin = old.get("config", {}).get("bin_sha")
+    if bin_sha_now and was_bin and was_bin != bin_sha_now:
+        return ["RESUME: the summary in --out was made by another simulator binary (sha256 %s, now %s): NOTHING is carried over, every stage of this run decides again (its cached results belong to the other binary too)" % (was_bin[:12], bin_sha_now[:12])]
+    if bin_sha_now and not was_bin:
+        lines.append("RESUME: the summary in --out records no simulator hash (an older driver): carried over, UNCHECKED against this binary")
     SUMMARY["stages"], SUMMARY["open_decisions"] = old.get("stages", {}), [d for d in old.get("open_decisions", []) if d.get("stage")]
     SUMMARY["auto_decisions"], SUMMARY["withheld"] = [d for d in old.get("auto_decisions", []) if d.get("stage")], old.get("withheld", [])
     was = old.get("config", {}).get("cells", "15")
     if was == cells_now:
-        return []
+        return lines
     dropped = [k for k in ("joint", "recalib") if SUMMARY["stages"].pop(k, None) is not None]
     wh, SUMMARY["withheld"] = SUMMARY["withheld"], []
     for key in ("open_decisions", "auto_decisions"):
         SUMMARY[key] = [d for d in SUMMARY[key] if d.get("stage") not in ("joint", "recalib")]
-    return ["RESUME: the summary in --out is of a --cells %s run and this is --cells %s: its %s stage result(s) and %d withheld value(s) describe another table and are DROPPED; run joint and recalib again in this round"
+    return lines + ["RESUME: the summary in --out is of a --cells %s run and this is --cells %s: its %s stage result(s) and %d withheld value(s) describe another table and are DROPPED; run joint and recalib again in this round"
             % (was, cells_now, " and ".join(dropped) or "no joint / recalib", len(wh))]
 
 
@@ -2216,6 +2248,7 @@ def main():
         if "--parked" not in A.sim_flags.split():
             A.sim_flags = (A.sim_flags + " --parked").strip()
     A.bin = os.path.abspath(A.bin)
+    bin_sha = sha(A.bin)   # of the simulator itself, before any --sim-flags wrapper
     CFG = SMOKE if A.smoke else FULL
     os.makedirs(A.out, exist_ok=True)
     sim_flags = world_flags(A.world, A.sim_flags)   # sim v3: the world is ALWAYS said (the binary's own default is v3)
@@ -2237,11 +2270,11 @@ def main():
         try:
             old = json.load(open(prev))
             if old.get("config", {}).get("smoke") == A.smoke:
-                for line in carry_over(old, A.cells):
+                for line in carry_over(old, A.cells, bin_sha):
                     log(line)
         except ValueError:
             pass   # cut off by a kill: every stage it held replays from the cache
-    SUMMARY["config"] = dict(CFG, smoke=A.smoke, worlds=A.worlds, bin=A.bin, sim_flags=A.sim_flags, world=A.world, knobs=A.knobs, cells=A.cells, cell_list=list(CELLS))
+    SUMMARY["config"] = dict(CFG, smoke=A.smoke, worlds=A.worlds, bin=A.bin, sim_flags=A.sim_flags, world=A.world, knobs=A.knobs, cells=A.cells, cell_list=list(CELLS), bin_sha=bin_sha, classes=A.classes, stages=A.stages)
     log("START%s stages=%s worlds=%s cache=%d results" % (" (SMOKE)" if A.smoke else "", A.stages, ",".join(A.worlds), len(CACHE)))
     stages = {"prep": stage_prep, "rejudge": stage_rejudge, "classes": stage_classes, "joint": stage_joint, "edge": stage_edge, "globals": stage_globals, "consts": stage_consts, "floor": stage_floor, "rating": stage_rating, "recalib": stage_recalib, "gap": stage_gap, "logistics": stage_logistics, "worth": stage_worth, "loot": stage_loot}
     order = A.stages.split(",")
@@ -2266,16 +2299,10 @@ def main():
         save_summary()
         log("STAGE %s done (%.0f s; seed runs %d, %d of them served from the cache = %.1f%%)" % (name, cs["wall_s"], cs["seed_runs"], cs["from_cache"], 100.0 * cs["from_cache"] / max(1, cs["seed_runs"])))
         done.append(name)
-        if name == "gap" and SUMMARY["stages"].get("gap", {}).get("search_changed"):
-            # G2 (review of 7e883a9a): the (a) search moved the table, so a stage that reads the final table and already ran in this
-            # order describes the table from before it: run it again (the default order puts gap first, so this is a custom order only).
-            again = [x for x in ("floor", "rating", "recalib") if x in done and x not in order[i:]]
-            if again:
-                log("gap search moved the table: %s run again after it" % ",".join(again))
-                order[i:i] = again
-    j = SUMMARY["stages"].get("joint", {}).get("verdict", "")
-    # the table ships only when the joint gate PASSED on exactly this table: a joint that did not run, or ran on a table that a later stage
-    # changed (the gap search's whole-set drop, recalib's withheld values), leaves ship.table empty with the reason
+        again, why = rerun_after(name, done, order[i:])
+        if again:
+            log("%s: %s run again after it" % (why, ",".join(again)))
+            order[i:i] = again
     SUMMARY["ship"] = ship_state()
     save_summary()
     EMIT.shutdown(wait=True)

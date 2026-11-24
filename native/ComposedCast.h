@@ -412,6 +412,11 @@ namespace MFO::ComposedCast {
     bool ObservedFiring(RE::FormID a_follower, std::int32_t a_hand, RE::FormID a_spell,
                         std::uint32_t a_withinMs);
 
+    // Milliseconds since the watch on THIS hand last OBSERVED `a_spell` fire, -1 when it never did (the same slot and spell checks as
+    // ObservedFiring). The timestamp itself: a caller that must tell one fire from the next (cast/NoEffect.cpp, ABI v46 adoption)
+    // compares it, because the `observed` latch is not cleared between claims. Worker-serial, no lock.
+    std::int64_t ObservedAgeMs(RE::FormID a_follower, std::int32_t a_hand, RE::FormID a_spell);
+
     // kPreLoadGame / revert -- beside CastBounds::Reset(). Drops this module's
     // own silent-cast diagnostic watch map (APMFBridge::ClearTransientState
     // drops the claim; CastBounds::Reset drops the bound); kept as the one seam
