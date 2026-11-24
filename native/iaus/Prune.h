@@ -53,6 +53,13 @@ namespace MFO::Iaus::Prune {
         return a_hazardDropsToGround && a_concentration && !a_selfDelivery;
     }
 
+    // INTERIM (MFO-B865 review F1): a Self, non-concentration OFFENSE spell with an impact hazard (Fire Storm) was Wall -> Placement before the shape
+    // change; as SelfAoE it would be IAUS-kept and cast on the unanimated self-stream road (CastSelfDirect). Keep dropping exactly that set until the
+    // animated self-blast road exists (Docs/REVIEW-BACKLOG.md "self-delivered AoE OFFENSE spell", Frost Nova). Delete this rule when that road lands.
+    [[nodiscard]] inline bool IsSelfBlastPlacement(bool a_selfDelivery, bool a_concentration, bool a_offense, bool a_impactHazard) {
+        return a_selfDelivery && !a_concentration && a_offense && a_impactHazard;
+    }
+
     // Order matters: a summon / ward is its own family whatever ClassifySpell calls it; a control archetype is
     // Control even when the record also flags it hostile; a self cloak harms whoever stands near but is CAST on
     // himself, so it is a (melee) buff; an Offense or Heal kind is a nature the RECORD states

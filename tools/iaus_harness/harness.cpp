@@ -1737,6 +1737,13 @@ namespace {
             Check(Prune::StaticDrop(in) == Prune::Drop::Keep, "B865: a bolt with an impact hazard is kept");
             in.targetLocation = true;   // a rune: delivery TargetLocation, not read from the impact hazard
             Check(Prune::StaticDrop(in) == Prune::Drop::Placement, "B865: a rune is unchanged");
+            Check(Prune::IsSelfBlastPlacement(true, false, true, true), "B865 F1: a Self FF Offense spell with an impact hazard (Fire Storm) is still dropped (interim)");
+            Check(!Prune::IsSelfBlastPlacement(true, false, true, false), "B865 F1: a Self blast with no impact hazard is not covered by the interim drop");
+            Check(!Prune::IsSelfBlastPlacement(true, true, true, true), "B865 F1: a Self concentration spell is not covered");
+            Check(!Prune::IsSelfBlastPlacement(true, false, false, true), "B865 F1: a non-Offense Self spell is not dropped");
+            Check(!Prune::IsSelfBlastPlacement(false, false, true, true), "B865 F1: an aimed bolt with an impact hazard is kept");
+            in.targetLocation = Prune::IsSelfBlastPlacement(true, false, true, true);
+            Check(Prune::StaticDrop(in) == Prune::Drop::Placement, "B865 F1: the Self blast is dropped as Placement");
         }
         // ---- item 4: the block family ----
         ClassGate knight; knight.resolved = true; knight.treeOn = true; knight.block = true;
@@ -1797,13 +1804,16 @@ namespace {
         }
         // ---- item 1: the spell range ----
         SpellEntry firebolt = Spell("Firebolt", 0x12FCD, Prune::Nature::Offense, 40, 2000, Prune::kAvResistFire);
-        SpellEntry flames = Spell("Flames", 0x12FCE, Prune::Nature::Offense, 5, 600, Prune::kAvResistFire); flames.concentration = true;
+        SpellEntry flames = Spell("Flames", 0x12FCE, Prune::Nature::Offense, 5, 300, Prune::kAvResistFire); flames.concentration = true;   // reach under StrikeDistance (400)
+        SpellEntry frostbite = Spell("Frostbite", 0x12FCF + 0x20, Prune::Nature::Offense, 5, 600, Prune::kAvResistFrost); frostbite.concentration = true;   // reach past it (marth 11-13, aaacee6e)
         SpellEntry touch = Spell("Touch", 0x12FCF, Prune::Nature::Offense, 30, 0, Prune::kAvResistFire); touch.touch = true;
         SpellEntry blast = Spell("Blast", 0x12FD1, Prune::Nature::Offense, 30, 0, Prune::kAvResistFire); blast.selfDelivery = true; blast.areaUnits = 500;
         const Reposition::Range rf = Reposition::SpellRange(firebolt, 200.0f);
         Check(std::fabs(rf.desired - 1800.0f) < 0.01f && std::fabs(rf.minimum - 720.0f) < 0.01f, "H4: aimed = the furthest range x0.9, minimum 0.4 of that");
         const Reposition::Range rc = Reposition::SpellRange(flames, 200.0f);
-        Check(std::fabs(rc.desired - 480.0f) < 0.01f && rc.minimum == 0.0f, "H4: a concentration (cone) spell = its range x0.8, no minimum");
+        Check(std::fabs(rc.desired - 240.0f) < 0.01f && rc.minimum == 0.0f, "H4: a short concentration (cone) spell (reach under the strike distance) = its range x0.8, no minimum");
+        const Reposition::Range rfb = Reposition::SpellRange(frostbite, 200.0f);
+        Check(std::fabs(rfb.desired - 480.0f) < 0.01f && std::fabs(rfb.minimum - 192.0f) < 0.01f, "H4: a concentration spell that out-ranges melee (Frostbite) = its range x0.8 with the 0.4 minimum");
         const Reposition::Range rt = Reposition::SpellRange(touch, 200.0f);
         Check(std::fabs(rt.desired - 160.0f) < 0.01f && rt.minimum == 0.0f, "H4: touch = the melee reach x0.8, no minimum");
         Check(std::fabs(Reposition::SpellRange(blast, 200.0f).desired - 400.0f) < 0.01f, "H4: a Self-delivered blast = its area x0.8");
@@ -1836,7 +1846,7 @@ namespace {
             Check(!Reposition::RangeToHold(caster(3000, firebolt), noCast, c), "H4: a class that does not cast never closes on a spell range");
             // Q-I-2: the shortest range of one delivery type over BOTH hands; touch + distance = the distance range unless touch is the better cast
             Snapshot two = caster(3000, firebolt); two.book.entries = { firebolt, flames }; two.equippedSpellOther = flames.form;
-            Check(Reposition::RangeToHold(two, mage, c) && std::fabs(c.radius - 480.0f) < 0.01f, "Q-I-2: two distance spells (aimed 1800, stream 480) -> the shortest range");
+            Check(Reposition::RangeToHold(two, mage, c) && std::fabs(c.radius - 240.0f) < 0.01f, "Q-I-2: two distance spells (aimed 1800, stream 240) -> the shortest range");
             Snapshot mix = caster(3000, firebolt); mix.book.entries = { firebolt, touch }; mix.equippedSpellOther = touch.form;
             Check(Reposition::RangeToHold(mix, mage, c) && std::fabs(c.radius - 1800.0f) < 0.01f, "Q-I-2: touch + distance, the touch spell not the chosen cast -> the distance spell's range");
             mix.chosenCast = touch.form;
