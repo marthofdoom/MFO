@@ -9,6 +9,6 @@ OUT="${TMPDIR:-/tmp}/rank_equiv"
 "${CXX:-g++}" -std=c++23 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wno-sign-conversion \
     -I "$ROOT/native" \
     "$ROOT/native/iaus/Curves.cpp" "$ROOT/native/iaus/Catalogue.cpp" "$ROOT/native/iaus/Score.cpp" \
-    "$ROOT/native/iaus/Decide.cpp" "$ROOT/native/iaus/Explain.cpp" \
+    "$ROOT/native/iaus/Decide.cpp" "$ROOT/native/iaus/Explain.cpp" "$ROOT/native/iaus/SpellWorth.cpp" \
     "$ROOT/tools/rank_equiv/test.cpp" -o "$OUT"
 exec "$OUT"

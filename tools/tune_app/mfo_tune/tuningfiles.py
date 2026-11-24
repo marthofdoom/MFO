@@ -2,7 +2,7 @@
 
 The validator here MIRRORS the in-game loader (native/iaus/TuningFile.cpp): it accepts what the loader applies and rejects what it rejects.
   <class>.txt   one spec per line, '#' starts a comment:  [<class>:]<path>=<v>   (a different class prefix is rejected)
-                path = <family>.<cons>.<a|b|floor|zeroAbove|zeroBelow|w|px0-5|py0-5> | family.<family> | scalar.<name> | equip.crossover
+                path = <family>.<cons>.<a|b|floor|zeroAbove|zeroBelow|w|px0-5|py0-5> | family.<family> | scalar.<name> | equip.crossover | spot.<kind>
                 family / cons = an index or a Name() (names.py)
   shared.txt    comma list of  t.<scalar> | sw.<spell-worth knob> | w.<family idx>.<cons idx> | aw.<family idx> | c.<cons idx>.a|b|floor  = <v>; one bad entry rejects the line
   potions.txt   worth.<knob>=<v>        looting.txt   loot.<knob>=<v>
@@ -25,6 +25,9 @@ CURVE_PARAMS = ("a", "b", "floor", "zeroAbove", "zeroBelow")
 T_SCALARS = ("t.momentum", "t.postureMomentum", "t.preempt", "t.actFloor", "t.softCd", "t.occHold", "t.kite", "t.blockBase", "t.tauntCd", "t.powerCd",
              "t.disengageCd", "t.noHealDrink", "t.noHealRetreat", "t.emergencyHpHigh", "t.emergencyHpLow", "t.offClassBase", "t.groundCd", "t.blockCd",
              "t.bashCd", "t.backOffCd", "t.stepCd", "t.regroupCd", "t.perkArmor", "t.perkWeapon", "t.unmeasuredDamage",
+             "t.moveDecisionSec", "t.spotPinKinds", "t.spotMomentum", "t.spotPreempt", "t.spotRadius", "t.spotSplitArea", "t.spotEyeU", "t.spotHighU",
+             "t.spotPortalU", "t.spotPortalStandU", "t.spotExitU", "t.spotPeelU", "t.spotArriveU", "t.spotFactMoveU", "t.spotFactMaxAgeSec",
+             "t.spotKeptAgeSec", "t.spotUnknownExposure",
              "t.concChannelSec", "t.handRedrawSec", "t.spellCastSec", "t.fireLineKeepSec",
              "t.occClaimRelease", "t.offApproachBackoff", "t.offApproachDropCap", "t.sharedRadiusMargin", "t.preemptSettle",
              "t.dyingSelfHp", "t.dyingAllyHp", "t.dyingHitsToDown", "t.urgencyHitsDiv", "t.burstWindowSec", "t.grossWindowSec", "t.maxHitWindowSec")
@@ -126,12 +129,16 @@ def _class_spec(path, v):
         if _index_of(path[7:], names.FAMILIES) < 0 or not v > 0:
             return "unknown family or bad weight (family.<family>=<v>, v > 0)"
         return None
+    if path.startswith("spot."):
+        if _index_of(path[5:], names.SPOT_KINDS) < 0 or not v > 0:
+            return "unknown spot kind or bad weight (spot.<kind>=<v>, v > 0)"
+        return None
     if path == "equip.crossover":
         return None
     d1 = path.find(".")
     d2 = path.find(".", d1 + 1) if d1 >= 0 else -1
     if d2 < 0:
-        return "bad path (<family>.<cons>.<param> | scalar.<name> | family.<family> | equip.crossover)"
+        return "bad path (<family>.<cons>.<param> | scalar.<name> | family.<family> | equip.crossover | spot.<kind>)"
     if _index_of(path[:d1], names.FAMILIES) < 0 or _index_of(path[d1 + 1:d2], names.CONS) < 0:
         return "unknown family or consideration"
     param = path[d2 + 1:]
