@@ -309,11 +309,13 @@ namespace Sim {
         "loot-room", "loot-backs", "loot-freeze", "loot-gate", "loot-town", "loot-shop" };   // batch L: nopool, so no ordinary fight draws them and the pool hash is what it was
     inline bool LoadFixtures(EnvPool& P) { bool ok = true; for (const char* n : kFixtureNames) ok = P.Add(g_envDir + "/" + n + ".mfoenv", true) && ok; return ok; }
     // index.json of the library: every environment of a set (optionally one class). Returns the number loaded.
-    inline int LoadSet(EnvPool& P, const std::string& set, const std::string& cls) {
+    // `<set>/heldout` (or `all/heldout`): the set's HELD-OUT places instead (tools/envextract: disjoint from every library place of every set).
+    inline int LoadSet(EnvPool& P, const std::string& setArg, const std::string& cls) {
+        const bool held = setArg.size() > 8 && setArg.compare(setArg.size() - 8, 8, "/heldout") == 0; const std::string set = held ? setArg.substr(0, setArg.size() - 8) : setArg;
         const char* home = std::getenv("HOME"); const std::string root = std::string(std::getenv("MFO_ENV_CACHE") ? std::getenv("MFO_ENV_CACHE") : (std::string(home ? home : ".") + "/.cache/mfo-env"));
         std::ifstream in(root + "/index.json"); if (!in) return -1; std::stringstream ss; ss << in.rdbuf(); const std::string s = ss.str(); JP jp{ s }; const J j = jp.val();
         int n = 0; for (const auto& kv : j["sets"].o) { if (set != "all" && kv.first != set) continue;
-            for (const J& e : kv.second["envs"].a) { if (!cls.empty() && e["class"].s != cls) continue; if (P.Add(root + "/" + e["file"].s, true)) ++n; } }
+            for (const J& e : kv.second[held ? "heldout" : "envs"].a) { if (!cls.empty() && e["class"].s != cls) continue; if (P.Add(root + "/" + e["file"].s, true)) ++n; } }
         return n;
     }
 

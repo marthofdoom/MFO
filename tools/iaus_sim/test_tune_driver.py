@@ -308,9 +308,28 @@ class NewTables(unittest.TestCase):   # tune 2.11.1: one knob = one native membe
         self.assertEqual({n.split(".", 1)[1] for n, _, _ in T.WORTH_KNOBS}, self.fields("ConsumableWorth.h", "WorthTable"))
 
     def test_loot_knobs_cover_loottuning(self):
-        names = {n.split(".", 1)[1] for n, _, _ in T.LOOT_KNOBS} | {n.split(".", 1)[1] for n in T.LOOT_NOT_SEARCHED}
+        names = {n.split(".", 1)[1] for n, _, _ in T.LOOT_KNOBS + T.LOOT_EPISODE_KNOBS} | {n.split(".", 1)[1] for n in T.LOOT_NOT_SEARCHED}
         self.assertEqual(names, self.fields("LootNeed.h", "LootTuning"))
-        self.assertFalse({n for n, _, _ in T.LOOT_KNOBS} & set(T.LOOT_NOT_SEARCHED))
+        self.assertFalse({n for n, _, _ in T.LOOT_KNOBS + T.LOOT_EPISODE_KNOBS} & set(T.LOOT_NOT_SEARCHED))
+        self.assertEqual(len(T.LOOT_EPISODE_KNOBS), 12)   # sim v4 batch L: the twelve rows the stops lab could not see
+        tune_h = open(os.path.join(os.path.dirname(os.path.abspath(T.__file__)), "Tune.h"), encoding="utf-8").read()
+        for n, _, _ in T.LOOT_KNOBS + T.LOOT_EPISODE_KNOBS:
+            self.assertIn('"%s"' % n, tune_h, n)   # every searched row is one `--set` reaches (Tune.h kLootKnobsF / kLootKnobsI)
+
+    def test_loot_episode_command_and_key(self):
+        d = tempfile.mkdtemp()
+        T.A = types.SimpleNamespace(bin=os.path.join(d, "sim"), out=d, builtin_worth=None, loot_places="")
+        open(T.A.bin, "w").write("x")
+        T.CFG = dict(T.FULL)
+        self.assertEqual(T.sim_cmd("builtin", "epi:melee,mage", "g3", [], "loot.gateConeDeg=30.0", None)[1:],
+                         ["--no-json", "--threads", "1", "--loot-report", "6", "--loot-score", "--classes", "melee,mage", "--set", "loot.gateConeDeg=30.0"])
+        k0 = T.key_of("builtin", "epi:melee", "g3", [], None, None)
+        T.A.loot_places = "Tuxborn"
+        cmd = T.sim_cmd("builtin", "epi:melee", "g3", [], None, None)
+        self.assertEqual(cmd[cmd.index("--env-set") + 1], "Tuxborn")
+        self.assertTrue(cmd[cmd.index("--loot-list") + 1].endswith("Tuxborn.loot.json"))
+        self.assertEqual(T.loot_world_args(True)[1], "Tuxborn/heldout")
+        self.assertNotEqual(k0, T.key_of("builtin", "epi:melee", "g3", [], None, None))   # another set of places is another cache key
 
     def test_values_in_range(self):
         shares = {"dangerSpan", "magickaWinLine", "staminaWinLine", "winNeed", "wealthFrac", "restoreCostScale", "restoreUseWeight", "floor", "foodMinGain",

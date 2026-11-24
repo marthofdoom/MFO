@@ -65,7 +65,7 @@ namespace Sim::Loot {
         float maxSlots = 4.0f, candCap = 48.0f, stuckHits = 2.0f, idleTicks = 4.0f, stallStrikes = 2.0f;
         // MODEL (header)
         float followU = 400.0f;        // the follow package: past this from the player he walks back
-        float driftShare = 0.28f;      // CALIBRATED (field 11-17c, d, g, 11-18: 12 'ARRIVED but he is N u away' of 43 ARRIVED ends): after a leg ended ARRIVED the follow package takes him back this often before MFO's tick reads the arrival. Otherwise the claim holds him there
+        float driftShare = 0.07f;      // CALIBRATED per LEG, never per arrival (marth's method constraint): the four field sessions print 12 'ARRIVED but he is N u away' on 277 legs asked for (4.3 percent). After a leg ended ARRIVED the follow package takes him back this often before MFO's tick reads the arrival, otherwise the claim holds him at the ref. At 0.07 the lab prints the line on about 4 percent of its legs (14.8)
         float carryCap = Logi::kCarryCap;
         // THE RULES OF OLDER BUILDS, for the scenarios that must fail on them:
         float corpseBar = 1.0f;        // 0 = before the party-wide guard bar on a corpse (field 11-17 L1)
@@ -204,7 +204,7 @@ namespace Sim::Loot {
         Claim claim; double transientUntil = -1, stickyUntil = -1; int strikes = 0, pathFails = 0; const char* failWhy = "";
         double barSince = -1, barAsk = -1; bool barred = false;   // TheftGate.cpp BarCorpse
         // the lab's own record (metrics)
-        int dispatches = 0, arrivals = 0, takes = 0; bool playerOpen = false; std::uint8_t scanned = 0, island = 0;
+        int dispatches = 0, arrivals = 0, takes = 0; bool playerOpen = false; std::uint8_t scanned = 0, island = 0; double capAt = -1e9;
     };
 
     // ── a follower's loot state ──
@@ -233,12 +233,13 @@ namespace Sim::Loot {
 
     // ── what an episode counts (iaus-sim-v4.md 14.3). Sums: Merge adds. ──
     struct LTally {
-        long episodes = 0; double lootSec = 0, followerSec = 0;                   // seconds out of party combat, and that times the followers
+        long episodes = 0, lostFights = 0; double lootSec = 0, followerSec = 0;                   // seconds out of party combat, and that times the followers
         std::map<std::string, long> ev;                                           // events under the field log's own names (calib_loot.py prints the same keys)
         long stacks0 = 0, taken = 0, wanted = 0;                                  // stacks that existed, stacks taken, stacks the game's own scorer wanted at the end
         std::map<std::string, long> left;                                         // wanted and left, by reason
+        std::map<std::string, std::pair<long, double>> noRoad;                    // left, unowned, worth gold, and in NOBODY's plan: by item kind (stacks, gold). Off-class gear, books, ingredients: no loot road takes them
         long leftRR = 0;                                                          // ... of those: RELEASED and REACHABLE and in range (the failure marth names)
-        long goldLeft = 0, goldLeftRR = 0, museumLeft = 0, museumLeftRR = 0;      // coin and museum pieces left (all, and released + reachable)
+        long goldLeft = 0, goldLeftRR = 0, goldDibsNear = 0, museumLeft = 0, museumLeftRR = 0;      // coin and museum pieces left (all, and released + reachable)
         double waitSum = 0; long waitN = 0; std::vector<float> waits, waitsDibs;   // release (the party left combat with it lying there) to taken: the free tier, and the tier the player has first dibs on
         long legs = 0, legsArrived = 0, legsAborted = 0, legsRestarted = 0, reversals = 0, revisits = 0;
         long srcTaken = 0;                                                        // sources something was taken from (trips per item = legs / srcTaken)
@@ -251,8 +252,8 @@ namespace Sim::Loot {
         long waves = 0, stuckEpisodes = 0; double stuckOffSec = 0;                           // stuck-at-origin episodes, and the seconds his looting was off for one
         double uFights = 0, dPotJ = 0, dGoldJ = 0; double goldTaken = 0;          // the episode's value (14.4)
         void Merge(const LTally& o) {
-            episodes += o.episodes; lootSec += o.lootSec; followerSec += o.followerSec; for (const auto& kv : o.ev) ev[kv.first] += kv.second; stacks0 += o.stacks0; taken += o.taken; wanted += o.wanted;
-            for (const auto& kv : o.left) left[kv.first] += kv.second; leftRR += o.leftRR; goldLeft += o.goldLeft; goldLeftRR += o.goldLeftRR; museumLeft += o.museumLeft; museumLeftRR += o.museumLeftRR;
+            episodes += o.episodes; lostFights += o.lostFights; lootSec += o.lootSec; followerSec += o.followerSec; for (const auto& kv : o.ev) ev[kv.first] += kv.second; stacks0 += o.stacks0; taken += o.taken; wanted += o.wanted;
+            for (const auto& kv : o.left) left[kv.first] += kv.second; for (const auto& kv : o.noRoad) { noRoad[kv.first].first += kv.second.first; noRoad[kv.first].second += kv.second.second; } leftRR += o.leftRR; goldLeft += o.goldLeft; goldLeftRR += o.goldLeftRR; goldDibsNear += o.goldDibsNear; museumLeft += o.museumLeft; museumLeftRR += o.museumLeftRR;
             waitSum += o.waitSum; waitN += o.waitN; waits.insert(waits.end(), o.waits.begin(), o.waits.end()); waitsDibs.insert(waitsDibs.end(), o.waitsDibs.begin(), o.waitsDibs.end()); legs += o.legs; legsArrived += o.legsArrived; legsAborted += o.legsAborted; legsRestarted += o.legsRestarted;
             reversals += o.reversals; revisits += o.revisits; srcTaken += o.srcTaken; twoOnOneSec += o.twoOnOneSec; twoOnOne += o.twoOnOne; combatLootSec += o.combatLootSec; combatTakes += o.combatTakes;
             guardSeenTakes += o.guardSeenTakes; crimes += o.crimes; awaySec += o.awaySec; awayMax = std::max(awayMax, o.awayMax); lateU += o.lateU; lateN += o.lateN; walkedPast += o.walkedPast;
@@ -550,8 +551,9 @@ namespace Sim::Loot {
             GateSweep();
             const float leash = Leash(fi), walkLimit = std::min(leash, R.travelRadius); const bool beyond = D3(fp, pp) > leash * R.releaseMul;
             struct Cand { int si; int tier; float d; }; std::vector<Cand> cs; int seen = 0;
-            for (std::size_t i = 0; i < src.size() && seen < static_cast<int>(R.candCap); ++i) { Src& s = src[i]; const int si = static_cast<int>(i); const float df = D3(fp, s.p);
+            for (std::size_t i = 0; i < src.size(); ++i) { Src& s = src[i]; const int si = static_cast<int>(i); const float df = D3(fp, s.p);
                 if (df > R.lootRadius) continue;
+                if (seen >= static_cast<int>(R.candCap)) { s.capAt = now; continue; }   // LootScan.cpp:203: the cap of 48 candidates is applied in ref order, BEFORE the sort (spec B6). What it hides is noted for the ledger
                 const bool loose = s.kind == SrcKind::Loose || s.kind == SrcKind::Flora;
                 if (s.kind == SrcKind::Flora && !(s.coin && (c == Cat::Gold || c == Cat::Valuables))) continue;   // flora other than a coin purse is never a source
                 if (c == Cat::Steal ? !(loose && s.owned) : false) continue;

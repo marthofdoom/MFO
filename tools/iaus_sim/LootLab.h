@@ -12,6 +12,7 @@
 #include "iaus_sim/Oracle.h"
 
 #include <cstdarg>
+#include <cstring>
 #include <functional>
 
 namespace Sim::Loot {
@@ -30,14 +31,14 @@ namespace Sim::Loot {
     struct Episode {
         Fight F; World W; EpSpec sp; Rng R;
         int pstage = 0; double pAt = 0, lootStart = 0, phaseStart = 0, quietSince = -1, combatStart = -1, tWave = -1; EnvPoint pGoal; int pSrc = -1; bool waved = false;
-        std::vector<std::uint32_t> corpsed; double downs0 = 0; int fights = 0; bool stopAfterFight = false; double doorOpenAt = -1;   // doorOpenAt: the player unlocks and opens every locked door then (a scenario)
+        std::vector<std::uint32_t> corpsed; double downs0 = 0; int fights = 0; bool stopAfterFight = false, lostFight = false; double doorOpenAt = -1;   // doorOpenAt: the player unlocks and opens every locked door then (a scenario)
         std::vector<signed char> forced; int decisions = 0;   // the loot oracle's forced options, by decision number (beyond the list: the game decides)
         std::vector<std::pair<int, int>> skipSrc;             // (follower, source) the oracle told him not to walk to
 
         Episode() = default;
         Episode(const Episode& o) { *this = o; }
         Episode& operator=(const Episode& o) { F = o.F; W = o.W; sp = o.sp; R = o.R; pstage = o.pstage; pAt = o.pAt; lootStart = o.lootStart; phaseStart = o.phaseStart; quietSince = o.quietSince; combatStart = o.combatStart; tWave = o.tWave; pGoal = o.pGoal; pSrc = o.pSrc; waved = o.waved;
-            corpsed = o.corpsed; downs0 = o.downs0; fights = o.fights; stopAfterFight = o.stopAfterFight; doorOpenAt = o.doorOpenAt; forced = o.forced; decisions = o.decisions; skipSrc = o.skipSrc; Fix(); return *this; }
+            corpsed = o.corpsed; downs0 = o.downs0; fights = o.fights; stopAfterFight = o.stopAfterFight; lostFight = o.lostFight; doorOpenAt = o.doorOpenAt; forced = o.forced; decisions = o.decisions; skipSrc = o.skipSrc; Fix(); return *this; }
         void Fix() { W.Fp = &F; W.force = nullptr; if (sp.wide) W.force = [this](int fi, int si, Cat c) { (void)fi; (void)si; (void)c; const int n = decisions++; return n < static_cast<int>(forced.size()) ? static_cast<int>(forced[Z(n)]) : -1; }; }
 
         [[nodiscard]] const SimEnv& E() const { return *F.env; }
@@ -150,7 +151,7 @@ namespace Sim::Loot {
             if (sl.active && sl.phase == Phase::Walking && sl.leg == LegState::Walking) {
                 const Src& s = W.src[Z(sl.target)]; if (s.tri < 0) return; const EnvPoint g{ s.on, s.tri };
                 F.Move(x, s.on.x, s.on.y, x.spec->run, false, nullptr, &g);
-                if (World::D3(World::P(x), s.on) <= W.R.arriveRadius) { sl.leg = LegState::Arrived; sl.legAt = F.now; sl.drift = static_cast<float>(SimEnv::Mix(sp.seed * 31 + static_cast<std::uint64_t>(W.t.legs) * 977 + static_cast<std::uint64_t>(fi)) >> 40) * (1.0f / 16777216.0f) < W.R.driftShare; return; }
+                if (World::D3(World::P(x), s.p) <= W.R.arriveRadius || World::D3(World::P(x), s.on) <= 24.0f) { /* the claim's radius is about the REF. A ref off the mesh: the leg ends where the mesh ends, at the point nearest it */ sl.leg = LegState::Arrived; sl.legAt = F.now; sl.drift = static_cast<float>(SimEnv::Mix(sp.seed * 31 + static_cast<std::uint64_t>(W.t.legs) * 977 + static_cast<std::uint64_t>(fi)) >> 40) * (1.0f / 16777216.0f) < W.R.driftShare; return; }
                 if (F.now - sl.sampleAt >= 0.5) { const float m = std::hypot(x.c.x - sl.sx, x.c.y - sl.sy);
                     if (m < 15.0f) { if (sl.mbSince < 0) sl.mbSince = sl.sampleAt; } else { sl.mbSince = -1; sl.everMoved = true; }
                     sl.sampleAt = F.now; sl.sx = x.c.x; sl.sy = x.c.y; }
@@ -198,7 +199,7 @@ namespace Sim::Loot {
                 if (inFight) {
                     if (F.now >= F.nextPump && !F.ctl.empty()) { F.nextPump += TM::pump; P.Serve(F, F.rr); F.rr = (F.rr + 1) % static_cast<int>(F.ctl.size()); }
                     F.StepWorld();
-                    if (F.over || !AnyFoe()) { const bool lost = F.t.lost || !F.b[0].alive; EndFight(fightT0); inFight = false; if (fights == 1) lootStart = F.now; phaseStart = F.now; if (stopAfterFight) return; if (lost || !sp.looting) break; if (fights == 1) lootStart = F.now; phaseStart = F.now; quietSince = -1; W.nextPump = F.now; }
+                    if (F.over || !AnyFoe()) { const bool lost = F.t.lost || !F.b[0].alive || AnyFoe(); /* lost, or timed out with foes standing: no looting follows */ EndFight(fightT0); if (lost) lostFight = true; inFight = false; if (fights == 1) lootStart = F.now; phaseStart = F.now; if (stopAfterFight) return; if (lost || !sp.looting) break; if (fights == 1) lootStart = F.now; phaseStart = F.now; quietSince = -1; W.nextPump = F.now; }
                 } else {
                     if (!waved && sp.waveAt >= 0 && F.now - lootStart >= sp.waveAt) { Wave(); if (AnyFoe()) { inFight = true; fightT0 = F.now; W.combat = true; F.over = false; F.nextPump = F.now; continue; } }
                     QuietStep();
@@ -214,16 +215,17 @@ namespace Sim::Loot {
 
         // ── the ledger at the end: every stack still lying there that the game's own scorer wants, and why it was left ──
         void Finish() {
-            LTally& t = W.t; ++t.episodes; const Body& pl = F.b[0]; if (!sp.looting) { Values(); return; }
+            LTally& t = W.t; ++t.episodes; if (lostFight) ++t.lostFights; const Body& pl = F.b[0]; if (!sp.looting) { Values(); return; }
             std::vector<std::vector<Cat>> plans; for (const FState& f : W.fs) plans.push_back(W.Plan(f, 1));
             for (std::size_t i = 0; i < W.src.size(); ++i) { const Src& s = W.src[i]; const int si = static_cast<int>(i);
                 for (const Stack& st : s.items) { if (st.count <= 0) continue; const ItemDef& d = Items()[Z(st.item)]; const std::vector<Stack> one{ st }; Cat via = Cat::kCount; bool carry = false;
                     for (std::size_t f = 0; f < W.fs.size() && via == Cat::kCount; ++f) for (Cat c : plans[f]) { if (c == Cat::Steal) continue; if (W.Picks(W.fs[f], one, c, true).empty()) { if (!W.Picks(W.fs[f], one, c, false).empty()) carry = true; continue; } via = c; break; }
-                    if (via == Cat::kCount && !carry) continue;   // nobody's plan takes it: not wanted loot (ingredients, junk under the ratio, gear that is no upgrade)
+                    if (via == Cat::kCount && !carry) { if (d.value > 0 && !s.owned) { auto& nr = t.noRoad[Logi::Name(d.kind)]; ++nr.first; nr.second += static_cast<double>(d.value) * st.count; } continue; }   // nobody's plan takes it: not wanted loot (ingredients, junk under the ratio, gear that is no upgrade). Counted apart, by kind, with its gold
                     ++t.wanted; const bool gold = d.kind == Kind::Gold, museum = d.museum; const char* why; bool rr = false;
                     bool reach = s.tri >= 0 && s.navDist <= W.R.navGate; if (reach && pl.nav.tri >= 0) { EQ::Walker w; const auto r = F.env->FindRoute(F.doors, F.doorStamp, pl.nav.tri, s.tri, w, false); reach = r.any && r.reach; }
                     const bool inRange = World::D3(World::P(pl), s.p) <= W.R.leashMax; bool anyStuck = false; for (const FState& f : W.fs) anyStuck = anyStuck || f.stuck;
-                    if (via == Cat::kCount) why = "carry weight";
+                    if (lostFight) why = "the party lost the fight (no looting)";
+                    else if (via == Cat::kCount) why = "carry weight";
                     else if (s.owned) why = "owned";
                     else if (s.locked) why = "locked";
                     else if (s.kind == SrcKind::Flora && !s.coin) why = "flora (no road)";
@@ -238,9 +240,10 @@ namespace Sim::Loot {
                     else if (W.ActiveSlots() > 0 || F.now - phaseStart >= sp.lootSec) { why = "the episode ended first"; rr = true; }
                     else if (!Clutter(via) && World::D3(World::P(pl), s.p) <= W.R.bubble) { why = "player bubble (he stands on it)"; rr = true; }
                     else if (s.island >= 2) { why = "island verdict"; rr = true; }
+                    else if (F.now - s.capAt < 5.0) { why = "candidate cap (48, in ref order before the sort)"; rr = true; }
                     else { bool inScan = false; for (std::size_t f = 0; f < W.fs.size(); ++f) inScan = inScan || World::D3(World::P(W.BodyOf(static_cast<int>(f))), s.p) <= W.R.lootRadius; why = inScan ? "ignored" : "beyond every follower's scan radius"; rr = true; }
-                    ++t.left[why]; if (rr) ++t.leftRR; if (gold) { ++t.goldLeft; if (rr) ++t.goldLeftRR; } if (museum) { ++t.museumLeft; if (rr) ++t.museumLeftRR; }
-                    W.Log("[left] %s x%d in %s %u: %s", d.edid, st.count, SrcName(s.kind), s.id, why); } }
+                    ++t.left[why]; if (rr) ++t.leftRR; if (gold) { ++t.goldLeft; if (rr) ++t.goldLeftRR; if (!rr && !std::strncmp(why, "player dibs", 11) && reach && World::D3(World::P(pl), s.p) <= W.R.departRadius) ++t.goldDibsNear; } if (museum) { ++t.museumLeft; if (rr) ++t.museumLeftRR; }
+                    W.Log("[left] %s x%d in %s %u: %s (via %s; follower 0 at %.0f u, player at %.0f u, navDist %.0f, dispatches %d, arrivals %d)", d.edid, st.count, SrcName(s.kind), s.id, why, via == Cat::kCount ? "-" : CatName(via), World::D3(World::P(W.BodyOf(0)), s.p), World::D3(World::P(pl), s.p), s.navDist, s.dispatches, s.arrivals); } }
             Values();
         }
         void Values() {
@@ -270,7 +273,7 @@ namespace Sim::Loot {
     // from the end of its first fight (a copy: the same draws, the same second fight) with the earlier decisions fixed and the later ones TAKE, and
     // the better end value stands. So an option that makes him late to the next fight, or fills the bag before the potion, pays for it. A tie leaves.
     // The walking itself (which source next) stays the game's: native ranks by distance, never by value, and that is a rule, not a knob. ──
-    struct OracleOut { double score = 0, scoreNoGold = 0; int decisions = 0, takes = 0, replays = 0; LTally t; };
+    struct OracleOut { double score = 0, scoreNoGold = 0; int decisions = 0, takes = 0, replays = 0; bool floored = false; LTally t; };
     inline OracleOut RunOracle(const Episode& afterFight, Policy& P, int maxDecisions = 400) {
         OracleOut o; std::vector<signed char> dec;
         auto play = [&](const std::vector<signed char>& f, int* nDec, LTally* tt, double* noGold) { Episode e = afterFight; e.sp.wide = true; e.forced = f; e.decisions = 0; e.Fix(); e.W.oracleWide = true; e.Run(P); ++o.replays; if (nDec) *nDec = e.decisions; if (tt) *tt = e.W.t; if (noGold) *noGold = e.Score(false); return e.Score(true); };
@@ -278,7 +281,10 @@ namespace Sim::Loot {
             std::vector<signed char> a = dec, b = dec; a.push_back(1); b.push_back(0); int na = 0; const double va = play(a, &na, nullptr, nullptr);
             if (na <= k) break;   // the episode never reached decision k: every decision is made
             const double vb = play(b, nullptr, nullptr, nullptr); dec.push_back(va > vb + 1e-9 ? 1 : 0); }
-        o.decisions = static_cast<int>(dec.size()); for (signed char d : dec) o.takes += d; o.score = play(dec, nullptr, &o.t, &o.scoreNoGold); return o;
+        o.decisions = static_cast<int>(dec.size()); for (signed char d : dec) o.takes += d; o.score = play(dec, nullptr, &o.t, &o.scoreNoGold);
+        // THE FLOOR: the game's own play is one of the oracle's options (its plan is a subset of the wide one). A search that ended under it failed, and the game's play stands.
+        { Episode g = afterFight; g.Run(P); if (g.Score(true) > o.score) { o.score = g.Score(true); o.scoreNoGold = g.Score(false); o.t = g.W.t; o.floored = true; } }
+        return o;
     }
 
     // ── the gate (14.3). Each row: a per-episode or per-minute number of the tally and the most it may be. PLACEHOLDERS unless the row says CALIBRATED;
@@ -287,6 +293,7 @@ namespace Sim::Loot {
     inline constexpr Bound kLootBounds[] = {
         { "leftRR/ep", 0.50, "wanted stacks left though released, reachable and in range, per episode (marth: 'lots of items being ignored')" },
         { "goldLeftRR/ep", 0.10, "coin left though released, reachable and in range" },
+        { "coinDibsNear/ep", 0.10, "coin left under the player's dibs while he stands within 700 units of it at the end (marth: coin on bodies left; scenario coin-behind-player)" },
         { "museumLeftRR/ep", 0.10, "museum pieces left though released, reachable and in range" },
         { "crimes", 0.0, "takes of an owned thing a witness truly saw (followers never commit detected crimes)" },
         { "guardSeenTakes", 0.0, "takes a guard truly saw of a source the guard rule covers" },
@@ -304,7 +311,7 @@ namespace Sim::Loot {
     };
     inline std::map<std::string, double> GateValues(const LTally& t) {
         std::map<std::string, double> v; const double ep = std::max<double>(1, static_cast<double>(t.episodes)), min = std::max(1e-9, t.followerSec / 60.0);
-        v["leftRR/ep"] = t.leftRR / ep; v["goldLeftRR/ep"] = t.goldLeftRR / ep; v["museumLeftRR/ep"] = t.museumLeftRR / ep; v["crimes"] = static_cast<double>(t.crimes); v["guardSeenTakes"] = static_cast<double>(t.guardSeenTakes);
+        v["leftRR/ep"] = t.leftRR / ep; v["goldLeftRR/ep"] = t.goldLeftRR / ep; v["coinDibsNear/ep"] = t.goldDibsNear / ep; v["museumLeftRR/ep"] = t.museumLeftRR / ep; v["crimes"] = static_cast<double>(t.crimes); v["guardSeenTakes"] = static_cast<double>(t.guardSeenTakes);
         v["legs/src"] = t.srcTaken ? double(t.legs) / t.srcTaken : 0.0; v["restart%"] = t.legs ? 100.0 * t.legsRestarted / t.legs : 0.0; v["aborted%"] = t.legs ? 100.0 * t.legsAborted / t.legs : 0.0;
         v["reversals/min"] = t.reversals / min; v["twoOnOne/ep"] = t.twoOnOne / ep; v["combatLoot s/fight"] = t.combatLootSec / std::max<double>(1, static_cast<double>(t.waves)); v["combatTakes"] = static_cast<double>(t.combatTakes);
         v["walkedPast/ep"] = t.walkedPast / ep; v["stuckOff s/ep"] = t.stuckOffSec / ep;
@@ -319,8 +326,9 @@ namespace Sim::Loot {
     }
     inline void PrintTally(const LTally& t, const char* tag) {
         const double ep = std::max<double>(1, static_cast<double>(t.episodes)), min = std::max(1e-9, t.followerSec / 60.0);
-        std::printf("LOOT %-22s episodes %ld  loot %.0f s  follower-min %.1f  stacks %ld taken %ld (%.0f%%)  wanted-left %ld (RR %ld)  gold left %ld  museum left %ld  legs %ld arrived %ld aborted %ld restarted %ld  U %.2f  dPotJ %.3f  dGoldJ %.3f\n",
-            tag, t.episodes, t.lootSec, min, t.stacks0, t.taken, t.stacks0 ? 100.0 * t.taken / t.stacks0 : 0.0, t.wanted, t.leftRR, t.goldLeft, t.museumLeft, t.legs, t.legsArrived, t.legsAborted, t.legsRestarted, t.uFights / ep, t.dPotJ / ep, t.dGoldJ / ep);
+        std::printf("LOOT %-22s episodes %ld (lost fights %ld)  loot %.0f s  follower-min %.1f  stacks %ld taken %ld (%.0f%%)  wanted-left %ld (RR %ld)  gold left %ld  museum left %ld  legs %ld arrived %ld aborted %ld restarted %ld  U %.2f  dPotJ %.3f  dGoldJ %.3f\n",
+            tag, t.episodes, t.lostFights, t.lootSec, min, t.stacks0, t.taken, t.stacks0 ? 100.0 * t.taken / t.stacks0 : 0.0, t.wanted, t.leftRR, t.goldLeft, t.museumLeft, t.legs, t.legsArrived, t.legsAborted, t.legsRestarted, t.uFights / ep, t.dPotJ / ep, t.dGoldJ / ep);
+        for (const auto& kv : t.noRoad) std::printf("LOOTNOROAD %-22s %-12s %6ld stacks  %9.0f gold  (unowned, left, in nobody's plan)\n", tag, kv.first.c_str(), kv.second.first, kv.second.second);
         for (const auto& kv : t.left) std::printf("LOOTLEFT %-22s %-32s %6ld  %.2f/ep\n", tag, kv.first.c_str(), kv.second, kv.second / ep);
         for (const auto& kv : t.ev) std::printf("LOOTRATE %-22s %-58s %7ld  %8.3f /follower-min\n", tag, kv.first.c_str(), kv.second, kv.second / min);
     }

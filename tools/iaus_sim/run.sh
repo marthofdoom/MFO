@@ -20,6 +20,11 @@
 #        [--steal-lab N] (cards G13 / G14: the witness pre-check against the engine's detection formula)
 #        Oracle (iaus-sim-v3.md 14): [--oracle-ceiling N] [--gap-bracket natural|strong1|...] and the diagnostics [--oracle-k N] [--oracle-h S] [--oracle-every S] [--oracle-shared-stream] [--no-class-rulings]
 #        Field damage read (section 15): [--damage-report N [--damage-bracket <name>]]; the field side: tools/iaus_sim/calib_damage.py <run-dir> ...
+#        SIM V4 batch L, looting in the fight world (iaus-sim-v4.md 14; any of these turns --world v4 on):
+#        [--loot-report N [--loot-score]] [--loot-scenario all|<name> [--loot-trace 0]] [--loot-test] [--loot-oracle N] [--loot-cost N]
+#        [--loot-plan mixed|stands|walks-on|opens-chest|loots-too|faces-away] [--loot-wave mixed|off|<seconds>] [--loot-sec S] [--loot-guards N]
+#        [--loot-list <loot.json> (tools/list_balance/extract_loot.py; with --env-set <set>)] [--loot-museum <share>] [--loot-rule <name>=<v> | gate=old1117]
+#        [--env-set <set>/heldout] (the set's held-out places); the field side: tools/iaus_sim/calib_loot.py <run-dir> ...
 #   <sim.json> comes from tools/list_balance (extract_world.py -> compile_world.py), default dir ~/.cache/mfo-list-balance/,
 #   never committed. Without --list the built-in fixture set runs (no game data).
 # SIM_CLITEST=1 runs the command-line assertions (backlog MFO-B710..B714, B755..B757) instead of a run and prints CLI-CHECKS PASS|FAIL.
@@ -134,6 +139,14 @@ if [[ -n "${SIM_CLITEST:-}" ]]; then
     # TargetEffect rows outright and today's game does not; today a spell fired into an immunity nobody can read is counted, and --seat-immunity seen ends that.
     chk "sim v4 world: a held-off spell costs the turn; --seats old refuses the rows ABI 46 seats; a fire that leaves nothing is counted (review F4, adopt-seats)" 'T="$(mktemp -d)"; R --world v4 --seats old --classes beta1 --baseline "$T/old" >/dev/null; R --world v4 --classes beta1 --baseline "$T/new" >/dev/null; R --world v4 --seat-immunity seen --classes beta1 --baseline "$T/seen" >/dev/null; nz() { grep -E "\\|$2=" "$1" | awk -F= "\$2 + 0 > 0" | wc -l; }; a="$(nz "$T/old" cs.heldTurns/f)"; b="$(nz "$T/old" cs.unseated/f)"; c="$(nz "$T/new" cs.unseated/f)"; d="$(nz "$T/new" cs.zeroFire/f)"; e="$(nz "$T/old" cs.zeroFire/f)"; f="$(nz "$T/seen" cs.zeroFire/f)"; g="$(nz "$T/new" cs.heldTurns/f)"; rm -rf "$T"; [[ "$a" -gt 0 && "$b" -gt 0 && "$c" == 0 && "$d" -gt 0 && "$e" == 0 && "$f" -lt "$d" && "$g" -gt 0 ]]'
     chk "sim v4 world: the solo walk on the fixtures: every trip with a route ends AT its goal, its height included (review F1)" 'R --solo-walk 60 | grep -q "WRONG 0 (0.000%), of them over or under the goal 0  off-mesh steps 0  => PASS"'
+    # SIM V4 BATCH L (iaus-sim-v4.md 14): looting in the fight world
+    chk "sim v4 loot: the loot fixtures are what their .txt says" 'python3 "$FX/make_fixtures.py" --check loot-room loot-backs loot-freeze loot-gate loot-town loot-shop >/dev/null'
+    chk "sim v4 loot: the twelve field-case scenarios hold (three of them reproduce a fault of today's rules)" 'R --loot-test | grep -q "^LOOT-TESTS PASS: 12 scenarios, 0 failed (3 of them reproduce"'
+    chk "sim v4 loot: the 11-17g freeze fails the gate under the old rule and not under today's (leftRR/ep)" 'X="$(R --loot-scenario freeze-1117g)"; grep -q "^LOOTGATE today  *leftRR/ep .* ok$" <<<"$X" && grep -q "^LOOTGATE variant  *leftRR/ep .* FAIL$" <<<"$X"'
+    chk "sim v4 loot: no scenario and no report ever counts a crime or a take a guard saw" '! R --loot-scenario all | grep -E "^LOOTGATE .* (crimes|guardSeenTakes) " | grep -q FAIL && ! R --loot-report 2 --seeds 1,2 | grep -E "^LOOTGATE ALL .* (crimes|guardSeenTakes) " | grep -q FAIL'
+    chk "sim v4 loot: a report is the same at 1 thread and at 8" '[[ "$("$OUT" --no-json --threads 1 --loot-report 2 --seeds 1,2 2>&1 | grep "^LOOT ALL")" == "$(R --loot-report 2 --seeds 1,2 | grep "^LOOT ALL")" ]]'
+    chk "sim v4 loot: the oracle is never under the game, and --loot-score prints the driver's SEED lines" 'R --loot-oracle 1 --seeds 1 --classes melee | grep -q "^ORCLOOT melee" && R --loot-oracle 1 --seeds 1,2 --classes melee,ranged | awk "/^ORCLOOT (melee|ranged)/ { if (\$5 < -0.0005) bad = 1 } END { exit bad }" && [[ "$(R --loot-report 1 --loot-score --seeds 3,4 --classes melee | grep -c "^SEED ")" == 2 ]]'
+    chk "sim v4 loot: an unknown rule or scenario is an error" 'R --loot-rule nosuch=1 --loot-test | grep -q "unknown rule" && R --loot-scenario nosuch | grep -q "unknown loot scenario"'
     chk "sim v4 world: a compare across two sets of places is refused (the library hash is in the world tag)" 'R --world v4 --env "$FX/open-room.mfoenv" --classes beta1 --compare "'"$ROOT"'/tools/iaus_sim/baseline_v4_builtin.txt" | grep -q "COMPARE REFUSED"'
     # needs the extracted library (never in git): MFO_ENV_CACHE, default ~/.cache/mfo-env. Without it the check says so and passes.
     LIB="${MFO_ENV_CACHE:-$HOME/.cache/mfo-env}"

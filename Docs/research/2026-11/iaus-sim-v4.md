@@ -1032,3 +1032,160 @@ Result on the library: `osc/min` of the six caster cells from about 12 to betwee
 
 **Checks.** `sim --env-test`: 81 checks pass (sight dwell, back-off, leaf, snapshot, three door-block checks). `baseline_v4_builtin.txt` rewritten once more. It compares with 0 metrics changed at 1 and at 16 threads. `--world v3` and `--world v2`: 0 metrics changed. Solo walk: fixtures 657 trips and 0 wrong, library copy 10615 walked and 2 wrong, none over or under the goal. `run.sh` with `SIM_CLITEST=1`: CLI-CHECKS PASS (the field-log check skipped again). Local MSVC build of the two changed native files and the link: exit 0.
 
+
+## 14. Batch L as built (branch `feat/sim-v4-loot`, 2026-11-24)
+
+Slices S8, S9 and S10 in one batch: looting inside the fight world. With looting off nothing moved: `--world v2`, `--world v3` and `--world v4` compare with 0 metrics changed against their baselines, `sim --env-test` passes its 81 checks, and the old 8-stop lab (`--logistics`) passes its own checks. No fight baseline was rewritten. Numbers below are from the runs of 14.8, made once at the end.
+
+### 14.1 Where things are
+
+| What | Where | To change it |
+|---|---|---|
+| Native's loot rules, restated: the scan, the excursion slot, legs, the player's dibs, the take and its landing hold, the guard answer cache, the corpse bar, gates, stuck at his own origin, the party-combat sweep | `tools/iaus_sim/Loot.h`, `struct World`. Each rule names its native file. The reading it was written from is `_agentlogs/mfo/sim-loot-native-spec.md` (an Opus pass over `native/logistics`, 278 lines, file:line for every rule) | a native constant: one row of `Loot.h Rules` (or `--loot-rule <name>=<v>`). A `LootTuning` knob: the game's own table, `--set loot.<name>=<v>` (`Tune.h kLootKnobsF / kLootKnobsI`) |
+| What to take | native's own code compiled in: `iaus/LootNeed.h ScoreLootKind`, `ScoreConsumable`, `ScoreStealNeed`, read through `Tune().loot` | the game's table |
+| The episode: a fight, the looting after it, the player's script, a second group arriving, the leg mover, the follow package, the ledger of what was left | `tools/iaus_sim/LootLab.h`, `struct Episode` | a player script: `enum Plan` and `PlayerStep`. A ledger reason: `Finish` |
+| The gate | `LootLab.h kLootBounds`, `GateValues` | a bound: one row of `kLootBounds` |
+| The loot oracle | `LootLab.h RunOracle` | |
+| The field cases as scenarios | `tools/iaus_sim/LootCli.h Scenarios()` | a scenario: one row |
+| Loot fixtures | `tools/iaus_sim/envs/loot-*.txt` (`make_fixtures.py`: `loot`, `guard`, `bystander`, `body`, `town` lines) | draw a map, run `make_fixtures.py <name>`, add the name to `Env.h kFixtureNames` |
+| A list's items, containers, leveled lists, flora produce and NPC inventories | `tools/list_balance/extract_loot.py` writes `~/.cache/mfo-list-balance/<set>.loot.json` (never committed). The sim reads it with `--loot-list` and joins it to a place by (plugin file, local id), the key `tools/envextract` writes. No name of a list or of a record is read anywhere | a record type: `extract_loot.py`, with a self-check row |
+| The loot refs of a place | `Env.h LootRef` (containers, loose items, flora, activators, with owner and lock), filled by `LoadEnv`. `--env-set <set>/heldout` loads a set's held-out places | |
+| Field rates | `tools/iaus_sim/calib_loot.py <run-dir>` | a log line: one row of `ROWS` |
+| The driver's loot stage | `tune_driver.py stage_loot_episodes`, `LOOT_KNOBS`, `LOOT_EPISODE_KNOBS`, `LOOT_NOT_SEARCHED`, `--loot-places <set>`, `--loot-world episodes|stops` | a searched row: one tuple |
+
+CLI: `--loot-report N [--loot-score]`, `--loot-scenario all|<name> [--loot-trace 0]`, `--loot-test`, `--loot-oracle N`, `--loot-cost N`, `--loot-plan mixed|stands|walks-on|opens-chest|loots-too|faces-away`, `--loot-wave mixed|off|<seconds>`, `--loot-sec S`, `--loot-guards N`, `--loot-list <file>`, `--loot-museum <share>`, `--loot-rule <name>=<v>` (`gate=old1117`), `--env-set <set>/heldout`. Any of them turns `--world v4` on.
+
+### 14.2 What is mirrored, and how
+
+The clocks are native's: one follower is served per pump (133 ms), and a follower's loot tick runs at his first service a second or more after his last. So every arrival, block and release is read 1.06 to 1.9 s late, which is where much of the field's "drifted away" and the waits come from. Movement runs every world step on the navmesh, by the mover batch W built.
+
+- **Scan** (`LootScan.cpp LootNearby`): 3000 units round the follower, the leash from the player by his vitality (512 to 4000), the walk limit, the 150 unit player bubble, the navmesh gate of 300, the cap of 48 candidates applied in ref order before the sort, the sort by (tier, distance) and never by value, two passes (the free tier, then everything), the plan from `ScoreLootKind` with the museum row first and the steal road last.
+- **The excursion** (`LootTravel_internal.h TravelIntent`, `Service.cpp`): one of four slots, a chain of legs, the 60 s cap over the whole chain, the release past the leash, the batch hold (`batchHoldMinSec`) and its one rescan, the guard-pending hold.
+- **Legs**: the ch.19 claim's radius of 128, MFO's own arrival test (200 for a body, 300 for a loose item, grown by path fails), the deadline `clamp(d / 150 + 5, 6, 20)` s, no progress in 5 s, Movement Blocked held 3 s, an actor in the way (reorder), the far arrival ("ARRIVED but he is N u away"), the 25 s and 60 s blocklists and their strikes, the idle reassess.
+- **Dibs**: one walker per source past arm's reach. The player's dibs per source (`LootTake.cpp TierReleased`): equipment after 4 s, coin, jewelry, soul gems and valuables after 6 s of the player near it AND facing it, or 3 s after he left it by 700 units, or 45 s if he was never within 512, or once he took from it and moved on.
+- **The take**: the plan in score order at the source, the whole stack or nothing against his carry weight, the landing hold (a second category of the same form type waits 150 ms), ammo by native's keep ladder, one equipment piece per call.
+- **Guards and theft** (`TheftGate.cpp`, `Steal.cpp`): the answer cache with its three timers as an async post (the first ask is always pending, the cached answer stands until the new one lands), keep-warm, the town rule, the waiver of a hostile body, the party-wide bar on a body a guard saw, the witness check run again at the write, the Thief's steal-by-need on owned loose items.
+- **Gates** (`Service.cpp:1338-1402`, `LootTravel_internal.h`, `StuckAtOrigin.cpp`): the obstacle probe (a locked door or an activator within 256 units on the way), GATED with its cone or TARGET ONLY, no ground closed since his last block (reorder), stuck himself after two blocked ends within `gateRepeatU`, the re-admits (a door or lever event, the recorder gone 500 units, somebody at the item, his own records lifted after four idle ticks). `--loot-rule gate=old1117` is the rule before `9a16a278`.
+- **Party combat**: every slot released by whoever is served next, the scan refused, dibs, blocklists, gates and bars kept, the batch lost, looting resumed at the first tick out of combat.
+- **The player** (MODEL, a script per episode): he stands, walks on after a few seconds, opens the nearest container (its menu holds every scan), loots the bodies' coin himself, or stands with his back to the bodies.
+- **Bags**: `Logistics.h Inv`, unchanged. The fight kit and the bag are one stock: a potion looted is one he can drink in the next fight, and what he drank leaves the bag.
+
+**Sources.** A body lies where its foe fell. A container, a loose item and a flora are the place's own refs, with their owner and lock. In a list world a container's contents are its base record's rows drawn through the list's leveled lists at the player's level, and a loose item is its base record. MODEL: a body's contents are drawn from one of the list's NPC inventory rows (the fight's foes carry no record id), and half the bodies carry coin. In the built-in world the old lab's draws fill them.
+
+**MODEL, with no native source**: the leg mover reports Movement Blocked when a leg makes no ground for 3 s while a route exists. The claim's radius of 128 is about the ref, and a ref off the mesh ends the leg at the mesh point nearest it. After a leg ended ARRIVED the claim holds him there, and in 7 percent of them the follow package takes him back first (`Rules::driftShare`, CALIBRATED per leg and never per arrival: the four field sessions print "ARRIVED but he is N u away" 12 times on 277 legs asked for, 4.3 percent, and the lab prints it on 1.4 to 5.5 percent of its legs on the six library runs). The follow package walks him to the player past 400 units. A guard walks a line (fixtures) or stands at a spawn point of a place that has owned things (library, `--loot-guards`). A second group arrives 6 to 20 s into the looting in half the episodes.
+
+**Not built**: lock picking (a locked container is left and counted), the load-door rescue of a stuck follower, the LOTD deposit trip, an errand during an episode (`Logi::Town` runs at its end, as in the old lab), the teleport-mod clamp, QuickLoot's crosshair. Museum items are a FLAG on an item: the fixture's one made-up piece, and with `--loot-list` a share of the list's records chosen by a hash of their key (`--loot-museum`, default 2 percent). Which items a museum wants is the player's game state and is in no extract.
+
+### 14.3 The numbers, and the gate
+
+One episode is counted into `Loot.h LTally`. `--loot-report` prints it per class (`LOOT`), the events under the field log's own names per follower-minute (`LOOTRATE`, the names `calib_loot.py` prints as `FIELDRATE`), every stack the game's own scorer wanted and left with the reason (`LOOTLEFT`), what was left because no loot road takes it (`LOOTNOROAD`, by item kind with its gold: off-class gear, books, ingredients), and the gate (`LOOTGATE`).
+
+"Wanted" is the game's own verdict: a stack some follower's plan would take from that source with his bag as it stands at the end. Each wanted stack left gets the first reason that holds: the party lost the fight, carry weight, owned, locked, flora, town container, guard, off-navmesh or unreachable (no route from the player on the true mesh), out of range (the player left), the player's dibs, then the reasons that count as RELEASED AND REACHABLE: GATED, blocklisted, a follower stuck at his origin, the episode ended first, the player's bubble, the island verdict, the candidate cap, beyond every follower's scan radius, and `ignored` when none of them holds.
+
+| Gate row | Bound | Field case it stands for |
+|---|---|---|
+| `leftRR/ep` | 0.5 | marth: "lots of items being ignored". Scenario `freeze-1117g` |
+| `goldLeftRR/ep`, `coinDibsNear/ep` | 0.1 | marth: coin left on bodies. Scenario `coin-behind-player` |
+| `museumLeftRR/ep` | 0.1 | marth: museum items left |
+| `crimes`, `guardSeenTakes` | 0 | "followers never commit detected crimes". Scenarios `guard-bar-1117`, `thief` |
+| `legs/src` | 2 | trips per item. CALIBRATED: the field asks for 13 to 15 legs per looted arrival (11-17c, 11-17d, 11-18) |
+| `restart%` | 35 | marth 11-17c: "stops and restarts". CALIBRATED: the field reads 18, 17, 20 and 37 |
+| `aborted%` | 30 | legs ended by anything but arrival. The field's upper bound is 83 to 90 |
+| `reversals/min` | 1 | back and forth |
+| `twoOnOne/ep` | 0 | two followers on one thing |
+| `combatLoot s/fight`, `combatTakes` | 1.5, 0 | field 11-18: 12 `RELEASE why=party combat`. Scenario `party-combat` |
+| `walkedPast/ep` | 0.5 | he came within reach of wanted, released loot and left it |
+| `stuckOff s/ep` | 5 | field 11-18: 4 "stuck himself" episodes |
+| `wait free p90 s`, `wait dibs p90 s` | 25, 60 | time from release to taken |
+
+Every bound is a PLACEHOLDER for marth to set. Where a field log shows the number it is printed beside the row, and the field fails the same rows the lab fails. marth's method constraint is kept: nothing is argued from arrival counts, a leg is what MFO asked for (DISPATCH, RETARGET) and an end is the release reason or the state Harbinger reported.
+
+### 14.4 The field cases as scenarios
+
+`--loot-test` plays twelve. Each runs under today's rules and under a variant, and says what must hold of both.
+
+| Scenario | Field case | Variant | Verdict |
+|---|---|---|---|
+| `room-basic` | a potion, arrows, a museum piece, a chest and coin in one room | the museum road off | pass: everything taken, the piece only with the road on |
+| `freeze-1117g` | 11-17g: one blocked follower gated a cone and outdoor loot froze | `gate=old1117` | pass: today's rule leaves nothing released and reachable, the old rule leaves the cone GATED and fails the gate |
+| `locked-door` | loot behind a locked door, the player opens it at 30 s | the door stays shut | pass: GATED until the door event, then taken. Nothing through a locked door |
+| `guard-bar-1117` | 11-17 L1, Raven Rock: 19 BARRED arrivals | no party-wide bar | pass: two BARRED arrivals with the bar, more without. No take a guard saw in either |
+| `pending-1117c` | 11-17c F1: a pending guard answer dropped every candidate | timers shorter than a loot tick, no keep-warm | pass: today's timers lose nothing in a guardless room, the short ones drop the candidates as `guard (pending)` |
+| `restart-1117c` | 11-17c: "stops and restarts" | `batchHoldMinSec` 0 | pass: the hold never makes more excursions than no hold |
+| `party-combat` | 11-18: `RELEASE why=party combat` | no second group | pass: no take in combat, a slot outlives the fight's start by under 1.5 s |
+| `two-followers` | several followers in one room | one follower | pass |
+| `thief` | steal by need, unseen only | a Knight | pass: the one unseen potion is stolen, the one a bystander sees is not |
+| `coin-behind-player` | coin left on bodies | the player walks on | REPRODUCES a fault of today's rules (14.6 N1) |
+| `locked-door-cycle` | the same locked door, never opened | `gateRepeatU` 0 | REPRODUCES a fault (N3) |
+| `carry-full` | a follower at his carry limit | room in the bag | REPRODUCES a fault (N4) |
+
+### 14.5 The loot oracle, the value, and the loot stage
+
+**Value** (`LootLab.h Score`): the fights' Utility with potions not charged there, plus what the bags gained: the potion worth of `PotionWorth.h` (the k-th potion of a kind) and `GoldJ` times the gold-equivalent of `Logistics.h Value`, after the same town errand as the old lab. A potion drunk in a fight and a potion looted are the same stock, so neither is counted twice. Every report prints the value with and without the gold term.
+
+**The oracle** (`RunOracle`). Its plan is every category with a loot road, whatever the scorer says, and every (follower, source, category) take is a decision. Each decision in turn is tried both ways by replaying the same episode from the end of its first fight (a copy: the same draws, the same second group), with the earlier decisions fixed and the later ones "take". The better end value stands, a tie leaves. So a take that fills the bag before the potion, or that keeps him away when the second group arrives, pays for it in the same number. It has only the game's roads: nothing owned without the steal road, nothing locked, nothing a guard bars, nothing under the player's dibs. The walking is the game's (native ranks by distance, a rule and not a knob). The game's own play is one of its options, so a search that ends under it is replaced by it and counted (`floored`).
+
+**The driver's `loot` stage** now runs on episodes (`epi:` cells, `sim --loot-report N --loot-score`). It searches the 16 score rows and the 12 rule rows that were dead in the stops lab (`LOOT_EPISODE_KNOBS`: the batch hold, the three guard timers, the bar floor, the seven gate rows) on the mean episode value. Then the kept table is checked, not searched: on the gate, and with `--loot-places <set>` on that set's held-out places. A kept table that loses value there or fails a gate row the shipped table passed is an open decision. `LOOT_NOT_SEARCHED` keeps 15 rows, each with its reason (`offClassDwellSec` is an equip notice no loot rule reads, in the game or in the lab). `--loot-world stops` is the old lab.
+
+### 14.6 What the mirror shows about the game (native findings)
+
+Each is today's rule doing what its code says, read in a scenario or in the library runs. None was changed here: native is not this batch's to edit.
+
+- **N1, coin left on bodies** (`LootTake.cpp TierReleased`, read line by line for this). Coin, jewelry, soul gems and valuables are released by the player's dibs only when he has been within 512 units AND facing the source for 6 s, or 3 s after he went 700 units from it, or after 45 s if he was NEVER within 512. A player who stands among the bodies and does not turn to one of them never releases it: near once, so the 45 s clock is off, never facing, never 700 away. Scenario `coin-behind-player`: three bodies round a standing player, all three coins left for the whole episode. On the library `coinDibsNear/ep` is 0.31 to 0.52 (coin left under his dibs with him within 700 units at the end), on every set, held-out or not. This is the largest single reason coin is left.
+- **N2, a thing the mesh reaches and the world does not** (`Service.cpp:1338-1402`, `StuckAtOrigin.cpp`). A static block with no door or lever is never recorded against the item. The first block is a bump, the second "no ground closed" defers the item and is the second stuck hit, he is "stuck himself", every loot of his is off until he stands 300 units away, the follow package takes him there, and the item is his nearest candidate again. Scenario `freeze-1117g` under today's rule: 27 legs in 120 s for one potion he cannot reach, 23 of them restarts, a cycle of about 8.5 s. He does take everything else, which is what the 11-17 fix was for. The field's 11-18 session has the same shape: 4 "stuck himself", 4 "left the stuck point", 7 first-block bumps.
+- **N3, a locked door with two things behind it** (the same code). GATED feeds the stuck run too (`feedStuck` stays true after `MarkGated`), so the next item at the same door is "blocked again at the same point" and he is "stuck himself". His own gate records are lifted after four idle ticks with no cooldown, and it begins again. Scenario `locked-door-cycle`: 25 legs in 120 s to a door nobody opens.
+- **N4, the carry peek** (`LootTake.cpp HasLoot`, `LootEquipment.cpp:511`). Only the equipment peek weighs. A follower with a little room left and a stack that does not fit walks to it, takes nothing, the body is blocklisted 25 s as "fully stripped", and he walks again. Scenario `carry-full`: 15 legs, nothing taken. The score's room term hides it only once the bag is completely full.
+- **N5, the guard answer asked on the way** (`Service.cpp:873`, `TheftGate.cpp GuardCheck`). The peek at 600 units posts a scan. Its answer is unread, so it is usable at arrival for up to `guardUnreadMaxSec` (10 s), and it was taken where he stood then. Where a guard cannot see the item but can see a follower standing at it, the take goes through: 3 to 29 takes a guard truly saw in 480 episodes on the sets with guarded places, 0 on the others. None is a crime (an owned thing is never a candidate): `crimes` is 0 in every run. This one hangs on the lab's reading that a peeked answer counts as unread (uncertain spot 2 of the report).
+- **Not seen**: the 48 candidate cap (spec B6) hid nothing in 3360 episodes. Two followers on one source happen only inside arm's reach, where native has no exclusion.
+- **What has no road at all** is printed apart (`LOOTNOROAD`): on Tuxborn's library, per 480 episodes, 1174 stacks of gear no keep rule judges (80121 gold), 1358 one-handed and 352 two-handed weapons that are no upgrade (53958 and 114941 gold), 778 books and scrolls. Off-class pieces have no loot-time road in the game (the storage chest works at sale time), so the oracle has none either.
+
+### 14.7 What should be extracted from native
+
+Shared today, compiled into the lab as they are: `iaus/LootNeed.h` (with `iaus/PotionBuff.h`). Everything else of `native/logistics` uses engine types, so `Loot.h` restates it. Each of these is pure logic inside an engine file. Moved into a header with plain positions and ids, the lab would include it and the restatement would go:
+
+| Piece | Where it is | What it needs |
+|---|---|---|
+| `TierReleased`, `ClaimRejected`, `PlayerFacing`, the `Claim` record | `LootTake.cpp:783-878`, `Logistics_internal.h:717` | positions and the "considering" flag as inputs |
+| The reaction to a static block, `NoteBlockGround`, `BehindBlock`, `GateRecord`, the re-admit sweep | `Service.cpp:1338-1402`, `LootTravel_internal.h:422-536, 613` | a plain vec3 |
+| The stuck run (`StuckAtOriginNoteBlock`, `RepeatsBlock`, `ResetRun`) | `StuckAtOrigin.cpp:215-314` | actor reads as inputs |
+| `SortLootCandidates`, `TravelDeadline`, `GrabRadiusFor`, the blocklist maps and strikes | `LootTravel_internal.h:242-359, 773-828` | ids and positions |
+| The guard cache rule (fresh, unread, one verdict a visit, repost) and the corpse bar's timing | `TheftGate.cpp:198-220, 335` | a clock and a callback |
+| The category predicates (free tier, dibs tier, clutter) | `Logistics_internal.h:606-680` | nothing: only the header's includes block it |
+| `KindOf` (an effect's buff kind) and the consumable reader's rules | `PotionFx.cpp`, `LootNeed.cpp:126` | archetype and actor value as numbers |
+| The ammo keep ladder (`SwapUpAmmoTakeSet` and its helpers) | `SwapUp.cpp:449-549`, `Logistics_internal.h:1180-1203` | an opaque item id |
+| The Holding dwell and the far-arrival counter | `Service.cpp:1297-1317, 1621-1662` | inline in the one `ServiceFollower` |
+
+### 14.8 Checks, cost, and what was not run
+
+Made once, at the end, on the branch head.
+
+- `--world v2`, `--world v3`, `--world v4` against `baseline_builtin.txt`, `baseline_v3_builtin.txt`, `baseline_v4_builtin.txt`: 0 metrics changed each. No baseline file was touched. The loot fixtures are `nopool`, so the pool hash in the world tag is what it was.
+- `sim --env-test`: 81 checks pass. `sim --loot-test`: 12 scenarios, 0 failed. `test_tune_driver.py`: 40 tests pass. A smoke run of the driver's `loot` stage on episodes ends with its summary.
+- `run.sh` with `SIM_CLITEST=1`: every loot check passes. Two checks of batch W FAIL, on `origin/main` (`02066ca6`) exactly as on this branch, so they are not this batch's: (1) `make_fixtures.py --check` reports all 17 batch W fixtures STALE, because `tools/envextract/fmt.py` (round 4) now writes three more sections than the committed files hold. They were NOT rewritten here: that changes the pool hash and so the v4 baseline's tag. (2) the solo walk over the whole library reads 32 wrong trips of 11839 (0.270 percent, the bound is 0.1), 31 of them in one place of the rebuilt library, `x_Skyrim-104217_1_-2`. Both belong to whoever owns batch W's files. The field-log check was skipped (no `_evidence` in the worktree).
+- **The gate on the library** (480 episodes a run: 15 cells, 4 seeds, 8 episodes, the player's script and the second group mixed). `*` = over its bound.
+
+| Row | LoreRim | LoreRim held-out | Tuxborn | Tuxborn held-out | Vanilla | Vanilla held-out | fixtures |
+|---|---|---|---|---|---|---|---|
+| leftRR/ep | 1.04* | 1.76* | 0.99* | 1.98* | 1.19* | 0.66* | 0.33 |
+| goldLeftRR/ep | 0.12* | 0.12* | 0.14* | 0.22* | 0.40* | 0.24* | 0.07 |
+| coinDibsNear/ep | 0.39* | 0.52* | 0.33* | 0.31* | 0.40* | 0.35* | 0.26* |
+| museumLeftRR/ep | 0.00 | 0.00 | 0.01 | 0.08 | 0.02 | 0.01 | 0.00 |
+| crimes | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| guardSeenTakes | 6* | 28* | 0 | 29* | 0 | 3* | 0 |
+| legs/src | 1.42 | 1.94 | 1.46 | 1.74 | 1.61 | 1.35 | 2.85* |
+| restart% | 29.5 | 43.0* | 30.4 | 36.5* | 31.7 | 26.2 | 56.2* |
+| aborted% | 16.1 | 30.2* | 19.6 | 20.8 | 34.0* | 18.7 | 56.9* |
+| reversals/min | 0.28 | 0.37 | 0.33 | 0.51 | 0.24 | 0.28 | 0.50 |
+| twoOnOne/ep | 0.28* | 0.11* | 0.17* | 0.04* | 0.09* | 0.11* | 0.03* |
+| combatLoot s/fight | 0.04 | 0.04 | 0.06 | 0.06 | 0.04 | 0.04 | 0.06 |
+| combatTakes | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| walkedPast/ep | 0.60* | 1.75* | 0.71* | 1.64* | 0.34 | 0.69* | 0.51* |
+| stuckOff s/ep | 0.01 | 2.73 | 0.11 | 0.00 | 1.20 | 0.18 | 22.05* |
+| wait free p90 s | 46.3* | 55.2* | 70.1* | 65.6* | 30.9* | 27.0* | 14.1 |
+| wait dibs p90 s | 57.5 | 51.0 | 63.7* | 62.3* | 57.9 | 59.3 | 48.6 |
+
+The game as it is fails the gate on every set: that is the report's point, not a lab failure. The fixtures are trap-heavy by design (a freeze, a locked door, a guarded street), which is their `stuckOff` and `aborted%`. Of the wanted stacks left on Tuxborn's library, per episode: owned 19.4, out of range because the player walked on 4.5, locked 1.5, unreachable 1.5, flora 1.3, the player's dibs 0.8, the episode ended first 0.7, guard 0.7, off the navmesh 0.6, the player's bubble 0.12, blocklisted 0.11, ignored 0.01. 22 to 28 percent of the episodes lose or time out a fight (the natural bracket), and what lies there then is counted as that and nothing else.
+- **Against the field**, per follower-minute (lab: Tuxborn library. Field: `calib_loot.py`, the denominator is an estimate of scanning time): DISPATCH 1.24 against 1.10 (11-18), RETARGET 1.56 against 0.88, `leg ended BLOCKED` 0.14 against 0.20 to 0.68, `RELEASE why=party combat` 0.17 against 0.21, `why=left leash` 0.09 against 0.02 to 0.28, `why=batch done` 0.82 against 0.23 to 1.45, `stuck at his own origin` 0.03 against 0.07. The field blocks two to five times as often as the lab: the lab's world is the navmesh, and what stands on it in the game (furniture, clutter, collision the mesh does not know) is not there. That is X1 of section 10.2 and the largest known gap of this mirror.
+- **The oracle** (Tuxborn, 90 episodes each): library 130.44 for the game against 138.25 (gap 7.81 with gold, 3.12 without), held-out 131.28 against 135.14 (3.87 and 0.83). 11.4 decisions an episode, 0.14 to 0.25 CPU seconds an episode, floored at the game's own play in 11 and 8 of the 90.
+- **CPU**, one thread, the same fights with looting off and on: on the fixtures 2.10 ms an episode against 2.93 (1.4 times, for 61 more simulated seconds), on Tuxborn's library 3.96 against 9.63 (2.4 times). A 480 episode report takes about a second of wall time at 8 threads after the load (a list's loot extract parses in 1 to 2 s).
+- **Not run**: the tune itself (the `loot` stage at size, on episodes, with `--loot-places`). The oracle at size. A list world for the FIGHTS of an episode (`--list`) together with `--loot-list`: the runs above use the built-in fight world in the extracted places.

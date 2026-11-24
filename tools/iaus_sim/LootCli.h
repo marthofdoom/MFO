@@ -33,6 +33,7 @@ namespace Sim::Loot {
 
     inline int RunReport(const Data& D, const std::vector<SimClass>& all, const std::vector<SimClass>& t1, const std::string& only, const std::vector<std::uint64_t>& seeds, int threads, const Opts& o) {
         const auto places = Places(); const auto scope = Scope(all, only); if (places.empty() || scope.empty()) { std::fprintf(stderr, "--loot-report: no place with loot (--world v4, or --env-set) or no class\n"); return 2; }
+        (void)Logi::PotionFloor();   // computed once, before the threads
         const int n = o.report, jobs = static_cast<int>(scope.size() * seeds.size()) * n; std::vector<LTally> per(scope.size()); std::vector<double> seedSum(seeds.size(), 0.0); std::atomic<int> next{ 0 }; std::mutex mx;
         const auto t0 = std::chrono::steady_clock::now();
         auto work = [&]() { for (;;) { const int job = next.fetch_add(1); if (job >= jobs) return; const int k = job % n, si = (job / n) % static_cast<int>(seeds.size()), ci = job / n / static_cast<int>(seeds.size());
@@ -54,16 +55,17 @@ namespace Sim::Loot {
     // The loot oracle against the game, on the same episodes (the same first fight, by copy).
     inline int RunOracleReport(const Data& D, const std::vector<SimClass>& all, const std::vector<SimClass>& t1, const std::string& only, const std::vector<std::uint64_t>& seeds, int threads, const Opts& o) {
         const auto places = Places(); const auto scope = Scope(all, only); if (places.empty() || scope.empty()) return 2;
+        (void)Logi::PotionFloor();
         struct Row { double game = 0, gameNG = 0, orc = 0, orcNG = 0, cpu = 0; long n = 0, dec = 0, takes = 0, replays = 0, worse = 0; LTally tg, to; }; std::vector<Row> rows(scope.size());
         const int n = o.oracle, jobs = static_cast<int>(scope.size() * seeds.size()) * n; std::atomic<int> next{ 0 }; std::mutex mx;
         auto work = [&]() { for (;;) { const int job = next.fetch_add(1); if (job >= jobs) return; const int k = job % n, si = (job / n) % static_cast<int>(seeds.size()), ci = job / n / static_cast<int>(seeds.size());
                 const std::uint64_t h = SimEnv::Mix(seeds[Z(si)] * 1000003ULL + static_cast<std::uint64_t>(ci) * 7919 + static_cast<std::uint64_t>(k) * 104729);
                 Episode ep = MakeEpisode(D, *scope[Z(ci)], all, t1, h, SpecFor(o, h, places[h % places.size()])); IausPolicy P; ep.stopAfterFight = true; ep.Run(P); ep.stopAfterFight = false;
                 Episode g = ep; g.Run(P); timespec a{}, b{}; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &a); const OracleOut r = RunOracle(ep, P); clock_gettime(CLOCK_THREAD_CPUTIME_ID, &b);
-                std::scoped_lock lk(mx); Row& R = rows[Z(ci)]; ++R.n; R.game += g.Score(true); R.gameNG += g.Score(false); R.orc += r.score; R.orcNG += r.scoreNoGold; R.dec += r.decisions; R.takes += r.takes; R.replays += r.replays; R.worse += r.score < g.Score(true) - 1e-6;
+                std::scoped_lock lk(mx); Row& R = rows[Z(ci)]; ++R.n; R.game += g.Score(true); R.gameNG += g.Score(false); R.orc += r.score; R.orcNG += r.scoreNoGold; R.dec += r.decisions; R.takes += r.takes; R.replays += r.replays; R.worse += r.floored;
                 R.cpu += static_cast<double>(b.tv_sec - a.tv_sec) + 1e-9 * static_cast<double>(b.tv_nsec - a.tv_nsec); R.tg.Merge(g.W.t); R.to.Merge(r.t); } };
         { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(work); for (auto& x : th) x.join(); }
-        std::printf("LOOT ORACLE (%d episodes a class; value = fights + potion worth + GoldJ x gold; a tie leaves)\n%-12s %9s %9s %8s | %9s %9s %8s | %6s %6s %8s %7s\n", n * static_cast<int>(seeds.size()), "class", "game", "oracle", "gap", "game-ng", "orc-ng", "gap-ng", "dec/ep", "take%", "cpu s/ep", "worse");
+        std::printf("LOOT ORACLE (%d episodes a class; value = fights + potion worth + GoldJ x gold; a tie leaves)\n%-12s %9s %9s %8s | %9s %9s %8s | %6s %6s %8s %7s\n", n * static_cast<int>(seeds.size()), "class", "game", "oracle", "gap", "game-ng", "orc-ng", "gap-ng", "dec/ep", "take%", "cpu s/ep", "floored");
         for (std::size_t c = 0; c < scope.size(); ++c) { const Row& R = rows[c]; const double m = std::max<double>(1, static_cast<double>(R.n));
             std::printf("ORCLOOT %-12s %9.3f %9.3f %8.3f | %9.3f %9.3f %8.3f | %6.1f %6.1f %8.2f %7ld\n", scope[c]->name.c_str(), R.game / m, R.orc / m, (R.orc - R.game) / m, R.gameNG / m, R.orcNG / m, (R.orcNG - R.gameNG) / m, R.dec / m, R.dec ? 100.0 * R.takes / R.dec : 0.0, R.cpu / m, R.worse);
             std::printf("ORCLOOT-TAKEN %-12s game %ld of %ld stacks, oracle %ld; game left-RR %ld, oracle %ld; coin taken game %.0f, oracle %.0f\n", scope[c]->name.c_str(), R.tg.taken, R.tg.stacks0, R.to.taken, R.tg.leftRR, R.to.leftRR, R.tg.goldTaken, R.to.goldTaken); }
