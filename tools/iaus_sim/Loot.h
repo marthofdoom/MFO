@@ -70,6 +70,7 @@ namespace Sim::Loot {
         // THE RULES OF OLDER BUILDS, for the scenarios that must fail on them:
         float museumGold = 250.0f;     // ASSUMPTION (review S5): what a museum piece taken is worth, in gold, whatever it sells for (a display has no price; the errand never sells it). One knob, reported apart (dMuseumJ)
         float stealRecheck = 1.0f;     // Steal.cpp: the witness check is run AGAIN at the write (Service.cpp:1019). 0 = the cached verdict alone (scenario thief-no-recheck: must commit a crime)
+        float dibsNearEnough = 0.0f;   // marth's ruling of 11-24, NOT in native yet: coin dibs "Near is enough". 1 = the fair chance accrues while the player is within chanceRadius, facing or not (6 s near releases). 0 = today's native (near AND facing)
         float corpseBar = 1.0f;        // 0 = before the party-wide guard bar on a corpse (field 11-17 L1)
         float gateOld1117 = 0.0f;      // 1 = before 9a16a278 (11-17): every static block gates the target and its cone, no repeat / short test, no move / near / idle re-admit, stuck needs 3 distinct targets
     };
@@ -81,7 +82,7 @@ namespace Sim::Loot {
             { "departRadius", &Rules::departRadius }, { "lotd", &Rules::lotd }, { "releaseMul", &Rules::releaseMul }, { "departRelease", &Rules::departRelease }, { "grab", &Rules::grab }, { "arriveRadius", &Rules::arriveRadius },
             { "noProgressSec", &Rules::noProgressSec }, { "blockedGateSec", &Rules::blockedGateSec }, { "transientSec", &Rules::transientSec }, { "stickySec", &Rules::stickySec }, { "deadlineMax", &Rules::deadlineMax },
             { "deadlineSpeed", &Rules::deadlineSpeed }, { "stuckWindowSec", &Rules::stuckWindowSec }, { "stuckHits", &Rules::stuckHits }, { "guardRangeU", &Rules::guardRangeU }, { "maxSlots", &Rules::maxSlots },
-            { "candCap", &Rules::candCap }, { "followU", &Rules::followU }, { "carryCap", &Rules::carryCap }, { "idleTicks", &Rules::idleTicks }, { "gate", &Rules::gateOld1117 }, { "corpseBar", &Rules::corpseBar }, { "stealRecheck", &Rules::stealRecheck }, { "museumGold", &Rules::museumGold }, { "driftShare", &Rules::driftShare }, { "guardWarmSec", &Rules::guardWarmSec } };
+            { "candCap", &Rules::candCap }, { "followU", &Rules::followU }, { "carryCap", &Rules::carryCap }, { "idleTicks", &Rules::idleTicks }, { "gate", &Rules::gateOld1117 }, { "corpseBar", &Rules::corpseBar }, { "dibsNear", &Rules::dibsNearEnough }, { "stealRecheck", &Rules::stealRecheck }, { "museumGold", &Rules::museumGold }, { "driftShare", &Rules::driftShare }, { "guardWarmSec", &Rules::guardWarmSec } };
         for (const F& f : k) if (name == f.n) { r.*(f.m) = v; return true; }
         return false;
     }
@@ -343,7 +344,7 @@ namespace Sim::Loot {
             Src& s = src[Z(si)]; Claim& cl = s.claim; const double now = Now(); const float pd = D3(P(Fp->b[0]), s.p);
             if (cl.seen < 0) cl.seen = now;
             { const float dt = cl.lastAccrue < 0 ? 1.0f : std::min(static_cast<float>(now - cl.lastAccrue), 2.0f); cl.lastAccrue = now;
-              if (dt > 0.0f && pd <= R.chanceRadius) { cl.everNear = true; cl.farSince = -1; if (PlayerFacing(s.p)) cl.nearSecs += dt; }   // (PlayerIsConsidering's x3 needs QuickLoot's crosshair, which the lab does not model: an open container menu is not it)
+              if (dt > 0.0f && pd <= R.chanceRadius) { cl.everNear = true; cl.farSince = -1; if (R.dibsNearEnough > 0.0f || PlayerFacing(s.p)) cl.nearSecs += dt; }   // (PlayerIsConsidering's x3 needs QuickLoot's crosshair, which the lab does not model: an open container menu is not it)
               else if (pd > R.departRadius && cl.farSince < 0) cl.farSince = now; }
             const bool rejected = cl.rejected || (cl.playerTook >= 0 && (now - cl.playerTook >= R.quickLootWaiver || pd > R.departRadius));
             if (c == Cat::Equipment) return rejected || now - cl.seen >= R.firstDibs;

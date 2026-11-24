@@ -141,7 +141,7 @@ if [[ -n "${SIM_CLITEST:-}" ]]; then
     chk "sim v4 world: the solo walk on the fixtures: every trip with a route ends AT its goal, its height included (review F1)" 'R --solo-walk 60 | grep -q "WRONG 0 (0.000%), of them over or under the goal 0  off-mesh steps 0  => PASS"'
     # SIM V4 BATCH L (iaus-sim-v4.md 14): looting in the fight world
     chk "sim v4 loot: the loot fixtures are what their .txt says" 'python3 "$FX/make_fixtures.py" --check loot-room loot-backs loot-freeze loot-gate loot-town loot-shop loot-watch >/dev/null'
-    chk "sim v4 loot: the thirteen field-case scenarios hold (three of them reproduce a fault of today's rules)" 'R --loot-test | grep -q "^LOOT-TESTS PASS: 13 scenarios, 0 failed (3 of them reproduce"'
+    chk "sim v4 loot: the fifteen scenarios hold (three of them reproduce a fault of today's rules)" 'R --loot-test | grep -q "^LOOT-TESTS PASS: 15 scenarios, 0 failed (3 of them reproduce"'
     chk "sim v4 loot: the 11-17g freeze fails the gate under the old rule and not under today's (leftRR/ep)" 'X="$(R --loot-scenario freeze-1117g)"; grep -q "^LOOTGATE today  *leftRR/ep .* ok$" <<<"$X" && grep -q "^LOOTGATE variant  *leftRR/ep .* FAIL$" <<<"$X"'
     chk "sim v4 loot: no scenario and no report ever counts a crime or a take a guard saw" '! R --loot-scenario all | grep -E "^LOOTGATE .* (crimes|guardSeenTakes) " | grep -q FAIL && ! R --loot-report 2 --seeds 1,2 | grep -E "^LOOTGATE ALL .* (crimes|guardSeenTakes) " | grep -q FAIL'
     chk "sim v4 loot: a report is the same at 1 thread and at 8" '[[ "$("$OUT" --no-json --threads 1 --loot-report 2 --seeds 1,2 2>&1 | grep "^LOOT ALL")" == "$(R --loot-report 2 --seeds 1,2 | grep "^LOOT ALL")" ]]'
