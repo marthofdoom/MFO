@@ -110,7 +110,7 @@ MFO seed defaults. MCM Helper's Data/MCM/Settings/MFO.ini is read AFTER this and
 - **`fFirstDibsDelay`** (default `4.0`). Seconds a follower waits before looting an item, giving the player first dibs.
 - **`fQuickLootWaiver`** (default `4.0`). Collapsed delay once the player has looted from that source (QuickLoot). Never 0.
 - **`fChanceRadius`** (default `512.0        ; player "had a chance" within this of the source`). ── Claim-and-Release loot priority (dibs). The follower may take a value-tier from a source only once the PLAYER's claim on it releases -- by evidence about the player, not a wall clock. fFirstDibsDelay above = the Gear anti-snatch grace; fQuickLootWaiver = the post-take Rejection linger.
-- **`fFairChance`** (default `6.0            ; seconds near + facing/considering before Valuables release`).
+- **`fFairChance`** (default `6.0            ; seconds near (3x while looting it) before Valuables release`).
 - **`fAbandonDelay`** (default `45.0         ; player never came near -> Valuables release after this`).
 - **`fDepartRadius`** (default `700.0        ; player took, then left this far -> "moved on"`).
 - **`fPlayerBubble`** (default `150.0        ; convergence yield: never walk to loot within this of you (arrows/bolts/lockpicks exempt)`).

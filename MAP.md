@@ -4905,7 +4905,7 @@ anonymous-namespace copy — that silently forks the instance).
     Walking arm): every Walking tick peeks `HasLoot(tr.cat, tr.want)` on a non-loose target
     (the scan's own peek, now declared in `logistics/Logistics_internal.h`). Empty -> Holding with NO
     blocklist/strike/grace, and `RunExcursionScan` takes the next item the SAME tick. Log
-    `[loot] <id> target <ref> EMPTIED before arrival -- next item <ref|none ...>` (`noteNext`,
+    `[loot] <id> target <ref> NOTHING LEFT to take before arrival (emptied or no longer fits) -- next item <ref|none ...>` (`noteNext`,
     printed from the Holding block once the next item is known). Several followers may
     converge on one ref by design.
   - **MOVEMENT BLOCKED BACKSTOP** (`logistics/Service.cpp:~676`, runs AFTER arrival and BEFORE the

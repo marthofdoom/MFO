@@ -786,8 +786,7 @@ namespace MFO::Logistics {
             return false;
         }
         // Is the player facing a_srcPos (a forward view-cone, ~±60deg, no raycast)?
-        // "Had a chance to SEE it" for fair-chance -- proximity alone is not enough
-        // (a player facing away has not been shown it). Skyrim heading: 0 = +Y,
+        // Log text only since N1 (marth 11-24 "near is enough"): the fair-chance clock no longer reads it. Skyrim heading: 0 = +Y,
         // clockwise, so forward = (sin h, cos h). Cheap: one angle read + a dot.
         bool PlayerFacing(RE::Actor* a_player, const RE::NiPoint3& a_srcPos) {
             if (!a_player) return false;
@@ -866,8 +865,8 @@ namespace MFO::Logistics {
             const bool rejected = ClaimRejected(srcId, srcPos, a_playerPos, a_now);
             // WAITING REASON (N1): why this source is still the player's, once per source per 10 s, so "coin left on bodies" names its clock.
             auto sayWaiting = [&](const char* a_why) {
-                static std::unordered_map<RE::FormID, Clock::time_point> s_next;
-                auto& nx = s_next[srcId];
+                static std::unordered_map<std::uint64_t, Clock::time_point> s_next;   // source + category: the Gear grace line must not hide a Valuables line
+                auto& nx = s_next[(std::uint64_t(srcId) << 8) | std::uint64_t(a_cat)];
                 if (nx.time_since_epoch().count() != 0 && a_now < nx) return;
                 nx = a_now + std::chrono::seconds(10);
                 if (s_next.size() > 128) s_next.clear();

@@ -693,7 +693,7 @@ namespace MFO::Logistics {
                            skippedRef = r->GetFormID();
                            return true;
                        }()) {
-                skipWhy        = "EMPTIED before arrival";
+                skipWhy        = "NOTHING LEFT to take before arrival (emptied or no longer fits)";
                 StuckAtOriginResetRun(id);   // a non-GATED end breaks the 'consecutive' run
                 tr.phase       = TravelPhase::Holding;
                 tr.lingerUntil = now + BatchLingerDur();
@@ -1344,7 +1344,7 @@ namespace MFO::Logistics {
                         const bool real = FindGateObstacle(a_follower, tref, bp).Any();
                         const BlockGround ground = NoteBlockGround(id, tref->GetFormID(), bp, tref->GetPosition(), now);
                         if (real) {
-                            if (StuckAtOriginRepeatsBlock(id, bp, now) && LiveGateAtPoint(tref, bp)) {
+                            if (LiveGateAtPoint(tref, bp)) {
                                 // N3: blocked again at a LIVE gate's point: the same locked door with another item behind it. That is a gate
                                 // fact, not stuck evidence: gate the new target only (no second cone) and keep it out of the stuck run.
                                 skipWhy = MarkGated(a_follower, tref, held, now, blockPos, /*a_targetOnly*/ true)
@@ -1377,6 +1377,7 @@ namespace MFO::Logistics {
                                 // in (it was re-dispatched at once, 27 legs for one potion, lab freeze-1117g). That is a stall on it: a strike
                                 // (blocklist; the 2nd is sticky), and stuck evidence still.
                                 MarkTravelStalled(tref->GetFormID(), now);
+                                g_lastBlock.erase(id);   // the strike is the verdict: a retry from another side starts fresh, not a 2nd strike
                                 spdlog::info("[loot] {:08X} target {:08X} Movement Blocked {:.1f}s, no door/activator on the way, and NO ground closed "
                                              "on the SAME item since his previous block: stall strike (blocklisted), stuck evidence, not gated",
                                              id, tref->GetFormID(), held);
