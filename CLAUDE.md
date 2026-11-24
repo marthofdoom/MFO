@@ -79,6 +79,9 @@ regressions here; the ripple notes are why the map exists.
     all code" rule).** Author = `sonnet-coder` (Agent tool model `sonnet`), NOT the coordinator itself.
     EXCEPTION: tier-A changes (engine seats/hooks, ABI, byte-shared headers, co-save format, threading,
     TU splits) are still authored by Opus 5.5.
+    FABLE PLANS, OPUS CODES (marth 2026-11-24: "have fable do the planning, mechanism, conflict, and issue
+    checks, etc. But then have opus code it"): tier A and tools/iaus_sim work gets a Fable plan document
+    (mechanism, file:line, conflicts, traps, acceptance checks), a fresh Opus agent codes it, another Opus reviews.
     HISTORY (why the Opus review gate stays): on 2026-09-06 marth ruled cheap models out of authoring —
     "by reasonably sized I mean smaller. but we cant afford the sloppy work weve been getting from teh
     cheap agents." — after invented-symbol CI failures and misapplied fixes. Sonnet 5.5 passed its
