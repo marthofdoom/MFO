@@ -34,17 +34,18 @@ def check_mesh(m, st):
             if ext: st['edges_external'] += 1; continue
             if n == -1: st['edges_open'] += 1; continue
             st['edges_internal'] += 1
-            u = T[n]; found = False; geo = False
+            u = T[n]; found = False; geo = False; same_dir = False
             for e2 in range(3):
                 if not u[6] & (1 << e2) and u[3 + e2] == ti:
                     found = True
                     c = V[u[e2]]; d = V[u[(e2 + 1) % 3]]
-                    if (_geo_equal(a, d) and _geo_equal(b, c)) or (_geo_equal(a, c) and _geo_equal(b, d)): geo = True
-                    break
+                    if _geo_equal(a, d) and _geo_equal(b, c): geo = True; break         # swapped edge: the same two points, opposite direction
+                    if _geo_equal(a, c) and _geo_equal(b, d): same_dir = True
+            if same_dir and not geo: st['internal_same_direction'] = st.get('internal_same_direction', 0) + 1
             if found: st['internal_reciprocal'] += 1
             else: st['internal_one_way'] += 1
             if geo: st['internal_geometry_match'] += 1
-            elif found: st['internal_geometry_mismatch'] += 1
+            elif found: st['internal_geometry_mismatch'] += 1      # reciprocal by index but not the swapped edge
     return owner
 
 
@@ -69,9 +70,8 @@ def water_check(setname):
         if not ni[0]: continue
         c = ext.get((ni[0], ni[1], ni[2]))
         if c is None: continue
-        w = c['water']
-        if w is None or abs(w) > 1e8:
-            wd = sc['worlds'].get(ni[0]); w = wd[1][1] if wd and wd[1] else None
+        import export
+        w, _src = export.water_height(sc, c)
         if w is None: continue
         m = F.parse_np(nv); fl = m['tris']['fl']; z = m['verts'][m['tris']['v'].astype(np.int64)][:, :, 2].mean(1); wf = (fl & 0x200) != 0
         tot['tri'] += len(fl); tot['flagged'] += int(wf.sum()); tot['flagged_below'] += int((wf & (z < w)).sum()); tot['below'] += int((z < w).sum())
@@ -137,7 +137,7 @@ def run_set(setname, out=None):
     print('set %s: %d plugins, %d NAVM records (%d deleted), %d decoded, %d FAILED' % (setname, st['plugins'], st['records'], st['deleted'], st['parsed'], st['failed']))
     print('  strict decode: consumed size == subrecord size and all indices in range for %.4f%% of records' % pct(st['parsed'], st['parsed'] + st['failed']))
     print('  door flag 0x400 <-> door row: %d agree, %d mismatch;  link rows with no flagged edge: %d' % (st['door_flag_ok'], st['door_flag_mismatch'], st['link_without_edge']))
-    print('  internal edges: %d, reciprocal by index %.3f%%, shared edge geometry matches %.3f%% (of internal)' % (
+    print('  internal edges: %d, reciprocal by index %.3f%%, shared edge is the swapped edge (same two points, opposite direction) %.3f%% (of internal)' % (
         st['edges_internal'], pct(st['internal_reciprocal'], st['edges_internal']), pct(st['internal_geometry_match'], st['edges_internal'])))
     print('  external links of winning meshes: %d, target mesh exists %.2f%%, reverse link back to us %.2f%%, edge within 4 units of target tri %.2f%%, within 32 %.2f%%, farther: kind0 %d, kind1/2 %d' % (
         ext['links'], pct(ext['links'] - ext['target_missing'], ext['links']), pct(ext['reverse_found'], ext['links']), pct(ext['geometry_within_4'], ext['links']),
@@ -156,22 +156,30 @@ def _geo_dist_seg(p, a, b):
 
 
 def run_file(path):
-    e = fmt.read(path); bad = []; warn = 0
+    e = fmt.read(path); bad = []; warn = 0; swapbad = 0; stale = noowner = 0
     M, V, T, L, D, R = e['meshes'], e['verts'], e['tris'], e['links'], e['doors'], e['refs']
     for mi, m in enumerate(M):
         vb, nv, tb, nt, lb, nl, db, nd = m[5:13]
         if vb + nv > len(V) or tb + nt > len(T) or lb + nl > len(L) or db + nd > len(D): bad.append('mesh %d section range' % mi); continue
         for ti in range(nt):
             t = T[tb + ti]
-            if max(t[0:3]) >= nv: bad.append('mesh %d tri %d vertex' % (mi, ti))
+            if max(t[0:3]) >= nv: bad.append('mesh %d tri %d vertex' % (mi, ti)); continue
             for k in range(3):
                 n = t[3 + k]
                 if n >= nt or n < -1: bad.append('mesh %d tri %d nb' % (mi, ti)); continue
-                if n >= 0 and not any(T[tb + n][3 + j] == ti for j in range(3)): warn += 1     # one-way neighbours exist in the game data (README)
+                if n < 0: continue
+                u = T[tb + n]; ea = (V[vb + t[k]], V[vb + t[(k + 1) % 3]])
+                back = [j for j in range(3) if u[3 + j] == ti]
+                if not back: warn += 1; continue                     # one-way neighbours exist in the game data (README)
+                if max(u[0:3]) >= nv: continue
+                if not any(_geo_equal(ea[0], V[vb + u[(j + 1) % 3]]) and _geo_equal(ea[1], V[vb + u[j]]) for j in back): swapbad += 1
+    if len(e['tcmp']) != len(T): bad.append('component table size')
     for l in L:
+        if l[7] & 1: stale += 1
+        if l[7] & 2: noowner += 1
         if l[0] >= len(M): bad.append('link owner')
         elif l[5] >= len(M): bad.append('link target idx')
-        elif l[5] >= 0 and l[6] >= M[l[5]][8]: bad.append('link target tri')
+        elif l[5] >= 0 and l[6] >= M[l[5]][8] and not l[7] & 1: bad.append('link target tri')
     for d in D:
         if d[0] >= len(M): bad.append('door mesh')
         if d[5] >= len(R): bad.append('door ref idx')
@@ -180,7 +188,8 @@ def run_file(path):
         if any(r[13 + i] > r[16 + i] for i in range(3)): bad.append('ref bounds')
         if r[3] > 8: bad.append('ref kind')
         if (r[0] >> 24) >= len(e['plugins']): bad.append('ref plugin idx')
-    print('%s: %d meshes %d tris %d links %d doors %d refs -> %s' % (os.path.basename(path), len(M), len(T), len(L), len(D), len(R), ('OK' if not bad else 'BAD %s' % bad[:5]) + (' (%d one-way neighbour edges, as in the game data)' % warn if warn else '')))
+    print('%s: %d meshes %d tris %d links %d doors %d refs -> %s' % (os.path.basename(path), len(M), len(T), len(L), len(D), len(R), ('OK' if not bad else 'BAD %s' % bad[:5]) + (' (%d one-way neighbour edges, as in the game data)' % warn if warn else '') + (' [%d neighbour pairs not the swapped edge]' % swapbad if swapbad else '')
+          + (' [%d stale link targets, %d owner-less link rows]' % (stale, noowner) if stale or noowner else '')))
     return 0 if not bad else 1
 
 

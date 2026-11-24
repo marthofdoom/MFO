@@ -45,14 +45,11 @@ def _cands(a, sc):
 
 def _export(a, sc, units, cands, cls, outdir):
     import library, export
-    groups = {}
-    from library import unit_of_mesh
-    for k in sc['navm']:
-        ni = sc['navinfo'].get(k)
-        if ni is None or (ni[3] is None and not ni[0]): continue
-        groups.setdefault(unit_of_mesh(sc, k), []).append(k)
+    groups = library.make_groups(sc)
     by = library.ref_features(sc, {u: dict(cands[u]) for u in units}, a.min_static)
     os.makedirs(outdir, exist_ok=True); rows = []
+    for f in os.listdir(outdir):                      # a rebuilt library must not leave files of the old one behind
+        if f.endswith('.mfoenv'): os.remove(os.path.join(outdir, f))
     for u in units:
         path = os.path.join(outdir, '%s.%s.%s.mfoenv' % (a.set, cls[u], unit_id(u)))
         feat = {k: (round(v, 4) if isinstance(v, float) else v) for k, v in cands[u].items()}

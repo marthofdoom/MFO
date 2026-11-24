@@ -51,3 +51,30 @@ def classify(sc, ref, min_static=DEFAULT_MIN_STATIC):
         side = max(abs(obnd[3] - obnd[0]), abs(obnd[4] - obnd[1]), abs(obnd[5] - obnd[2])) * abs(scale)
         if side < min_static: return None
     return kind, sig, bmin, bmax
+
+
+PLAYER_REF = 0x14   # Skyrim.esm is always plugin 0 of a set, so its keys equal the local id
+
+
+def start_disabled(sc, rk, memo=None, depth=0):
+    """True when the ref starts the game disabled, resolving enable parents transitively over ALL refs seen by the scan
+    (XESP: the child follows its parent, flag bit0 inverts it; the player ref is always enabled).  A parent the scan never
+    saw is treated as enabled; a cycle falls back to the ref's own flag.  A ref following a parent ignores its own 0x800."""
+    if memo is None: memo = sc.setdefault('_sd_memo', {})
+    if rk in memo: return memo[rk]
+    r = sc['refs'].get(rk)
+    if r is not None: own, ep = bool(r[1] & 0x800), r[7]
+    else:
+        st = sc['states'].get(rk)
+        if st is None: memo[rk] = False; return False
+        own, ep = st
+    if ep and depth < 32 and ep[0] != PLAYER_REF:
+        memo[rk] = own                       # cycle guard: a re-entry sees the own flag
+        parent_enabled = not start_disabled(sc, ep[0], memo, depth + 1)
+        res = (parent_enabled if ep[1] & 1 else (not parent_enabled))   # disabled = not (parent_enabled XOR inverted)
+    elif ep and ep[0] == PLAYER_REF:
+        res = bool(ep[1] & 1)                # player is enabled; an inverted child is therefore disabled
+    else:
+        res = own
+    memo[rk] = res
+    return res

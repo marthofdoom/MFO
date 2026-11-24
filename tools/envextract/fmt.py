@@ -1,15 +1,16 @@
 """MFOENV v1 writer and reader (format documented in README.md; C++ reader in envfile.h)."""
 import struct, json
 
-MAGIC = b'MFOENV\0\0'; VERSION = 1
+MAGIC = b'MFOENV\0\0'; VERSION = 2
 MESH = struct.Struct('<IIIhhIIIIIIII6f')
 VERT = struct.Struct('<3f')
 TRI = struct.Struct('<3H3hHH')
-LINK = struct.Struct('<IHBBIiHH')
+LINK = struct.Struct('<IHBBIiHHf')
+TCMP = struct.Struct('<HH')
 DOOR = struct.Struct('<IHHIIi')
 REF = struct.Struct('<IIIBBH3f3ff3f3fIBBHI3f3fIIIIII')
 PLUG = struct.Struct('<I')
-for _s, _n in ((MESH, 72), (VERT, 12), (TRI, 16), (LINK, 20), (DOOR, 20), (REF, 128)): assert _s.size == _n, (_s.format, _s.size)
+for _s, _n in ((TCMP, 4), (MESH, 72), (VERT, 12), (TRI, 16), (LINK, 24), (DOOR, 20), (REF, 128)): assert _s.size == _n, (_s.format, _s.size)
 NOGRID = 0x7FFF
 
 
@@ -21,7 +22,7 @@ class Strings:
         return self.at[s]
 
 
-def write(path, meta, plugins, strings, meshes, verts, tris, links, doors, refs):
+def write(path, meta, plugins, strings, meshes, verts, tris, links, doors, refs, tcmp=None):
     """meshes/verts/tris/links/doors/refs: lists of tuples matching the structs; plugins: list of str offsets (u32)."""
     secs = [(b'META', json.dumps(meta, separators=(',', ':')).encode('utf-8'), 1, len(json.dumps(meta, separators=(',', ':')).encode('utf-8'))),
             (b'STRS', bytes(strings.buf), 1, len(strings.buf)),
@@ -29,9 +30,10 @@ def write(path, meta, plugins, strings, meshes, verts, tris, links, doors, refs)
             (b'MESH', b''.join(MESH.pack(*r) for r in meshes), 72, len(meshes)),
             (b'VERT', b''.join(VERT.pack(*r) for r in verts), 12, len(verts)),
             (b'TRIS', b''.join(TRI.pack(*r) for r in tris), 16, len(tris)),
-            (b'LINK', b''.join(LINK.pack(*r) for r in links), 20, len(links)),
+            (b'LINK', b''.join(LINK.pack(*r) for r in links), 24, len(links)),
             (b'DOOR', b''.join(DOOR.pack(*r) for r in doors), 20, len(doors)),
-            (b'REFS', b''.join(REF.pack(*r) for r in refs), 128, len(refs))]
+            (b'REFS', b''.join(REF.pack(*r) for r in refs), 128, len(refs)),
+            (b'TCMP', b''.join(TCMP.pack(*r) for r in (tcmp if tcmp is not None else [(0, 0)] * len(tris))), 4, len(tris))]
     hdr = 16 + 16 * len(secs); off = (hdr + 3) & ~3; table = []; body = bytearray()
     for tag, data, rec, cnt in secs:
         table.append(struct.pack('<4sIII', tag, off + len(body), cnt, rec)); body += data; body += b'\0' * (-len(body) % 4)
@@ -40,7 +42,7 @@ def write(path, meta, plugins, strings, meshes, verts, tris, links, doors, refs)
 
 
 def read(path):
-    d = open(path, 'rb').read()
+    with open(path, 'rb') as fh: d = fh.read()
     if d[:8] != MAGIC: raise ValueError('bad magic')
     ver, n = struct.unpack_from('<II', d, 8)
     if ver != VERSION: raise ValueError('unsupported version %d' % ver)
@@ -54,4 +56,5 @@ def read(path):
     out['str'] = s; out['plugins'] = [s(r[0]) for r in rows(b'PLUG', PLUG)]
     out['meshes'] = rows(b'MESH', MESH); out['verts'] = rows(b'VERT', VERT); out['tris'] = rows(b'TRIS', TRI)
     out['links'] = rows(b'LINK', LINK); out['doors'] = rows(b'DOOR', DOOR); out['refs'] = rows(b'REFS', REF)
+    out['tcmp'] = rows(b'TCMP', TCMP)
     return out

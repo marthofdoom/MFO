@@ -5,8 +5,74 @@ import numpy as np
 import features as F, refs as R
 
 WIN = 1                    # exterior window = (2*WIN+1)^2 grid cells around the centre cell
+MAX_WATER = 0.5            # exterior windows with at least this share of water-flagged walkable area are not candidates
 MIN_WINDOW_CELLS = 3000    # raster cells (64u) of walkable area a window needs to be a candidate (~12.3M units^2)
 _S = {}
+
+
+DISPLACED_GAP = 3000.0     # a mesh this far below its neighbours is a "removed" navmesh parked under the map (relative rule)
+
+
+def displaced_meshes(sc):
+    """Navmeshes a plugin 'removed' by moving them far below the rest of their cell.  Relative rule, no absolute height:
+    an interior mesh whose highest vertex is more than DISPLACED_GAP under the lowest vertex of every other mesh of the cell
+    (cell has >= 3 meshes), or an exterior mesh more than DISPLACED_GAP under the 5th percentile of the lowest vertices
+    of the meshes in its 3x3 cells (>= 3 neighbours)."""
+    if '_displaced' in sc: return sc['_displaced']
+    from collections import defaultdict
+    info = {}; grp = defaultdict(list)
+    for k, (pi, nv) in sc['navm'].items():
+        ni = sc['navinfo'].get(k)
+        if ni is None: continue
+        v = F.parse_np(nv)['verts']
+        if not len(v): continue
+        info[k] = (float(v[:, 2].min()), float(v[:, 2].max()))
+        if ni[0]: grp[('x', ni[0], ni[1], ni[2])].append(k)
+        elif ni[3]: grp[('i', ni[3])].append(k)
+    out = set()
+    for u, ks in grp.items():
+        if u[0] == 'i':
+            for k in ks:
+                o = [info[j][0] for j in ks if j != k]
+                if len(o) >= 2 and info[k][1] < min(o) - DISPLACED_GAP: out.add(k)
+        else:
+            nb = [j for dx in (-1, 0, 1) for dy in (-1, 0, 1) for j in grp.get(('x', u[1], u[2] + dx, u[3] + dy), ())]
+            for k in ks:
+                o = [info[j][0] for j in nb if j != k]
+                if len(o) >= 3 and info[k][1] < float(np.percentile(o, 5)) - DISPLACED_GAP: out.add(k)
+    sc['_displaced'] = out
+    return out
+
+
+def make_groups(sc):
+    """unit -> [navmesh keys], without the displaced ones"""
+    bad = displaced_meshes(sc); groups = {}
+    for k in sc['navm']:
+        ni = sc['navinfo'].get(k)
+        if ni is None or (ni[3] is None and not ni[0]) or k in bad: continue
+        groups.setdefault(unit_of_mesh(sc, k), []).append(k)
+    return groups
+
+
+def reachable_cells(sc):
+    """cells a character can walk to from an exterior cell through load doors (teleport doors that do not start
+    disabled), over the refs the scan kept.  -> set of cell keys (every exterior cell plus the interiors reached)."""
+    if '_reach' in sc: return sc['_reach']
+    adj = {}
+    for rk, r in sc['refs'].items():
+        tel = r[8]
+        if not tel or R.start_disabled(sc, rk): continue
+        dest = sc['refs'].get(tel[0])
+        if dest is None: continue
+        adj.setdefault(r[0], set()).add(dest[0])
+    seen = {ck for ck, c in sc['cells'].items() if c['world']}      # every cell of a worldspace; interiors have no world
+    todo = list(seen)
+    while todo:
+        c = todo.pop()
+        for d in adj.get(c, ()):
+            if d not in seen: seen.add(d); todo.append(d)
+    sc['_reach'] = seen
+    return seen
 
 
 def unit_of_mesh(sc, k):
@@ -49,6 +115,7 @@ def _world_task(args):
             for dx in range(-WIN, WIN + 1):
                 for dy in range(-WIN, WIN + 1):
                     if (gx + dx, gy + dy) in have: _add(tot, stats[(gx + dx, gy + dy)])
+            if win['water'] >= MAX_WATER: continue      # mostly water: a lake, not a place to fight or loot
             win.update(tot); out.append((('x', w, gx, gy), win))
     else:
         for ck in ident:
@@ -66,10 +133,7 @@ def _world_task(args):
 
 
 def build_candidates(sc, procs=6, log=print):
-    groups = {}
-    for k in sc['navm']:
-        if sc['navinfo'].get(k) is None or sc['navinfo'][k][3] is None and not sc['navinfo'][k][0]: continue
-        groups.setdefault(unit_of_mesh(sc, k), []).append(k)
+    groups = make_groups(sc); stats = dict(displaced=len(displaced_meshes(sc)))
     _S['sc'] = sc; _S['groups'] = groups
     worlds = {}
     for u in groups:
@@ -81,7 +145,11 @@ def build_candidates(sc, procs=6, log=print):
     with Pool(procs) as p:
         for res in p.imap_unordered(_world_task, tasks, chunksize=1):
             for u, win in res: cands[u] = win
-    log('candidates: %d (%d interior) in %.0fs' % (len(cands), sum(1 for u in cands if u[0] == 'i'), time.time() - t0))
+    reach = reachable_cells(sc); n0 = len(cands)
+    for u in [u for u in cands if u[0] == 'i' and u[1] not in reach]: del cands[u]
+    stats['unreachable_interiors'] = n0 - len(cands)
+    log('candidates: %d (%d interior) in %.0fs; displaced meshes dropped %d, interiors not reachable from an exterior cell dropped %d' % (
+        len(cands), sum(1 for u in cands if u[0] == 'i'), time.time() - t0, stats['displaced'], stats['unreachable_interiors']))
     return groups, cands
 
 
@@ -106,6 +174,7 @@ def ref_features(sc, cands, min_static=R.DEFAULT_MIN_STATIC):
         f['nLeveled'] = 0; f['nTele'] = 0; f['nLocked'] = 0; f['nStuff'] = 0
         for uu in units:
             for rk, (kind, sig, bmin, bmax) in by.get(uu, ()):
+                if R.start_disabled(sc, rk): continue      # starts disabled: kept in the file, not counted
                 f[names[kind]] += 1
                 ref = sc['refs'][rk]
                 if kind == R.K_ACTOR and sig == 'LVLN': f['nLeveled'] += 1

@@ -3,7 +3,7 @@
 Keys are ints: (global plugin index << 24) | local id, where the plugin index is the position of the OWNING plugin
 (the one whose master list / own name the raw FormID resolved to) in the set's load order.
 """
-import os, struct, time, pickle, math
+import os, struct, time, pickle, math, zlib
 from multiprocessing import Pool
 import plugin as P
 
@@ -72,6 +72,12 @@ def pass1(i):
     return i, out
 
 
+def _has_xesp(pg, o, size, fl):
+    body = pg.data[o:o + size]
+    if fl & P.F_COMPRESSED: body = zlib.decompress(body[4:])
+    return b'XESP' in body
+
+
 def pass2(i):
     want = _G['want']; pg = P.Plugin(_G['where'][_G['names'][i]])
     refs = []; moved = []; cache = {}; wc = {}
@@ -89,9 +95,17 @@ def pass2(i):
             if ck is None: ck = wc[craw] = K(craw)
             rk = K(fid)
             if ck not in want:
-                if (rk >> 24) != i: moved.append((rk, ck))
+                # state evidence (README, enable parents): an override, an initially disabled ref or a ref with an enable parent
+                # can decide whether something is on; plain new refs are enabled with no parent and need no row
+                if fl & P.F_DELETED: moved.append((rk, ck, True, False, None)); continue
+                ov = (rk >> 24) != i
+                if ov or fl & P.F_DISABLED or _has_xesp(pg, o, size, fl):
+                    ep = None
+                    for t, d in P.subrecords(pg.data, o, size, fl):
+                        if t == b'XESP' and len(d) >= 5: ep = (K(struct.unpack_from('<I', d, 0)[0]), d[4])
+                    moved.append((rk, ck, False, bool(fl & P.F_DISABLED), ep))
                 continue
-            if fl & (P.F_DELETED | P.F_DISABLED):
+            if fl & P.F_DELETED:
                 refs.append((rk, ck, fl, None)); continue
             nm = None; pos = rot = None; scale = 1.0; ep = None; tel = None; lock = None; cnt = 1
             for t, d in P.subrecords(pg.data, o, size, fl):
@@ -158,19 +172,28 @@ def scan_set(order, where, procs=6, log=print):
             ck = rk(pg, struct.unpack_from('<I', nv, 12)[0]); navinfo[k] = (0, None, None, ck)
         if ck: navcells.add(ck)
     want = set(navcells)
+    for (wk2, gx2, gy2) in {(v[0], v[1], v[2]) for v in navinfo.values() if v[0]}:   # window cells without a navmesh still get their statics
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                c2 = ext_cells.get((wk2, gx2 + dx, gy2 + dy))
+                if c2: want.add(c2)
     navworlds = {v[0] for v in navinfo.values() if v[0]}
     for ck, c in cells.items():   # exterior persistent cell of a world that has navmeshes
         if c['persist'] and not c['flags'] & 1 and c['world'] in navworlds: want.add(ck)
     log('%d navmeshes, %d cells, %d with navmesh (+persistent), %d bases' % (len(navm), len(cells), len(navcells), len(bases)))
     # pass 2
-    _G['want'] = want; t1 = time.time(); refs = {}
+    _G['want'] = want; t1 = time.time(); refs = {}; states = {}
     for i, rr, moved in _pool_run(pass2, n, procs):
         for rkey, ck, fl, body in rr:
-            if body is None: refs.pop(rkey, None)
+            states.pop(rkey, None)
+            if body is None: refs.pop(rkey, None); states[rkey] = None
             else: refs[rkey] = (ck, fl) + body
-        for rkey, ck in moved: refs.pop(rkey, None)
+        for rkey, ck, dele, dis, ep in moved:
+            refs.pop(rkey, None)
+            if dele: states[rkey] = None          # deleted elsewhere
+            else: states[rkey] = (dis, ep)
     log('pass 2: %d refs in %.0fs' % (len(refs), time.time() - t1))
-    return dict(order=order, plugins=plugins, cells=cells, navm=navm, navinfo=navinfo, bases=bases, worlds=worlds, refs=refs,
+    return dict(order=order, plugins=plugins, cells=cells, navm=navm, navinfo=navinfo, bases=bases, worlds=worlds, refs=refs, states=states,
                 nameidx=nameidx, want=want)
 
 
