@@ -663,8 +663,20 @@ namespace MFO::Logistics {
         // by the next logistics tick the ended leg may already have let him drift back
         // toward the player. Null = his current position (MFO's own MB timer, M1).
         // Returns false (and records NOTHING) when the probe names no door or activator at the block: the caller treats it as a stuck / repath event.
+        // LiveGateAtPoint (N3): is a GATED record live whose block point lies within gateRepeatU of a_pos, in a_target's space? A second block there
+        // is the SAME obstacle: it gates the new target only (no cone), and is no stuck evidence. Worker; takes g_gateMx.
+        inline bool LiveGateAtPoint(RE::TESObjectREFR* a_target, const RE::NiPoint3& a_pos) {
+            if (!a_target || g_gateCount.load(std::memory_order_relaxed) <= 0) return false;
+            const RE::FormID space = SpaceKey(a_target);
+            const float      r     = Iaus::DefaultLootTuning().gateRepeatU;
+            std::lock_guard lk(g_gateMx);
+            for (const GateRecord& g : g_gates)
+                if (g.space == space && g.blockPos.GetDistance(a_pos) <= r) return true;
+            return false;
+        }
+        // a_targetOnly (N3): record this target alone, never the cone past it (a repeat at a live gate's point).
         inline bool MarkGated(RE::Actor* a_follower, RE::TESObjectREFR* a_target, float a_blockedSecs,
-                              Clock::time_point a_now, const RE::NiPoint3* a_blockPos = nullptr) {
+                              Clock::time_point a_now, const RE::NiPoint3* a_blockPos = nullptr, bool a_targetOnly = false) {
             if (!a_follower || !a_target) return false;
             GateRecord g;
             g.target    = a_target->GetFormID();
@@ -673,7 +685,7 @@ namespace MFO::Logistics {
             g.blockPos  = a_blockPos ? *a_blockPos : a_follower->GetPosition();
             g.targetPos = a_target->GetPosition();
             g.since     = a_now;
-            g.targetOnly = g.blockPos.GetDistance(g.targetPos) > Iaus::DefaultLootTuning().gateShortU;
+            g.targetOnly = a_targetOnly || g.blockPos.GetDistance(g.targetPos) > Iaus::DefaultLootTuning().gateShortU;
             if (!LogGateNeighbours(a_follower, a_target, g.blockPos)) {
                 spdlog::info("[loot] {:08X} target {:08X} Movement Blocked {:.1f}s at ({:.0f},{:.0f},{:.0f}), {:.0f} u short: the probe names NO door or "
                              "activator -- a bump / repath, NOT a gate. Nothing recorded against the target or its cone; stuck evidence, the leg retries",
@@ -687,7 +699,8 @@ namespace MFO::Logistics {
                          g.follower, g.target, a_blockedSecs, g.blockPos.x, g.blockPos.y, g.blockPos.z,
                          g.blockPos.GetDistance(g.targetPos), Iaus::DefaultLootTuning().gateConeDeg, Iaus::DefaultLootTuning().gateBeyondU,
                          Iaus::DefaultLootTuning().gateReadmitSec, Iaus::DefaultLootTuning().gateReadmitMoveU,
-                         g.targetOnly ? " TARGET ONLY: the block is far short of it, so he was stuck, not at an opening -- no cone." : "");
+                         a_targetOnly ? " TARGET ONLY: a gate is already live at this point (the same obstacle), so only this item is added -- no cone."
+                         : g.targetOnly ? " TARGET ONLY: the block is far short of it, so he was stuck, not at an opening -- no cone." : "");
             std::lock_guard lk(g_gateMx);
             std::erase_if(g_gates, [&](const GateRecord& o) { return o.target == g.target; });
             if (g_gates.size() >= kGateMax) {   // oldest first, and said out loud

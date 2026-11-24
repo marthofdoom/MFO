@@ -1344,7 +1344,14 @@ namespace MFO::Logistics {
                         const bool real = FindGateObstacle(a_follower, tref, bp).Any();
                         const BlockGround ground = NoteBlockGround(id, tref->GetFormID(), bp, tref->GetPosition(), now);
                         if (real) {
-                            if (StuckAtOriginRepeatsBlock(id, bp, now)) {
+                            if (StuckAtOriginRepeatsBlock(id, bp, now) && LiveGateAtPoint(tref, bp)) {
+                                // N3: blocked again at a LIVE gate's point: the same locked door with another item behind it. That is a gate
+                                // fact, not stuck evidence: gate the new target only (no second cone) and keep it out of the stuck run.
+                                skipWhy = MarkGated(a_follower, tref, held, now, blockPos, /*a_targetOnly*/ true)
+                                    ? "GATED (a live gate stands at this point; this target only)"
+                                    : "BLOCKED, obstacle probe empty (not gated)";
+                                feedStuck = false;
+                            } else if (StuckAtOriginRepeatsBlock(id, bp, now)) {
                                 // blocked again within gateRepeatU of his previous block point: HE is stuck, not the target. No gate (it froze
                                 // all outdoor loot until unload); the block feeds the stuck-at-origin record below.
                                 spdlog::info("[loot] {:08X} target {:08X} blocked again within {:.0f} u of his previous block point after "
@@ -1352,9 +1359,10 @@ namespace MFO::Logistics {
                                              Iaus::DefaultLootTuning().gateRepeatU, held);
                                 skipWhy = "BLOCKED again at the same point (stuck evidence, not gated)";
                             } else {
-                                skipWhy = MarkGated(a_follower, tref, held, now, blockPos)
-                                    ? "GATED (Movement Blocked, a real obstacle on the way)"
-                                    : "BLOCKED, obstacle probe empty (not gated)";
+                                const bool gated = MarkGated(a_follower, tref, held, now, blockPos);
+                                skipWhy = gated ? "GATED (Movement Blocked, a real obstacle on the way)"
+                                                : "BLOCKED, obstacle probe empty (not gated)";
+                                if (gated) feedStuck = false;   // N3: a real GATE is a fact about the door, not stuck evidence (the next item at it was "stuck himself")
                             }
                         } else if (ground == BlockGround::Closed) {
                             spdlog::info("[loot] {:08X} target {:08X} Movement Blocked {:.1f}s, no door/activator on the way, and he closed ground "
