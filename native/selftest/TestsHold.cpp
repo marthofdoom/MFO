@@ -2,7 +2,7 @@
 // debug gambit. I'll test it immediately"). Tests g0b.*: the first thing the dev test gambit runs.
 //
 // QUESTION: does a ch.24 kApproach_Point + Hold claim keep a follower on a small point, and does he still fight from there? A test is a
-// list of LEGS (kTests below). One leg = pick a point (main thread: Harbinger's FindEmptySpace through APMFBridge::FindStandPoint, MFO's
+// list of LEGS (Tests() below). One leg = pick a point (main thread: Harbinger's FindEmptySpace through APMFBridge::FindStandPoint, MFO's
 // own rays through Sightline::PointSeenNow), file ONE claim (apmf/DevHold.cpp, the Disengage.cpp road), sample him every pump tick
 // (~133 ms), release, print ONE line:
 //   [hold] RESULT <test> leg n/m <what> R=<r>: PASS|FAIL|MEASURED|SKIP ...
@@ -17,7 +17,7 @@
 // point out of combat is another facet (ch.19 travel) and is NOT exercised here.
 // QUIET: the ch.33 style claim needs a TESCombatStyle, and the engine has no "stand still" one, so the calmest style of the LOAD ORDER is
 // looked up at run time (lowest circle + fallback + strafe that still weighs melee, magic and bows). Exerciser only, never shipped.
-// To add a leg or a test: a row in kTests (append). To add a kind of point: a Where value and a case in PlanOnMain.
+// To add a leg or a test: a row in Tests() (append, and bump kCount). To add a kind of point: a Where value and a case in PlanOnMain.
 // THREADS: run state is WORKER-ONLY. The planner is a MainThread::Post (FormIDs captured, re-resolved), its answer under the LEAF lock
 // g_planMx. Engine requests only through APMFBridge. Release: leg end, HoldEnd (every way a run ends), ClearHoldState (load / revert).
 #include "selftest/SelfTest_internal.h"
