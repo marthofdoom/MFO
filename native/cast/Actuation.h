@@ -562,6 +562,17 @@ namespace MFO::Actuation {
     struct WillWorkResult { WillWorkVerdict verdict = WillWorkVerdict::Unknown; std::string reason; };
     WillWorkResult WillWork(RE::Actor* a_caster, RE::SpellItem* a_spell, RE::Actor* a_target);
     float WillWorkClassLevelBonus(RE::Actor* a_caster, RE::SpellItem* a_spell, const RE::Effect* a_effect);
+    // ABI v46 adoption (cast/SeatRows.h, cast/NoEffect.cpp). The engine's distance for a Stagger / Disarm / Paralyze row (its GMST,
+    // read live; 0 = the row has none): a RANGE NEED on the candidate (iaus/SpellBook.cpp caps the entry's reach with it), never a refusal.
+    float RowReachLimit(EngineRow a_row);
+    // THE ZERO-EFFECT HOLD. A cast of a Stagger / Disarm / TargetEffect / Paralyze spell fired and left no effect on the target:
+    // that (spell, target) is held off for the fight (WillWork answers No). NoEffectNoteFired is called from the offense claim's
+    // refresh lap when a fire is observed (worker, idempotent per claim); the settle check runs on the main thread. NoEffectHeld is
+    // the reader (any thread). NoEffectClear(follower) ends with the fight (ClearCastLock), NoEffectClearAll on revert / load.
+    void NoEffectNoteFired(RE::Actor* a_caster, RE::SpellItem* a_spell, RE::Actor* a_target);
+    bool NoEffectHeld(RE::FormID a_caster, RE::FormID a_spell, RE::FormID a_target);
+    void NoEffectClear(RE::FormID a_caster);
+    void NoEffectClearAll();
     void  WillWorkClear();   // drops the mirror (tests / load)
 
     // CARD G7, "CORPSE: WITHIN" (cast/Corpse.cpp): the corpse a `cond.corpse_within -> act.cast_target` rule should
@@ -891,6 +902,8 @@ namespace MFO::Actuation {
         bool         spawnHazard  = false;   // any effect archetype kSpawnHazard (40)
         bool         hazardHostile = false;  // ...and the spawned hazard's spell has a hostile effect (read off associatedForm)
         std::uint32_t effectCount = 0;
+        std::int32_t  keyedEffect = -1;      // index into SpellItem::effects of the effect the predicted row keys by (the row's
+                                             // costliest effect when several rows compete); -1 = none (NoRow / Unknown / no effects)
         const char*   kindName    = "?";    // CasterConsent::ClassifySpell: Offense / Buff / Heal (static literal)
     };
     // Cached per FormID under a leaf mutex (record data is static after load). Null -> default.
@@ -921,12 +934,16 @@ namespace MFO::Actuation {
     const char* ShapeName(SpellShape a_shape);
     const char* EngineRowName(EngineRow a_row);
     // THE ONE READER of "does Harbinger seat a caster for this spell's predicted engine row" (marth 2026-11-19, Jesper:
-    // casts "never get going"). Harbinger's 0x06 / 0x07 / 0x0A / 0x0D seats never sit on Stagger, Disarm, TargetEffect,
-    // Paralyze (and Reanimate below ABI 19: Harbinger STATUS.md 2026-10-05); a claim on such a spell is never asked
-    // CheckStartCast and holds its hand until the TTL. The row is the predicted one, exact OR approx (Turn Lesser Undead keys
-    // TargetEffect(approx)). TO SEAT A ROW LATER, edit kUnseatedRows in Archetype.cpp (one row). NoRow / Unknown / Script
-    // are NOT unseated: Harbinger serves those as Script (Longstride, Detect Life, Circle of Strength fired in the field).
-    // Pure form data (plus the ABI read for Reanimate): any thread.
+    // casts "never get going"). ABI v46 (adopt-seats): Harbinger seats Stagger, Disarm, TargetEffect and Paralyze (0x06 / 0x07 /
+    // 0x0A / 0x0D) and reports it per install in APMF_ServeInfo::castSeats; a row is seated when its kCastSeat_* bit AND
+    // kCastSeat_TypeEquip are set (SeatRows::RowSeated, APMFBridge::CastSeatCoverage, kept for the session). Below ABI 46 (a 0.20.5
+    // Harbinger) the static fallback stands: those four rows are NOT seated and a claim on them is never asked CheckStartCast.
+    // Reanimate: seated when CastSeatsSupported (unchanged). The row is the predicted one, exact OR approx (Turn Lesser Undead keys
+    // TargetEffect(approx)). TO CHANGE THE OLD-HARBINGER FALLBACK, edit kUnseatedRows in Archetype.cpp; the v46 rows and their
+    // bits are the table kRows in cast/SeatRows.h. NoRow / Unknown / Script are NOT unseated: Harbinger serves those as Script
+    // (Longstride, Detect Life, Circle of Strength fired in the field). A seated row gets the seated never-started window
+    // (cast/CastOn.cpp OffenseNeverStartedFightLong); NOTHING here vetoes a spell, every spell stays a candidate (marth).
+    // Pure form data plus the cached coverage read: any thread.
     bool HarbingerSeatsRow(EngineRow a_row);
     // The spell-level question. false = unservable; *a_row (optional) gets the row. a_road (static literal) is named in
     // the once-per-spell `[iaus]` line this logs the first time it answers false (a_log). A null spell answers true.

@@ -1043,6 +1043,8 @@ namespace MFO::APMFBridge {
 
     void Acquire() {
         g_apmf.store(nullptr, std::memory_order_relaxed);
+        g_castSeats.store(0, std::memory_order_relaxed);
+        g_castSeatsAskedMs.store(0, std::memory_order_relaxed);
         void* h = GetModuleHandleA("APMF.dll");
         if (!h) {
             spdlog::info("[apmf] interface absent -- APMF.dll not in the load order; "
@@ -1085,6 +1087,49 @@ namespace MFO::APMFBridge {
     std::uint32_t AbiVersion() {
         auto* api = g_apmf.load(std::memory_order_relaxed);
         return api ? api->abiVersion : 0;
+    }
+
+    // ABI v46 cast seat coverage (APMFBridge.h). A CanServe dry run that fills APMF_ServeInfo and files nothing: RequestEx with
+    // kIntent_None and no actor is refused at once (kServeRefusal_NoChannel), and CanServe still writes castSeats on a refused
+    // query (Harbinger core/ClientAPI.cpp APMF_CanServe: everything is computed before the verdict, the fill is unconditional once
+    // `out->size` >= 128). Atomics only: a race re-asks, harmlessly.
+    namespace {
+        constexpr std::uint32_t kCastSeatsMinAbi = 46;
+        constexpr long long     kSeatsRetryMs    = 5000;
+        std::atomic<std::uint32_t> g_castSeats{ 0 };
+        std::atomic<long long>     g_castSeatsAskedMs{ 0 };   // steady ms of the last 0 answer (0 = never asked)
+        long long NowMsSteady() {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        }
+    }
+    std::uint32_t CastSeatCoverage() {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || api->abiVersion < kCastSeatsMinAbi) return 0;
+        if (const auto kept = g_castSeats.load(std::memory_order_relaxed); kept != 0) return kept;
+        const long long now = NowMsSteady();
+        const long long was = g_castSeatsAskedMs.load(std::memory_order_relaxed);
+        if (was != 0 && now - was < kSeatsRetryMs) return 0;
+        g_castSeatsAskedMs.store(now == 0 ? 1 : now, std::memory_order_relaxed);
+        auto* v35 = reinterpret_cast<const APMF_API::APMF_API_v35*>(api);
+        if (!v35->CanServe) return 0;
+        APMF_API::APMF_ServeQuery q{};
+        q.size   = sizeof(APMF_API::APMF_ServeQuery);
+        q.call   = APMF_API::kServeCall_RequestEx;
+        q.intent = APMF_API::kIntent_None;
+        APMF_API::APMF_ServeInfo info{};
+        info.size = sizeof(APMF_API::APMF_ServeInfo);
+        const std::uint32_t verdict = v35->CanServe(&q, &info);
+        if (verdict == APMF_API::kServe_Failed) return 0;
+        g_castSeats.store(info.castSeats, std::memory_order_relaxed);
+        if (info.castSeats != 0)
+            spdlog::info("[apmf] cast seat coverage (ABI v{}): 0x{:X}; hostile rows served: Stagger={} Disarm={} TargetEffect={} "
+                         "Paralyze={} (each needs its bit AND TypeEquip 0x{:X}); skill gate={}; Reanimate={}",
+                         api->abiVersion, info.castSeats,
+                         (info.castSeats & APMF_API::kCastSeat_Stagger) != 0, (info.castSeats & APMF_API::kCastSeat_Disarm) != 0,
+                         (info.castSeats & APMF_API::kCastSeat_TargetEffect) != 0, (info.castSeats & APMF_API::kCastSeat_Paralyze) != 0,
+                         APMF_API::kCastSeat_TypeEquip, (info.castSeats & APMF_API::kCastSeat_SkillGate) != 0,
+                         (info.castSeats & APMF_API::kCastSeat_Reanimate) != 0);
+        return info.castSeats;
     }
 
     // ABI v26 (ClickUp 86e3pu939): Harbinger's substrate state. A v26 interface's leading members are v2's, so the

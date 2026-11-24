@@ -1,5 +1,6 @@
 // iaus/SpellBook.cpp -- the per-follower main-thread mirror (contract and threading in iaus/SpellBook.h). Card I4.
 #include "iaus/SpellBook.h"
+#include "cast/SeatRows.h"
 
 #include "CasterConsent.h"
 #include "Config.h"
@@ -341,6 +342,10 @@ namespace MFO::Iaus::SpellBook {
             // what a heal or buff placed on an ally needs). "No cap of its own" is a huge number there: 0 here.
             const float reach = Actuation::HealReach(a_sp);
             e.reach = (std::isfinite(reach) && reach > 0.0f && reach < 1.0e8f) ? reach : 0.0f;
+            // ABI v46 (cast/SeatRows.h): the engine's own distance for a Stagger / Disarm / Paralyze row is a RANGE NEED on the candidate
+            // (Reposition::SpellRange closes to it), not a refusal: Harbinger no longer asks the engine for a claim, so MFO keeps the spell
+            // inside the row's reach itself. A row with no distance of its own (0) leaves the reach as it was.
+            e.reach = SeatRows::CapReach(e.reach, Actuation::RowReachLimit(arch.row));
             if (a_source == Source::Spell) {
                 const float cost = a_sp->CalculateMagickaCost(a_actor);
                 e.cost = (std::isfinite(cost) && cost > 0.0f) ? cost : 0.0f;

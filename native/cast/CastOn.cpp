@@ -709,6 +709,7 @@ namespace MFO::Actuation {
                             }
                             oldestMs = std::max<long long>(oldestMs, ageMs.count());
                         }
+                        if (fired) NoEffectNoteFired(a_follower, spell, a_target);   // v46 hostile rows: did it leave an effect? (cast/NoEffect.cpp)
                         if (fired) {   // it started: the consecutive-failure count of the pair ends
                             if (const auto cn = g_offenseNeverStartedCount.find(id); cn != g_offenseNeverStartedCount.end())
                                 cn->second.erase(OffenseKey(a_spellID, a_target->GetFormID()));
@@ -2079,6 +2080,7 @@ namespace MFO::Actuation {
         ResetBuffFollower(a_follower);   // feat/mfo-remaining-cast-kinds: the never-fired hold-off ends with the fight
         g_scriptOffenseNeverFired.erase(a_follower);   // the never-started offense claim's twin hold-off
         g_offenseNeverStartedCount.erase(a_follower);
+        NoEffectClear(a_follower);   // the zero-effect hold ends with the fight (cast/NoEffect.cpp)
         // F3-7: Actuation_Direct.cpp keeps an IDENTICAL refusal-log twin in its own
         // anon namespace; drop that follower's entries here too so the two maps
         // really do share a release point instead of only claiming to.
@@ -2105,6 +2107,7 @@ namespace MFO::Actuation {
         g_unsightedCharge.clear();
         g_scriptOffenseNeverFired.clear();
         g_offenseNeverStartedCount.clear();
+        NoEffectClearAll();
         ResetBuffRoad();             // feat/mfo-remaining-cast-kinds: cast/BuffRoad.cpp
         ResetHealRoad();             // feat/mfo-perhand-heal: the per-hand heal records (cast/HealRoad.cpp)
         ResetSubstrateRoad();        // slice S3: the substrate road's pacing + log dedup (cast/SubstrateRoad.cpp)

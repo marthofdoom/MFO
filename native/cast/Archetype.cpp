@@ -37,6 +37,7 @@
 #include "CasterConsent.h"
 #include "Config.h"
 #include "apmf/APMFBridge.h"
+#include "cast/SeatRows.h"
 
 #include <algorithm>
 #include <map>
@@ -261,10 +262,13 @@ namespace MFO::Actuation {
             // Per-effect rows, the distinct caster rows, the costliest effect (Effect::cost).
             std::vector<EngineRow> rows;
             std::vector<Arch>      archs;   // parallel to rows: each counted effect's archetype
+            std::vector<std::int32_t> effIdx;   // parallel to rows: the effect's index in sp->effects (keyedEffect)
             float bestCost = -1.0f;
             std::size_t bestIdx = 0;
             std::string unknownWhy;
+            std::int32_t effNo = -1;
             for (auto* eff : sp->effects) {
+                ++effNo;
                 auto* b = eff ? eff->baseEffect : nullptr;
                 if (!b) continue;
                 ++o.effectCount;
@@ -294,6 +298,7 @@ namespace MFO::Actuation {
                 if (eff->cost > bestCost) { bestCost = eff->cost; bestIdx = rows.size(); }
                 rows.push_back(r);
                 archs.push_back(a);
+                effIdx.push_back(effNo);
                 if (HasImpactHazard(b)) o.impactHazard = true;
                 if (a == Arch::kSpawnHazard) {
                     o.spawnHazard = true;
@@ -330,6 +335,15 @@ namespace MFO::Actuation {
                 o.rowApprox = true;
                 o.rowWhy = anyUnknown ? "an effect's row is unknown and the highest-scoring effect cannot be read; costliest effect used"
                                       : "several effects map to different rows and the engine's effect score cannot be read; costliest effect used";
+            }
+
+            // The KEYED effect: the one the predicted row comes from (the costliest effect when several rows compete, the stand-in for the
+            // engine's score, as above). cast/WillWork.cpp judges it against the target for the rows Harbinger no longer asks the engine
+            // about (v46 hostile rows). The costliest effect when it carries the row, else the first effect that does.
+            if (o.row != EngineRow::NoRow && o.row != EngineRow::Unknown && !rows.empty()) {
+                if (rows[bestIdx] == o.row) o.keyedEffect = effIdx[bestIdx];
+                else for (std::size_t i = 0; i < rows.size(); ++i)
+                    if (rows[i] == o.row) { o.keyedEffect = effIdx[i]; break; }
             }
 
             // Shape. Precedence: the effect archetype shapes first (they decide the caster and the
@@ -506,16 +520,43 @@ namespace MFO::Actuation {
     }
 
     namespace {
-        // The rows Harbinger seats NO caster for (its STATUS.md 2026-10-05: "never Stagger, Disarm, TargetEffect, Paralyze,
-        // Reanimate"). Edit HERE when Harbinger seats one. Reanimate is handled in HarbingerSeatsRow (BuffRoad's placement
-        // claim serves it from ABI 19).
+        // The rows an OLDER Harbinger (ABI < 46, e.g. 0.20.5) seats NO caster for (its STATUS.md 2026-10-05: "never Stagger,
+        // Disarm, TargetEffect, Paralyze, Reanimate"). From ABI 46 the four hostile rows are read live (HarbingerSeatsRow,
+        // cast/SeatRows.h); this table is only the fallback for the older one. Reanimate is handled in HarbingerSeatsRow
+        // (BuffRoad's placement claim serves it from ABI 19).
         constexpr EngineRow kUnseatedRows[] = { EngineRow::Stagger, EngineRow::Disarm, EngineRow::TargetEffect,
                                                 EngineRow::Paralyze, EngineRow::Reanimate };
         std::mutex                          g_unseatedMx;   // leaf lock
         std::unordered_set<RE::FormID>      g_unseatedLogged;
     }
 
+    namespace {
+        // EngineRow -> the v46 row of cast/SeatRows.h (false = not one of the four hostile rows).
+        bool HostileSeatRow(EngineRow a_row, SeatRows::Row& a_out) {
+            switch (a_row) {
+            case EngineRow::Stagger:      a_out = SeatRows::Row::Stagger;      return true;
+            case EngineRow::Disarm:       a_out = SeatRows::Row::Disarm;       return true;
+            case EngineRow::TargetEffect: a_out = SeatRows::Row::TargetEffect; return true;
+            case EngineRow::Paralyze:     a_out = SeatRows::Row::Paralyze;     return true;
+            default: return false;
+            }
+        }
+        // The header's bits are the table's (a drift would silently seat the wrong row).
+        static_assert(SeatRows::Info(SeatRows::Row::Stagger).coverageBit      == APMF_API::kCastSeat_Stagger);
+        static_assert(SeatRows::Info(SeatRows::Row::Disarm).coverageBit       == APMF_API::kCastSeat_Disarm);
+        static_assert(SeatRows::Info(SeatRows::Row::TargetEffect).coverageBit == APMF_API::kCastSeat_TargetEffect);
+        static_assert(SeatRows::Info(SeatRows::Row::Paralyze).coverageBit     == APMF_API::kCastSeat_Paralyze);
+        static_assert(SeatRows::kTypeEquipBit == APMF_API::kCastSeat_TypeEquip);
+        static_assert(SeatRows::kMinAbiCoverage == 46);
+    }
+
     bool HarbingerSeatsRow(EngineRow a_row) {
+        SeatRows::Row hostile{};
+        if (HostileSeatRow(a_row, hostile)) {
+            // v46: the live per-install answer. Older Harbinger (abi < 46): the static table below, which lists these as unseated.
+            const auto abi = APMFBridge::AbiVersion();
+            if (abi >= SeatRows::kMinAbiCoverage) return SeatRows::RowSeated(abi, APMFBridge::CastSeatCoverage(), hostile);
+        }
         for (const auto r : kUnseatedRows) {
             if (r != a_row) continue;
             if (a_row == EngineRow::Reanimate) return APMFBridge::CastSeatsSupported();
@@ -538,8 +579,8 @@ namespace MFO::Actuation {
             if (first)
                 spdlog::warn("[iaus] \"{}\" ({:08X}) has NO Harbinger caster seat for its predicted engine row {}{} -- "
                              "named on the {} (a claim would never be asked CheckStartCast and would hold its hand); no "
-                             "direct fallback (animation required). Seating the row is a Harbinger brief; the table is "
-                             "kUnseatedRows (cast/Archetype.cpp)",
+                             "direct fallback (animation required). Harbinger ABI >= 46 seats it (castSeats, read live); an older one "
+                             "never does (the fallback table is kUnseatedRows, cast/Archetype.cpp)",
                              a_spell->GetName() ? a_spell->GetName() : "?", a_spell->GetFormID(), EngineRowName(a.row),
                              a.rowApprox ? "(approx)" : "", a_road ? a_road : "?");
         }
