@@ -80,7 +80,8 @@ namespace MFO::Actuation {
                 const RE::FormID w = target ? DisarmableRightWeapon(target) : 0u;
                 std::scoped_lock lk(g_mx);
                 const auto it = g_pending.find(a_key);
-                if (it != g_pending.end() && it->second.firedAt == a_firedAt) it->second.weapon = w;
+                // A snapshot taken late may see a spare already drawn: no subject then, so the reading is Inconclusive.
+                if (it != g_pending.end() && it->second.firedAt == a_firedAt && Age(a_firedAt, Clock::now()) <= 1.0) it->second.weapon = w;
             });
         }
 
@@ -124,7 +125,7 @@ namespace MFO::Actuation {
                 {
                     std::scoped_lock lk(g_mx);
                     const auto it = g_pending.find(a_key);
-                    if (it == g_pending.end() || it->second.firedAt != a_firedAt) return;   // a newer fire took over
+                    if (it == g_pending.end() || it->second.firedAt != a_firedAt || it->second.judged) return;   // a newer fire took over, or this one is already read
                     snap = it->second;
                 }
                 std::string what;
@@ -137,7 +138,7 @@ namespace MFO::Actuation {
                 {
                     std::scoped_lock lk(g_mx);
                     const auto it = g_pending.find(a_key);
-                    if (it == g_pending.end() || it->second.firedAt != a_firedAt) return;   // checked again under the lock (review F7)
+                    if (it == g_pending.end() || it->second.firedAt != a_firedAt || it->second.judged) return;   // checked again under the lock (review F7)
                     it->second.judged  = true;
                     it->second.askedAt = Clock::time_point{};
                     it->second.zeros   = SeatRows::Tally(it->second.zeros, reading);
