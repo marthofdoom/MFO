@@ -3745,3 +3745,9 @@ R1 and R2 are FIXED on the branch, with the coordinator's small items (net goal 
 - **OPEN (SEV-5):** the solo walk's 3 wrong trips of 10620 on the library copy (2 still walking at the time limit, 1 stuck, places x_Skyrim-050015_-1_2, x_Skyrim-02EE41_5_-9, x_Dawnguard-001408_-8_-1) are under the tenth of a percent the check allows and were not chased.
 - **OPEN (SEV-5):** the adopt-seats mirror leaves out Disarm's weapon need, Command's summoned need, effect conditions and the approximate-row exemption (the lab has no such effect or record).
 
+
+### feat/sim-v4-world closing pass (Opus 2026-11-24, against f2506977)
+- SEV-4: SightWalk: a sighted walk-in runs on toward the foe for up to 1.5 s; native stops at its standoff.
+- SEV-4: iaus-sim-v4.md 13.9 should state the legMinU sensitivity (mean osc over 8 classes 2.93 at 150, 5.01 at 80, 1.07 at 200).
+- SEV-4: EnvAwayPick is blind to second foes during the commit.
+- SEV-5: sightDwellSec / blockLapseU are hand copies of native constants; add a run.sh grep check.
