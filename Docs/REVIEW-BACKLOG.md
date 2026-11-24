@@ -3709,3 +3709,25 @@ Author's notes, open after the slice (none above SEV-3 known to the author):
 ### feat/adopt-seats re-check (Opus 2026-11-23, against a2104555)
 - SEV-5 B: the engine's Disarm test also needs the weapon DRAWN (AE 0x678C2D, weapon state >= 3) and a 0x2235A0 test not identified; MFO accepts a sheathed weapon, an early Disarm may be spent.
 - SEV-5 D: SeatRows::NeedMet has no game caller (WillWork inlines it), its harness rows prove nothing; HoldLedger and Actuation.h comments still describe the one-reading hold.
+
+## feat/sim-v4-world (Fable author, 2026-11-23 and 11-24, tools/iaus_sim + the pure native/iaus EnvQuery / PathSearch files + docs; record: Docs/research/2026-11/iaus-sim-v4.md section 13)
+
+### Opus review 2026-11-23, against 37a705e6
+The review file on disk (`_agentlogs/mfo/review-sim-world.md`), verbatim:
+> Review 37a705e6: FIX LIST. v2/v3/v4 compares 0 changed; env-test 52 pass; threads 1=8.
+> F1 SEV-2 EnvWorld.h:174 straight-line shortcut has no z check: 217/11266 solo walks end under/over the goal, 216 with zero stuck tally; adding a 16u z check -> 1.
+> F2 SEV-2 blasts/areas 2D through walls/floors World.h:1322,1222. F3 SEV-2 backpedal = 65% of evoker stuck% (2.53 -> 0.88). Rest in hand-back. Test: scratchpad rsw/t.cpp
+
+F4 to F13 and the native API items reached the authors as the coordinator's fix list, by number and a one-line title. Their verbatim review text is in the reviewer's hand-back, which is not on disk. The coordinator should paste it here. All of F1 to F13 are FIXED on the branch (what was built and its check, per finding: iaus-sim-v4.md 13.4 and 13.5). The fix list's wording of the two that were finished last:
+- F11: "sight-driven weights are not tunable until the engine-ray parity probe: enforced by a skip list in tune_driver, not only text". FIXED (`tune_driver.py sight_gated`).
+- F8 leftovers: "want gaps reset the stuck window, approach backoff counted as stuck while a capped foe counts zero, UNREACHABLE / STUCK repeats at one spot free, detour over FindPath length". FIXED (`EnvWorld.h EnvMove` / `EnvLegEnd`).
+
+### Author's notes, open after the fix round (none above SEV-3 known to the author)
+- **OPEN (SEV-3, gate):** `osc/min` fails 32 of 210 library cells and 7 of 105 fixture cells, all casters, at about 12 reversals a minute against the placeholder bound of 8. Since F7 a backpedal is a leg. Whether that is odd pathing or a caster's footwork is for the oracle pass (`--path-oracle`, iaus-sim-v4.md 10.3 item 3). Not tuned here.
+- **OPEN (SEV-3, assumption):** `--seat-immunity unseen` is the default: the game's will-work cannot read paralysis immunity and the two-zero-fires hold catches it (native `cast/WillWork.cpp` (c) says so). The lab's foes carry the `ImmuneParalysis` keyword and the extract holds no effect conditions, so whether a list's paralysis effects test it is not known in the lab. NATIVE NOTE (not this branch's files): the keyword is a plain record keyword, readable with `HasKeyword`, and `WillWork.cpp` does not read it.
+- **OPEN (SEV-4, model):** a follower behind a friend who stands in front of a closed door sidesteps round him and back instead of waiting. The author's reading of one trace, not proven further: `EnvTryStep`'s tangent step succeeds, so the yield timer never starts. Measured: the doorway fixture, mage-off, 25 s before he opens the door, counted as stuck% 2.79 and repeat/f 0.38 in that cell. The engine's soft avoidance is not modelled (`yieldSec` is an ASSUMPTION). Counted, not hidden.
+- **OPEN (SEV-4, assumption):** `EnvTuning::wantGapSec` 3 s (not asked to move for longer = standing by choice) and the zero-effect reading's timing (every fire read at the start of the settle window) are labelled assumptions with no field number behind them.
+- **OPEN (SEV-4, bounds):** the two new gate rows (`hold%` 5, `repeat/f` 1) are placeholders like the other six.
+- **OPEN (SEV-5):** the solo walk's 3 wrong trips of 10620 on the library copy (2 still walking at the time limit, 1 stuck, places x_Skyrim-050015_-1_2, x_Skyrim-02EE41_5_-9, x_Dawnguard-001408_-8_-1) are under the tenth of a percent the check allows and were not chased.
+- **OPEN (SEV-5):** the adopt-seats mirror leaves out Disarm's weapon need, Command's summoned need, effect conditions and the approximate-row exemption (the lab has no such effect or record).
+

@@ -896,13 +896,13 @@ Slices S2 to S6 in one batch. The flat world is untouched: `--world v3` (still t
 | Bodies on the mesh: movement, doors, body circles, leg ends, sight, the six tallies | `tools/iaus_sim/EnvWorld.h` | |
 | Placement of a fight in a place | `tools/iaus_sim/Setup.h EnvPlace` | |
 | Hand-made fixtures | `tools/iaus_sim/envs/<name>.txt` and the `.mfoenv` each becomes (`make_fixtures.py`, `--check` in the CLI suite) | draw a map, run the script, add the name to `Env.h kFixtureNames` |
-| Known-answer checks (52) | `tools/iaus_sim/EnvTest.h`, `sim --env-test` | |
+| Known-answer checks (74 after the review round) | `tools/iaus_sim/EnvTest.h`, `sim --env-test`. The solo walk is `sim --solo-walk N [--env-set all]` | |
 | Environment scenarios | `Scenarios.h` `envScen(...)`, `--scenario env` or by name | |
 | The pathing gate | `sim.cpp PathReport`, `kPathBounds`, `--path-report N [--path-oracle K] [--path-gate]` | a bound: `kPathBounds` |
-| Cast starts | `Data.h SimRow`, `World.h StartCast`, `Policy.h` | a row no seat starts: `kSimNeverStarts` (run.sh stops the build when native's `kUnseatedRows` moves) |
+| Cast starts | `Data.h SimRow`, `SimRowSeated` (native's own `cast/SeatRows.h RowSeated`), `World.h StartCast`, `WillWorkFor`, `NoteZeroEffect`, `Policy.h` | a row: a value in `SimRow` and its key in `SimRowOf`. A row Harbinger seats: `native/cast/SeatRows.h kRows` (the lab includes that file) |
 | Field rates for the gate's numbers | `tools/iaus_sim/calib_path.py <run-dir>` | a log line: one row of `ROWS` |
 
-CLI: `--world v4`, `--v4 env|path|bodies|los|caststart|interrupt|drops|foedrops=on|off`, `--env <file>`, `--env-set <set>|all [--env-class <class>]`, `--env-list`, `--env-test`, `--sight walls=off|terrain=off|gap=<u>`, `--seats today|all`, `--path-report`, `--path-oracle`, `--path-gate`. Diagnostics by environment variable: `SIM_PATHTRACE=<job> [SIM_PATHTRACE_ENV=<class>]` traces one fight of a path report, `SIM_ENVBAD=1` prints every off-mesh body.
+CLI: `--world v4`, `--v4 env|path|bodies|los|caststart|interrupt|drops|foedrops=on|off`, `--env <file>`, `--env-set <set>|all [--env-class <class>]`, `--env-list`, `--env-test`, `--sight walls=off|terrain=off|gap=<u>`, `--seats today|old`, `--seat-immunity seen|unseen`, `--solo-walk N`, `--path-report`, `--path-oracle`, `--path-gate`. Diagnostics by environment variable: `SIM_PATHTRACE=<job> [SIM_PATHTRACE_ENV=<class>]` traces one fight of a path report, `SIM_ENVBAD=1` prints every off-mesh body.
 
 ### 13.2 What differs from the design above, and why
 
@@ -926,3 +926,79 @@ CLI: `--world v4`, `--v4 env|path|bodies|los|caststart|interrupt|drops|foedrops=
 - Terrain is the navmesh's own triangles. LAND heights are not in the file yet, so a hill with no navmesh on its crest does not block.
 - Drops: built and tested, OFF (`--v4 drops=on`, `foedrops=on`). Parkour abilities are batch M2.
 - The v3 perch (a foe on a ledge by flag) does not exist in a place. A foe is high only where the mesh is.
+
+### 13.4 The review round (Opus review of `37a705e6`, fixed 2026-11-23 and 11-24)
+
+The review's headline: 217 of 11266 solo walks ended over or under their goal with no stuck tally (F1), blasts and areas burned through walls and floors (F2), and the backpedal was 65 percent of the Evoker's stuck time (F3). Every finding is fixed on the branch. The table says what was built and how it is checked.
+
+| Finding | What was built | Check |
+|---|---|---|
+| F1 the straight-line shortcut had no height test | `EQ::Walk::zMiss` and `At()`. A straight walk counts only when it ends at the goal's height. Arrival and every corner test the height (`EnvTuning::levelU`). `Fight::Move` takes who or what he walks to | `--solo-walk`: fixtures 657 trips, 0 wrong. Library copy of 11-23 (66 places): 10620 walked, 3 wrong (0.028 percent), 0 over or under the goal, 0 off the mesh. The stacked fixture in `EnvTest.h MakeStacked` |
+| F2 blasts and areas were 2D | `EnvInBlast`: the radius in 3D and a clear ray from the centre | env-test "stacked: a blast on the floor below does not burn through the floor" |
+| F3 the backpedal walked into walls | `EnvAwayPick`: nine straight walks over the half circle that leads away, the farthest wins. No gain = CORNERED, counted apart (`away%`, `cornered%`) | the gate table below: stuck% fell for every caster |
+| F4 a held-off spell cost nothing | the picker still ranks it and the refusal costs the decision (`cs.heldTurns/f`) | CLI check "a held-off spell costs the turn" |
+| F5 seats were the game before ABI 46 | default = every row seated. `--seats old` is the older game. A Script row takes the short window | env-test, CLI check |
+| F6 the goal was guessed from who stood near the x, y | `EnvGoal` takes the body, an explicit mesh point, or neither (his own storey) | the stacked checks |
+| F7 away legs were not legs | a backpedal and a flight count in the reversals (`osc/min`) | the gate table: `osc/min` rose for every caster, see 13.6 |
+| F8 the stuck tally had holes | see 13.5 | env-test "stuck: ..." (four checks) and "hold: ..." |
+| F9 the oracle gate compared different fights | `PathReport` keeps a third tally per cell: IAUS on the fights the oracle also played | CLI check: the `ORCPATH` lines of (N 3, K 1) and (N 1, K 1) are the same 56 lines |
+| F10 oracle move points could be off the floor | `EnvStandable` | |
+| F11 sight-driven weights could be searched | `tune_driver.py SIGHT_GATED_CONS` and `SIGHT_GATED_SCALARS`, read by `sight_gated()` at the two places a knob enters a search (`all_knobs`, `stage_globals`). `--sight-knobs` lifts it. `summary.json sight_skipped` and a section of `summary.md` say what was kept out | `test_tune_driver.py SightGate` (the names are checked against `iaus/Catalogue.cpp`) |
+| F12 the route cache grew without bound | a cap | |
+| F13 two libraries compared silently | the pool's hash is in the world tag, so `--compare` refuses | CLI check "a compare across two sets of places is refused" |
+| native API items | `EQ::Invalid(view)`, `PathTuning::maxExpand` 20000, `View.walk`, `CastRay` end margin (a look up through a floor read clear), leaf doors gate at the leaf in `WalkLine` and in the search | env-test |
+
+### 13.5 F8: stuck, hold and repeat
+
+Before the round a body was stuck when it moved under `stuckU` in `stuckSec` of clock time, and any gap of three steps in the asking cleared the window. A caster who asked, failed, cast and asked again was never stuck. Four changes, all in `EnvWorld.h EnvMove` and `EnvLegEnd`, all numbers in `EnvTuning`.
+
+- **The window counts wanted seconds.** A gap in the asking is taken out of the window and does not clear it. Only a gap longer than `wantGapSec` (3 s, ASSUMPTION) is standing by choice.
+- **A stuck leg ends STUCK again every `stuckSec`.** Each end asks for a route from where he stands. One end per stuck spell had left him on the shared centre-to-centre route for good (a Mage stood 80 s at a door behind a friend on the doorway fixture).
+- **Hold time is its own tally.** Waiting out the retry after a BLOCKED or UNREACHABLE end, the offense approach's backoff, and a foe past the drop cap all feed `hold%`. Before, the backoff fed `stuck%` and the same wait past the cap fed nothing. `hold%` is a gate row.
+- **Repeats of every kind count.** An UNREACHABLE or STUCK end within `reblockU` of his last end of that kind is `repeat/f`, a gate row. BLOCKED repeats stay `reblock/f`.
+
+The detour sample changed too. It is what he walked over the route he was given, measured from where he stood, plus what his goal moved while he walked (`Nav::legDrift`). The cached length ran centre to centre, and a route of 100 units to a foe who then walked 150 read 2.5.
+
+### 13.6 The gate, before and after, by class
+
+`--world v4 --path-report 24` on the library copy of 11-23 (`MFO_ENV_CACHE=~/.cache/mfo-env-batchw`, `--env-set all`, 14 classes of place, 5040 fights). Each number is the mean of the class's 14 cells, `37a705e6` then the branch head. The bounds are still the placeholders of `kPathBounds`.
+
+| Class | stuck% | osc/min | detour p90 | hold% | repeat/f | cells failing |
+|---|---|---|---|---|---|---|
+| melee | 0.70 to 0.24 | 1.17 to 1.10 | 1.59 to 1.25 | 0.14 | 0.02 | 2 to 0 |
+| ranged | 0.01 to 0.05 | 0.04 to 0.98 | 1.55 to 1.25 | 0.99 | 0.00 | 1 to 1 |
+| mage | 1.80 to 0.32 | 2.20 to 11.57 | 2.11 to 1.42 | 0.02 | 0.04 | 4 to 3 |
+| knight | 0.05 to 0.04 | 0.61 to 0.57 | 1.50 to 1.30 | 0.04 | 0.00 | 1 to 0 |
+| warrior | 0.53 to 0.18 | 0.51 to 0.65 | 1.71 to 1.32 | 0.19 | 0.01 | 1 to 0 |
+| mercenary | 0.49 to 0.14 | 1.68 to 1.56 | 1.38 to 1.27 | 0.12 | 0.00 | 0 to 0 |
+| archer | 0.02 to 0.05 | 0.01 to 1.77 | 1.29 to none | 0.01 | 0.00 | 0 to 1 |
+| thief | 0.19 to 0.12 | 0.44 to 0.51 | 1.29 to 1.25 | 0.07 | 0.01 | 1 to 0 |
+| evoker | 1.67 to 0.45 | 2.71 to 13.05 | 1.62 to 1.43 | 0.97 | 0.07 | 2 to 8 |
+| conjurer | 1.01 to 0.53 | 3.90 to 13.36 | 1.62 to 1.43 | 0.08 | 0.04 | 1 to 5 |
+| healer | 1.01 to 0.29 | 4.08 to 11.90 | 1.66 to 1.43 | 0.12 | 0.05 | 3 to 6 |
+| warlock | 1.16 to 0.20 | 2.99 to 9.75 | 1.77 to 1.38 | 0.12 | 0.02 | 2 to 4 |
+| melee-off | 1.00 to 0.28 | 1.22 to 1.61 | 1.68 to 1.29 | 0.11 | 0.02 | 3 to 0 |
+| ranged-off | 0.20 to 0.15 | 0.33 to 0.68 | 1.64 to 1.25 | 0.09 | 0.01 | 1 to 0 |
+| mage-off | 1.29 to 0.28 | 3.07 to 11.46 | 1.59 to 1.46 | 0.05 | 0.03 | 2 to 6 |
+
+Whole table: 24 failing cells of 210 before, 34 after. Before, the reasons were stuck% (15), detour (10) and one follower stuck for good. After: osc/min 32, hold% 2, holdUnreach 2, unreach% 1. No follower is stuck for good, no body left the mesh. On the fixtures (105 cells): 3 failing before (stuck% 2, detour 1), 7 after, all osc/min.
+
+What the table says. The stuck time of the casters was the backpedal into walls (F3), and it is gone. What is left is a real number: casters step back from a foe and step in again about 12 times a minute, and since F7 that is counted. The placeholder bound of 8 a minute fails it. Whether 12 a minute is odd is for the oracle pass to say (`--path-oracle`, the pre-tune measurement of 10.3 item 3): the oracle kites too. It is not tuned here.
+
+### 13.7 The adopt-seats mirror (MFO main `5b17b58e`, Harbinger ABI 46)
+
+The lab includes native's own pure file `native/cast/SeatRows.h`, as the harness does.
+
+- **Is a row served.** `Data.h SimRowSeated` is `SeatRows::RowSeated` on what Harbinger reports: ABI 46 with the four hostile rows and the equip admission covered (today), or an ABI under 46 (`--seats old`).
+- **The keyed will-work** (`cast/WillWork.cpp` (c)). `World.h Fight::WillWorkFor` is what the game's reader answers a follower: the level cap first, then the keyed effect, and a No only when the spell carries no other hostile damage effect. The oracle keeps `WillWork`, the truth.
+- **The two-zero-fires hold** (`cast/NoEffect.cpp`). `Fight::NoteZeroEffect` reads every fire of a hostile-row spell through `SeatRows::Judge` and `Tally`. Two zero readings in a row hold the pair for the fight and will-work then answers No. Counted as `cs.zeroFire/f` and `cs.zeroHeld/f`.
+- **Paralysis immunity is the open spot.** Native says the engine exposes no bit for it, so will-work says Yes and the hold catches it after two wasted casts. The lab mirrors that by default (`--seat-immunity unseen`). The lab's foes carry the `ImmuneParalysis` keyword (`immunePar`, from `tools/list_balance/compile_world.py`), and whether a list's paralysis effects test that keyword in their conditions is not in the extract. `--seat-immunity seen` is the lab with the conditions present. Measured on the fixtures, 15 cells: 4 cell rows with a zero fire unseen, 2 seen.
+- **Not mirrored**, because the lab has no such effect or record: Disarm's right-hand weapon, Command's summoned target, effect and magic effect conditions as such, the approximate-row exemption. MODEL: every fire is read, at the start of the settle window. In the game a reading needs a refresh lap or a will-work ask inside 2 to 6 s.
+
+### 13.8 Checks and cost of the round
+
+- `sim --env-test`: 74 checks pass. `tools/iaus_sim/run.sh` with `SIM_CLITEST=1`: CLI-CHECKS PASS (189 s with the library solo walk. The field-log check was skipped, no `_evidence` in the worktree).
+- `baseline_v4_builtin.txt` rewritten once. It compares with 0 metrics changed at 1 and at 16 threads. `--world v3` and `--world v2` compare with 0 metrics changed against their baselines.
+- Cost: COST_LINE
+- Open after the round: `Docs/REVIEW-BACKLOG.md` "feat/sim-v4-world".
+
