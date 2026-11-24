@@ -217,6 +217,10 @@ namespace Sim {
         double sneakDmg = 0, hiddenSec = 0, sneakSec = 0, tgtDistSum = 0, playerDistSum = 0, contactSec = 0, goInBadSec = 0, summonSec = 0, undeadDmg = 0, healAtSum = 0, cloakSec = 0;
         long   posN = 0, tgtDistN = 0, arrowsShot = 0, arrowsHit = 0;
         double drawnSec[4] = { 0, 0, 0, 0 }, nearOnMeSec[3] = { 0, 0, 0 }, swapSec = 0; long drawSpoiled = 0, pointBlankShots = 0;   // --posture-report: bow / melee / other drawn; a foe ON HIM within 256 / 540 / beyond (time); draws a hit spoiled; shots under 256
+        // sim v4 batch C: the field's spell-choice failure, counted without an oracle (Policy.h Account). spTop = laps whose first-ranked candidate is an offense
+        // or control spell of his book; spTie = of them, an offense spell that is UNMEASURED and scores the same as another offense spell on the list (the field's
+        // "Ice Spike = Elemental Flare = Firebolt"); spUnmTop = an unmeasured offense spell on top; spCapTop = a control spell on top whose level cap bars its target.
+        long   spTop = 0, spTie = 0, spUnmTop = 0, spCapTop = 0;
         long   wastedCasts = 0, hitsWhileCtl = 0, escaped = 0, wwDeclined = 0;   // wwDeclined: a walk try spent on a cast Fire refuses (will not work)
         double playerMinHp = 1, mpAtLate = -1;     // the player's lowest health fraction; the subject's magicka fraction when a late foe arrived                           // released at a dead / out-of-sight target
         // T2 batch S tallies of the subject (section 31)
@@ -324,6 +328,7 @@ namespace Sim {
         PostureKind drawn = PostureKind::None;
         std::map<std::uint64_t, double> firedAt;   // the Cooldowns store (Kind::IausAction): CooldownId -> last fired
         std::vector<SpellTarget> wants;            // G10: the pairs the last decision ranked on top
+        std::vector<MFO::Iaus::AskedPair> askList; // batch C (the mirror of iaus/Candidates.cpp NoteDecision): the list native asks, a refused pair kept while its No is young (Generate.h NextAskList)
         std::vector<SpellTarget> asked;            // every pair ever asked (--g10-sticky: the answers are remembered)
         std::vector<SpellTarget> wwMirror;         // cast/WillWork's mirror: pairs with a measured verdict (the first ask or Fire is the prefetch)
         std::uint32_t steer = 0;                   // act.attack's target for the engine AI

@@ -529,6 +529,13 @@ namespace Sim {
             const Decision& d = sv.d; const auto& acts = sv.g.actions;
             c.wants = TopSpellPairs(d, acts);
             for (const SpellTarget& w : sv.g.capQueued) if (std::find(c.wants.begin(), c.wants.end(), w) == c.wants.end()) c.wants.push_back(w);   // fix/spell-worth F2 (Candidates::NoteDecision a_extra): the pairs the book's cap would bar are asked, so the next lap knows
+            if (g_mirror) {   // iaus/Candidates.cpp NoteDecision: a pair answered No STAYS on the ask list while its No is younger than kRefusedKeepSec (6 s) and is stamped again each lap it is
+                              // still No, so a standing refusal never lapses (native's answer to sim finding D1; without it a refused pair came back every other lap)
+                for (MFO::Iaus::AskedPair& a : c.askList) { const Body* d = F.Find(a.pair.target); const int bi = d ? [&] { for (std::size_t i = 0; i < c.book.entries.size(); ++i) if (c.book.entries[i].form == a.pair.spell) return static_cast<int>(i); return -1; }() : -1; if (bi < 0) continue;
+                    const Tri ans = F.WillWorkFor(c, c.build->spells[static_cast<std::size_t>(bi)], *d); if (ans == Tri::No) { a.refused = true; a.lastNo = F.now; } else if (ans == Tri::Yes) a.refused = false; }   // the answer the snapshot of this lap carried
+                c.askList = NextAskList(c.askList, c.wants, F.now, 6.0);
+                c.wants.clear(); for (const MFO::Iaus::AskedPair& a : c.askList) c.wants.push_back(a.pair);
+            }
             if (F.g10Sticky) for (const SpellTarget& w : c.wants) if (std::find(c.asked.begin(), c.asked.end(), w) == c.asked.end()) c.asked.push_back(w);
             if (subj) Account(F, c, x, sv);
             // posture layer
@@ -563,6 +570,14 @@ namespace Sim {
             const bool low = x.c.hp < 0.35f * x.c.hpMax;
             if (low && c.lowSince < 0) { c.lowSince = F.now; c.lowHealed = false; c.lowHadCand = false; ++t.lowEpisodes; }
             if (!low && c.lowSince >= 0) c.lowSince = -1;
+            if (!d.ranked.empty() && d.ranked.front().idx < acts.size()) {   // batch C: the field's spell-choice failure (World.h Tally spTop)
+                const Candidate& top = acts[d.ranked.front().idx]; int bi = -1; for (std::size_t i = 0; i < sv.sn.book.entries.size(); ++i) if (sv.sn.book.entries[i].form == top.form) bi = static_cast<int>(i);
+                if (top.form && bi >= 0 && (top.family == Family::CastOffense || top.family == Family::CastControl) && sv.sn.book.entries[static_cast<std::size_t>(bi)].source == SpellSource::Spell) {
+                    const SpellEntry& e = sv.sn.book.entries[static_cast<std::size_t>(bi)]; ++t.spTop;
+                    if (top.family == Family::CastOffense && !e.measured) { ++t.spUnmTop;
+                        for (std::size_t r = 1; r < d.ranked.size(); ++r) { const Candidate& o = acts[d.ranked[r].idx]; if (o.family == Family::CastOffense && o.form != top.form && std::fabs(d.ranked[r].score - d.ranked.front().score) < 1e-5f) { ++t.spTie; break; } } }
+                    if (top.family == Family::CastControl && static_cast<std::size_t>(bi) < c.build->spells.size()) { const SimSpell& ss = c.build->spells[static_cast<std::size_t>(bi)]; const Body* tg = F.Find(top.target);
+                        if (tg && ss.ctrl && !ss.ctrlPar && static_cast<float>(tg->c.level) > ss.ctrlMaxLevel) ++t.spCapTop; } } }
             const bool hasCand = !acts.empty();
             if (!hasCand) ++t.noCandTicks;
             if (d.verdict == Verdict::Idle) ++t.idle; else if (d.verdict == Verdict::Hold) ++t.hold; else ++t.act;
