@@ -776,7 +776,7 @@ namespace MFO::Config {
     //  high-VALUE gear as a Valuable too -- an fValuableThreshold with a per-item
     //  value peek -- is a ROADMAP refinement, not wired here, so no dead knob.)
     inline std::atomic<float> g_chanceRadius{ 512.0f };       // player "had a chance" within this of the source
-    inline std::atomic<float> g_fairChance{ 6.0f };           // seconds near+facing before valuables release
+    inline std::atomic<float> g_fairChance{ 6.0f };           // seconds near (facing or not, 2026-11-24) before valuables release
     inline std::atomic<float> g_abandonDelay{ 45.0f };        // never-approached backstop before valuables release
     inline std::atomic<float> g_departRadius{ 700.0f };       // player must leave this far for "moved on"
     // 150 (was 256, marth field-test): clutter (arrows/bolts/lockpicks) is

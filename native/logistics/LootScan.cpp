@@ -620,7 +620,7 @@ namespace MFO::Logistics {
                     // CLAIM-AND-RELEASE (dibs redesign) -- factored into TierReleased
                     // so the arm's-reach StripCorpse honours the SAME per-tier grace
                     // (#2). Eligibility is per value-tier and releases on EVIDENCE
-                    // ABOUT THE PLAYER (near/facing/departed/abandon), not a wall
+                    // ABOUT THE PLAYER (near/departed/abandon), not a wall
                     // clock; Free tiers (ammo/potions/lockpicks) release at once. The
                     // accrual it runs is idempotent-per-tick (a_now dedupe), so this
                     // scan drives it exactly as the inline version did.
