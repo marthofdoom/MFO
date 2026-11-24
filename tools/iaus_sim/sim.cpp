@@ -67,7 +67,7 @@ namespace {
             if (t.minTgtDist < 1e8) { minTgtSum += t.minTgtDist; ++minTgtN; }
             // sim v4
             S(pathLegs); S(pathUnreach); S(pathBlocked); S(pathReblock); S(pathStuckLegs); S(pathOsc); S(pathDrops); S(pathDoors); S(pathPlans); S(detourN); for (int k = 0; k < 16; ++k) S(detourHist[k]);
-            S(pathStuckSec); S(pathHoldUnreachSec); S(pathWalked); S(detourSum); S(envBad); S(envStuckForever); S(pathAwaySec); S(pathCorneredSec); S(castHeldTurns);
+            S(pathStuckSec); S(pathHoldUnreachSec); S(pathWalked); S(detourSum); S(envBad); S(envStuckForever); S(pathAwaySec); S(pathCorneredSec); S(castHeldTurns); S(pathHoldSec); S(pathRepeat); S(castZeroFires); S(castZeroHeld);
             S(castUnseated); S(castNeverShort); S(castNeverLong); S(castHeldOff); S(castInterrupted); S(foeCastInterrupted); S(castOccRelease); S(neverSec); S(apprDrops); S(apprBlocked);
             S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined); S(scrollsUsed); S(extActions); S(moveOrderSec);
 #undef S
@@ -158,9 +158,9 @@ namespace {
           m["stuck%"] = 100.0 * s.pathStuckSec / up; m["reblock/f"] = double(s.pathReblock) / n; m["osc/min"] = double(s.pathOsc) / mins; m["unreach%"] = pct(double(s.pathUnreach), double(s.pathLegs));
           m["detour"] = s.detourN ? s.detourSum / double(s.detourN) : -1; { long acc = 0; double p90 = -1; for (int k = 0; k < 16 && s.detourN; ++k) { acc += s.detourHist[k]; if (double(acc) >= 0.9 * double(s.detourN)) { p90 = 1.0 + 0.25 * double(k + 1); break; } } m["detour.p90"] = p90; }
           m["holdUnreach.s/f"] = s.pathHoldUnreachSec / n; m["blocked/f"] = double(s.pathBlocked) / n; m["stuckLegs/f"] = double(s.pathStuckLegs) / n; m["legs/f"] = double(s.pathLegs) / n; m["plans/f"] = double(s.pathPlans) / n;
-          m["away%"] = 100.0 * s.pathAwaySec / up; m["cornered%"] = 100.0 * s.pathCorneredSec / up; m["cs.heldTurns/f"] = double(s.castHeldTurns) / n;
+          m["hold%"] = 100.0 * s.pathHoldSec / up; m["repeat/f"] = double(s.pathRepeat) / n; m["away%"] = 100.0 * s.pathAwaySec / up; m["cornered%"] = 100.0 * s.pathCorneredSec / up; m["cs.heldTurns/f"] = double(s.castHeldTurns) / n;
           m["doors/f"] = double(s.pathDoors) / n; m["drops/f"] = double(s.pathDrops) / n; m["walked/f"] = s.pathWalked / n; m["env.bad"] = double(s.envBad); m["env.stuckForever"] = double(s.envStuckForever);
-          m["cs.unseated/f"] = double(s.castUnseated) / n; m["cs.neverShort/f"] = double(s.castNeverShort) / n; m["cs.neverLong/f"] = double(s.castNeverLong) / n; m["cs.heldOff/f"] = double(s.castHeldOff) / n; m["cs.never.s/f"] = s.neverSec / n;
+          m["cs.unseated/f"] = double(s.castUnseated) / n; m["cs.neverShort/f"] = double(s.castNeverShort) / n; m["cs.neverLong/f"] = double(s.castNeverLong) / n; m["cs.heldOff/f"] = double(s.castHeldOff) / n; m["cs.zeroFire/f"] = double(s.castZeroFires) / n; m["cs.zeroHeld/f"] = double(s.castZeroHeld) / n; m["cs.never.s/f"] = s.neverSec / n;
           m["cs.intr/f"] = double(s.castInterrupted) / n; m["cs.foeIntr/f"] = double(s.foeCastInterrupted) / n; m["cs.occRel/f"] = double(s.castOccRelease) / n; m["appr.drop/f"] = double(s.apprDrops) / n; m["appr.block/f"] = double(s.apprBlocked) / n; }
         m["pow/min"] = double(s.powerAttacks) / mins; m["powCtl%"] = pct(double(s.powOnControlled), double(s.powerAttacks)); m["powWhiff%"] = pct(double(s.powerWhiffs), double(s.powerAttacks)); m["ground/min"] = double(s.grounds) / mins; m["block/min"] = double(s.blocks) / mins; m["bash/min"] = double(s.bashes) / mins;
         return m;
@@ -258,7 +258,7 @@ namespace {
         if (!g_v3.Any() && !g_v4.Any()) return "";
         std::string o = std::string(lead) + (g_v4.Any() ? "world=v4" : "world=v3");
         if (g_v4.Any()) { std::string d; for (const V4Flag& f : kV4Flags) if ((g_v4.*(f.m)) != f.def) d += std::string(d.empty() ? "" : ",") + f.name + (f.def ? "=off" : "=on");
-            if (!d.empty()) o += "[" + d + "]"; if (g_v4.env) { char hx[24]; std::snprintf(hx, sizeof hx, "#%08llx", static_cast<unsigned long long>(g_envPool.Hash() & 0xFFFFFFFFull)); o += "+env=" + g_envLabel + hx; } if (g_seats != "today") o += "+seats=" + g_seats; o += g_sightTag; } std::string off; for (const V3Flag& f : kV3Flags) if (!(g_v3.*(f.m))) off += std::string(off.empty() ? "" : ",") + f.name + "=off";
+            if (!d.empty()) o += "[" + d + "]"; if (g_v4.env) { char hx[24]; std::snprintf(hx, sizeof hx, "#%08llx", static_cast<unsigned long long>(g_envPool.Hash() & 0xFFFFFFFFull)); o += "+env=" + g_envLabel + hx; } if (g_seats != "today") o += "+seats=" + g_seats; if (g_seatImmunitySeen) o += "+immunity=seen"; o += g_sightTag; } std::string off; for (const V3Flag& f : kV3Flags) if (!(g_v3.*(f.m))) off += std::string(off.empty() ? "" : ",") + f.name + "=off";
         if (!off.empty()) o += "(" + off + ")";
         if (g_v3.chase && g_waiver != 2) o += g_waiver == 1 ? "+waiver=self" : "+waiver=none"; if (g_v3.delivery && g_deliveryOld) o += "+delivery=old";
         if (!g_mirror) o += "+mirror=off"; if (g_v3.chase && g_engageOnSight) o += "+engage-on-sight"; if (g_v3.delivery && g_deliverSec[0] >= 0.0f) o += "+deliver-sec"; if (g_v3.delivery && g_deliverSec[0] < 0.0f && g_deliverUnfired != 1.0f) o += "+deliver-unfired"; if (g_v3.blockdir && g_blockArc != 180.0f) o += "+block-arc"; if (g_v3.sidestep && g_sideStep == 2) o += "+side-step=away"; if (g_casterPressure) o += "+caster-pressure";
@@ -432,6 +432,8 @@ namespace {
         { "unreach%",        5.0, 2.0, "legs begun toward a goal no route reaches" },
         { "detour.p90",      3.0, 0.5, "walked over straight line, the 90th percentile leg" },
         { "holdUnreach.s/f", 1.0, 0.5, "seconds per fight with his attack on a foe he can neither reach nor shoot" },
+        { "hold%",           5.0, 1.0, "share of his fight time asked to walk while a hold ran (the retry wait, the approach backoff, a foe past the drop cap)" },
+        { "repeat/f",        1.0, 0.5, "UNREACHABLE or STUCK endings beside his previous ending of that kind, per fight" },
     };
     int PathReport(const Data& D, const std::vector<SimClass>& all, const std::vector<SimClass>& scope, std::uint64_t seed, int n, int oracleN, const OracleCfg& oc, int threads, bool estimates, bool scrollRoad, bool gate) {
         const std::vector<SimClass> t1(all.begin(), all.begin() + 3);
@@ -452,14 +454,14 @@ namespace {
                     std::scoped_lock lk(mx); Cell& c = cell[static_cast<std::size_t>(ci)]; c.iaus.uSum += u; c.iaus.Add(F.t, false); cpu += sec; ++fightsRun; if (orc) { c.orc.uSum += uO; c.orc.Add(G.t, false); c.pair.uSum += u; c.pair.Add(F.t, false); } }
                 tl_envDraw = nullptr; };
             { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(work); for (auto& x : th) x.join(); }
-            std::printf("\n%-28s (%zu place%s)  %9s %9s %9s %9s %9s %9s %9s %7s\n", ec.c_str(), sub.size(), sub.size() == 1 ? "" : "s", "stuck%", "reblock/f", "osc/min", "unreach%", "detour90", "holdUnr.s", "U", "gate");
+            std::printf("\n%-28s (%zu place%s)  %9s %9s %9s %9s %9s %9s %9s %9s %9s %7s\n", ec.c_str(), sub.size(), sub.size() == 1 ? "" : "s", "stuck%", "reblock/f", "osc/min", "unreach%", "detour90", "holdUnr.s", "hold%", "repeat/f", "U", "gate");
             for (std::size_t ci = 0; ci < scope.size(); ++ci) { const auto m = Metrics(cell[ci].iaus); std::map<std::string, double> mo, mp; if (oracleN > 0) { mo = Metrics(cell[ci].orc); mp = Metrics(cell[ci].pair); }
                 bad += static_cast<long>(m.at("env.bad")); forever += static_cast<long>(m.at("env.stuckForever")); std::string why; ++cells;
                 for (const PathBound& b : kPathBounds) { const double v = oracleN > 0 ? mp.at(b.metric) : m.at(b.metric), lim = oracleN > 0 ? std::max(0.0, mo.at(b.metric)) + b.margin : b.bound;
                     if (oracleN > 0) std::printf("ORCPATH %s %s %s  iaus %.3f  oracle %.3f  bound %.3f\n", scope[ci].name.c_str(), ec.c_str(), b.metric, v, mo.at(b.metric), lim);
                     if (v > lim) { char t[96]; std::snprintf(t, sizeof t, "%s%s %.2f > %.2f", why.empty() ? "" : ", ", b.metric, v, lim); why += t; } }
                 if (m.at("env.bad") > 0) why += std::string(why.empty() ? "" : ", ") + "env.bad"; if (m.at("env.stuckForever") > 0) why += std::string(why.empty() ? "" : ", ") + "stuck forever";
-                std::printf("  %-26s %12s %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %7s%s%s\n", scope[ci].name.c_str(), "", m.at("stuck%"), m.at("reblock/f"), m.at("osc/min"), m.at("unreach%"), m.at("detour.p90"), m.at("holdUnreach.s/f"), m.at("U"), why.empty() ? "PASS" : "FAIL", why.empty() ? "" : "  ", why.c_str());
+                std::printf("  %-26s %12s %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %7s%s%s\n", scope[ci].name.c_str(), "", m.at("stuck%"), m.at("reblock/f"), m.at("osc/min"), m.at("unreach%"), m.at("detour.p90"), m.at("holdUnreach.s/f"), m.at("hold%"), m.at("repeat/f"), m.at("U"), why.empty() ? "PASS" : "FAIL", why.empty() ? "" : "  ", why.c_str());
                 if (!why.empty()) { ++fails; std::printf("PATHGATE FAIL %s %s: %s\n", scope[ci].name.c_str(), ec.c_str(), why.c_str()); } }
         }
         std::printf("\nPATH GATES: %d cell(s), %d FAIL  |  env.bad %ld (must be 0)  stuck forever %ld (must be 0)  |  %.2f ms CPU per IAUS fight (%ld fights)  => %s\n", cells, fails, bad, forever, fightsRun ? 1000.0 * cpu / double(fightsRun) : 0.0, fightsRun, fails == 0 && bad == 0 && forever == 0 ? "PASS" : "FAIL");
@@ -802,6 +804,7 @@ static int RealMain(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--path-gate")) pathGate = true;
         else if (!std::strcmp(argv[i], "--sight") && i + 1 < argc) { const std::string v = argv[++i]; g_sightTag = "+sight=" + v;   // one sight layer at a time (2.4): walls=off | terrain=off | gap=<units>
             if (v == "walls=off") g_sightT.walls = false; else if (v == "terrain=off") g_sightT.terrain = false; else if (!v.compare(0, 4, "gap=")) g_sightT.gapU = g_sightT.gapExteriorU = static_cast<float>(std::atof(v.c_str() + 4)); else { std::fprintf(stderr, "--sight walls=off|terrain=off|gap=<units>\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--seat-immunity") && i + 1 < argc) { const std::string v = argv[++i]; if (v != "seen" && v != "unseen") { std::fprintf(stderr, "--seat-immunity seen|unseen\n"); return 2; } g_seatImmunitySeen = v == "seen"; }
         else if (!std::strcmp(argv[i], "--seats") && i + 1 < argc) { g_seats = argv[++i]; if (g_seats != "today" && g_seats != "old") { std::fprintf(stderr, "--seats today|old\n"); return 2; } g_seatsOld = g_seats == "old"; }
         else if (!std::strcmp(argv[i], "--v3") && i + 1 < argc) { std::string v = argv[++i]; std::size_t p0 = 0;
             while (p0 <= v.size()) { const std::size_t q = v.find(',', p0); const std::string tok = v.substr(p0, q == std::string::npos ? std::string::npos : q - p0); const std::size_t eq = tok.find('=');

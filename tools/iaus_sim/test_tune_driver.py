@@ -26,6 +26,15 @@ class SightGate(unittest.TestCase):   # review F11: the knobs that read sight ar
         self.assertTrue(T.sight_gated("cast_offense.los")); self.assertTrue(T.sight_gated("attack.los.b")); self.assertTrue(T.sight_gated("t.occClaimRelease")); self.assertTrue(T.sight_gated("t.occHold=4"))
         self.assertFalse(T.sight_gated("attack.threat")); self.assertFalse(T.sight_gated("t.momentum")); self.assertFalse(T.sight_gated("loot.takeThreshold"))
 
+    def test_no_scalar_stage_offers_one_and_the_names_are_real(self):
+        # the names on the list are the game's own (iaus/Catalogue.cpp SetTuningScalar, the consideration table): a typo would gate nothing
+        cat = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "native", "iaus", "Catalogue.cpp")).read()
+        for n in T.SIGHT_GATED_SCALARS:
+            self.assertIn('"%s"' % n, cat)
+        for n in T.SIGHT_GATED_CONS:
+            self.assertIn('"%s"' % n, cat)
+        self.assertEqual([n for n, _, _ in T.GLOBALS if not T.sight_gated(n)], [n for n, _, _ in T.GLOBALS if n not in T.SIGHT_GATED_SCALARS])
+
     def test_the_flag_lifts_it(self):
         T.ALLOW_SIGHT_KNOBS = True
         try:

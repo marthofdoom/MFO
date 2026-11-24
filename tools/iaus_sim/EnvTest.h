@@ -152,7 +152,42 @@ namespace Sim {
             ok(x.hitAt < 0 && std::fabs(x.actEnd - (C.now + 4.0)) < 1e-6 && C.t.castUnseated == 1 && C.t.castHeldOff == 1 && C.ctl[0].CastHeld(0x7E57, foe) && C.ctl[0].CastHeld(0x7E57, 12345u), "cast start, --seats old: a Paralyze claim never fires, stands 4 s (the short window) and is held off on every target");
             Fight C2 = BuildFight(D, fs, t1); Body& y = C2.b[static_cast<std::size_t>(C2.ctl[0].body)]; y.ctrlLive = true; C2.StartCast(y, 0, par, foe, 10.0f, true);
             ok(C2.t.castUnseated == 0 && !C2.ctl[0].CastHeld(0x7E57, 12345u), "cast start, today: the same claim goes down the measured road like any other (the row is seated)");
-            ok(RowFightLong(kRowNone) && RowFightLong(kRowScript) && !RowFightLong(kRowSeated) && !RowFightLong(kRowParalyze) && !RowNeverStarts(kRowScript) && !RowNeverStarts(kRowNone), "cast start: a Script row is never refused, it takes the short window like a spell with no row; a seated row the long one"); }
+            ok(RowFightLong(kRowNone) && RowFightLong(kRowScript) && !RowFightLong(kRowSeated) && !RowFightLong(kRowParalyze) && !RowNeverStarts(kRowScript) && !RowNeverStarts(kRowNone), "cast start: a Script row is never refused, it takes the short window like a spell with no row; a seated row the long one");
+            // ADOPT-SEATS MIRROR (native cast/SeatRows.h, WillWork.cpp (c) / (d), NoEffect.cpp): the seat table, the keyed will-work, the two-zero-fires hold
+            ok(SimRowSeated(kRowParalyze, false) && SimRowSeated(kRowStagger, false) && SimRowSeated(kRowDisarm, false) && SimRowSeated(kRowTargetEffect, false) && SimRowSeated(kRowReanimate, false)
+               && !SimRowSeated(kRowParalyze, true) && !SimRowSeated(kRowStagger, true) && !SimRowSeated(kRowDisarm, true) && !SimRowSeated(kRowTargetEffect, true) && !SimRowSeated(kRowReanimate, true)
+               && SimRowSeated(kRowScript, true) && SimRowSeated(kRowSeated, true) && SimRowSeated(kRowNone, true), "seats: SeatRows::RowSeated serves the four hostile rows at ABI 46 and none of them under it; Reanimate only today; the other rows always");
+            Fight Z = BuildFight(D, fs, t1); Body& zc = Z.b[static_cast<std::size_t>(Z.ctl[0].body)]; Body* zf = nullptr; for (Body& o : Z.b) if (o.role == Role::Foe) zf = &o;
+            const auto imm = std::make_shared<ActorSpec>(*zf->spec); imm->immunePar = true; zf->spec = imm; const Ctl& zk = Z.ctl[0]; const std::uint32_t zid = zf->c.id;
+            SimSpell p2 = par; p2.ctrl = true; p2.ctrlDur = 10.0f; SimSpell p3 = p2; p3.e.form = 0x7E58; p3.dmg = 5.0f; SimSpell p4 = p2; p4.e.form = 0x7E59;
+            g_seatImmunitySeen = true; const bool seenNo = Z.WillWorkFor(zk, p2, *zf) == Tri::No, seenDmg = Z.WillWorkFor(zk, p3, *zf) == Tri::Yes; g_seatImmunitySeen = false;
+            ok(Z.WillWork(p2, *zf) == Tri::No && Z.WillWorkFor(zk, p2, *zf) == Tri::Yes && seenNo, "will-work: paralysis immunity is the truth's No, the game's reader cannot see it (Yes), and --seat-immunity seen makes it a No");
+            ok(seenDmg, "will-work: a keyed effect that cannot land is not a No while the spell carries another hostile damage effect");
+            Z.SpellHit(zc, p2, *zf, true); const bool one = !zk.ZeroHeld(0x7E57, zid) && Z.t.castZeroFires == 1 && Z.t.castZeroHeld == 0;
+            Z.SpellHit(zc, p2, *zf, true);
+            ok(one && zk.ZeroHeld(0x7E57, zid) && Z.t.castZeroFires == 2 && Z.t.castZeroHeld == 1 && Z.WillWorkFor(zk, p2, *zf) == Tri::No && !zk.ZeroHeld(0x7E57, zid + 1), "zero effect: one fire that lands nothing holds nothing, the second holds the pair for the fight (and only that pair), and will-work then answers No");
+            Z.SpellHit(zc, p3, *zf, true); Z.SpellHit(zc, p3, *zf, true); Z.SpellHit(zc, p3, *zf, true);
+            ok(!zk.ZeroHeld(0x7E58, zid) && Z.t.castZeroFires == 2, "zero effect: a spell that also carries instant damage is never read (inconclusive), however often it fires");
+            Z.SpellHit(zc, p4, *zf, true); imm->immunePar = false; Z.SpellHit(zc, p4, *zf, true); imm->immunePar = true; Z.SpellHit(zc, p4, *zf, true);
+            ok(!zk.ZeroHeld(0x7E59, zid) && Z.t.castZeroFires == 4, "zero effect: a fire that lands clears the count (zero, landed, zero holds nothing)");
+            g_seatsOld = true; Fight Z2 = BuildFight(D, fs, t1); Body& zc2 = Z2.b[static_cast<std::size_t>(Z2.ctl[0].body)]; Body* zf2 = nullptr; for (Body& o : Z2.b) if (o.role == Role::Foe) zf2 = &o; zf2->spec = imm;
+            Z2.SpellHit(zc2, p2, *zf2, true); Z2.SpellHit(zc2, p2, *zf2, true); const bool oldNo = Z2.WillWorkFor(Z2.ctl[0], p2, *zf2) == Tri::No && Z2.t.castZeroFires == 0; g_seatsOld = false;
+            ok(oldNo, "zero effect: --seats old is the game before it (no reading, will-work is the old answer)"); }
+          // THE STUCK WINDOW, HOLDS AND REPEATS (review F8)
+          { auto solo = [&](const SimEnv& E) { FightSpec f4 = fs; f4.env = &E; f4.envExact = false; Fight H = BuildFight(D, f4, t1); for (Body& b2 : H.b) b2.alive = false; H.b[static_cast<std::size_t>(H.ctl[0].body)].alive = true; return H; };
+            auto place = [&](Fight& H, const EQ::Vec3& p) -> Body& { Body& s = H.b[static_cast<std::size_t>(H.ctl[0].body)]; const EQ::View v = H.env->View(H.doors, 0); s.c.x = p.x; s.c.y = p.y; s.c.z = p.z; s.nav = Nav{}; s.nav.tri = EQ::TriAt(v, p); return s; };
+            const SimEnv& O = env("open-room"); const EQ::Vec3 a = O.entries[0].p, b = O.spawns[0].p;
+            // a walker who is asked to move and cannot (speed 0), in bursts of three steps with a third of a second between them
+            auto burst = [&](Fight& H, Body& s, int on, int off, double sec) { const EQ::View v = H.env->View(H.doors, 0); const EnvPoint g{ b, EQ::TriAt(v, b), 0, 0 }; int k = 0; for (const double end = H.now + sec; H.now < end; ++k) { if (k % (on + off) < on) H.Move(s, b.x, b.y, 0.0f, false, nullptr, &g); EnvStep(H); H.now += TM::dt; } };
+            Fight J = solo(O); Body& sj = place(J, a); burst(J, sj, 3, 10, 15.0);
+            ok(J.t.pathStuckSec > 0.5 && J.t.pathStuckLegs == 1 && J.t.pathRepeat == 0, "stuck: asking in bursts with a third of a second between them is stuck all the same (the window counts wanted seconds; a gap of three steps used to clear it)");
+            for (int k = 0; k < 150; ++k) { EnvStep(J); J.now += TM::dt; } burst(J, sj, 1, 0, 4.0);
+            ok(J.t.pathStuckLegs == 2 && J.t.pathRepeat == 1, "stuck: after standing five seconds by choice the window begins again, and sticking at the same spot again is a REPEAT");
+            Fight K = solo(O); Body& sk = place(K, a); burst(K, sk, 3, 100, 60.0);
+            ok(K.t.pathStuckSec == 0.0 && K.t.pathStuckLegs == 0, "stuck: three steps of asking every 3.4 s is standing by choice (past wantGapSec), never stuck");
+            const SimEnv& I = env("island"); const EQ::Vec3 ia = at(I, 128, 6, 2, 2), ib = at(I, 128, 6, 15, 2); Fight L = solo(I); Body& sl = place(L, ia); const EQ::View lv = L.env->View(L.doors, 0); const EnvPoint lg{ ib, EQ::TriAt(lv, ib), 0, 0 };
+            for (int k = 0; k < 15 * 30; ++k) { L.Move(sl, ib.x, ib.y, sl.spec->run, false, nullptr, &lg); EnvStep(L); L.now += TM::dt; }
+            ok(lg.tri >= 0 && L.t.pathUnreach >= 4 && L.t.pathRepeat >= 3 && L.t.pathHoldSec > 5.0 && L.t.pathStuckSec == 0.0 && L.t.envStuckForever == 0, "hold: a goal no route reaches is asked for again and again: every wait is HOLD time and none of it stuck time, and every end beside the last is a REPEAT"); }
           // STACKED FLOORS (review F1, F2, F6): an upper floor exactly over a lower one, joined by a ramp at the side. The same x, y exists on both.
           { const std::shared_ptr<SimEnv> SE = MakeStacked(); const SimEnv& S2 = *SE; const EQ::View v = S2.View(S2.doors0, 0); const EQ::Vec3 lo{ 200.0f, 40.0f, 0.0f }, up{ 200.0f, 40.0f, 300.0f };
             const std::int32_t tl = EQ::TriAt(v, lo), tu = EQ::TriAt(v, up); const EQ::Walk w = EQ::WalkLine(v, tl, lo, up, man);

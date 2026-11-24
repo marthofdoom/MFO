@@ -204,7 +204,7 @@ namespace Sim {
             if (n != sn.willWork.end()) n->answer = Tri::No; else sn.willWork.push_back({ r.spell, r.foe, Tri::No }); }
         for (const SpellTarget& w : (F.g10Sticky ? c.asked : c.wants)) {   // G10: only the pairs the last decision ranked on top have an answer (main); sticky = experiment
             const Body* d = F.Find(w.target); if (!d) continue;
-            for (std::size_t i = 0; i < c.book.entries.size(); ++i) if (c.book.entries[i].form == w.spell) sn.willWork.push_back({ w.spell, w.target, F.WillWork(c.build->spells[i], *d) });
+            for (std::size_t i = 0; i < c.book.entries.size(); ++i) if (c.book.entries[i].form == w.spell) sn.willWork.push_back({ w.spell, w.target, F.WillWorkFor(c, c.build->spells[i], *d) });
             if (std::find(c.wwMirror.begin(), c.wwMirror.end(), w) == c.wwMirror.end()) const_cast<Ctl&>(c).wwMirror.push_back(w);   // the ask is the prefetch
         }
     }
@@ -425,7 +425,7 @@ namespace Sim {
             if (hostile) {   // cast/Fire.cpp:430: a spell that can never affect this target is passed over, transparently, once the mirror has a verdict
                 const SpellTarget pr{ k.form, tg->c.id }; const bool known = std::find(c.wwMirror.begin(), c.wwMirror.end(), pr) != c.wwMirror.end();
                 if (!known) c.wwMirror.push_back(pr);
-                else if (F.WillWork(s, *tg) == Tri::No) { if (subj) ++t.wwDeclined; return Fired::Declined; }
+                else if (F.WillWorkFor(c, s, *tg) == Tri::No) { if (subj) ++t.wwDeclined; return Fired::Declined; }
             }
             if (subj) {
                 if ((fam == Family::CastOffense || (fam == Family::Scroll && hostile)) && e.resistAv >= 0) { ++t.elemCasts; const float r = F.ResistOf(*tg, e.resistAv); if (r >= 50.0f) ++t.resistedCasts; if (r < 0.0f) ++t.weakCasts; if (r >= 100.0f) ++t.immuneCasts; }

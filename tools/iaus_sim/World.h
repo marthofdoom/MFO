@@ -268,11 +268,11 @@ namespace Sim {
         // legs begun / of those with no route to the goal at the pick / ended BLOCKED / of those within reblockU of his previous block / ended STUCK /
         // reversals (a new leg heading back within oscSec) / drops taken / doors opened / routes asked. Seconds stuck, seconds with his attack on a foe he
         // can neither reach nor see, units walked. detour = walked over straight line, per leg that had a route (sum, n, and a histogram in quarters for p90).
-        long   pathLegs = 0, pathUnreach = 0, pathBlocked = 0, pathReblock = 0, pathStuckLegs = 0, pathOsc = 0, pathDrops = 0, pathDoors = 0, pathPlans = 0, detourN = 0, detourHist[16] = {};
-        double pathStuckSec = 0, pathHoldUnreachSec = 0, pathWalked = 0, detourSum = 0, pathAwaySec = 0, pathCorneredSec = 0;   // away: seconds backing off or fleeing; cornered: of those, with no point farther from what he leaves
+        long   pathLegs = 0, pathUnreach = 0, pathBlocked = 0, pathReblock = 0, pathStuckLegs = 0, pathOsc = 0, pathDrops = 0, pathDoors = 0, pathPlans = 0, detourN = 0, detourHist[16] = {}, pathRepeat = 0 /* UNREACHABLE or STUCK ends beside his previous end of that kind */;
+        double pathStuckSec = 0, pathHoldUnreachSec = 0, pathWalked = 0, detourSum = 0, pathAwaySec = 0, pathCorneredSec = 0, pathHoldSec = 0 /* asked to walk while a hold ran: the retry wait, the approach backoff, a foe past the drop cap */;   // away: seconds backing off or fleeing; cornered: of those, with no point farther from what he leaves
         long   envBad = 0, envStuckForever = 0;   // EVERY body: steps with a NaN or off-mesh position (a bug, must be 0) / a follower stuck 30 s on end
         // SIM V4 cast starts (iaus-sim-v4.md 5): claims on a row no seat starts, never-started releases (short / long window), spells held off for the fight, casts a stagger or a control effect ended
-        long   castUnseated = 0, castNeverShort = 0, castNeverLong = 0, castHeldOff = 0, castInterrupted = 0, foeCastInterrupted = 0, castOccRelease = 0, castHeldTurns = 0; double neverSec = 0;   // castHeldTurns: decisions lost to a held-off spell
+        long   castUnseated = 0, castNeverShort = 0, castNeverLong = 0, castHeldOff = 0, castInterrupted = 0, foeCastInterrupted = 0, castOccRelease = 0, castHeldTurns = 0, castZeroFires = 0 /* fires of a hostile-row spell read as ZERO effect (cast/NoEffect.cpp) */, castZeroHeld = 0 /* pairs held for the fight after two of them */; double neverSec = 0;   // castHeldTurns: decisions lost to a held-off spell
         long   apprDrops = 0, apprBlocked = 0;    // offense approach: ENGINE DROPPED endings (a timed backoff each) / foes blocked for the fight past the drop cap
         std::vector<std::string> killOrder;
     };
@@ -361,6 +361,9 @@ namespace Sim {
         // SIM V4 `caststart` (cast/CastOn.cpp g_scriptOffenseNeverFired / g_offenseNeverStartedCount): (spell << 32 | target, 0 = every target) held off for
         // the fight / pairs with one never-started failure. apprDrops: (foe, ENGINE DROPPED endings of his approach on it). apprBlocked: foes past the drop cap.
         std::vector<std::uint64_t> csHeld, csOnce; std::vector<std::pair<std::uint32_t, int>> apprDrops; std::vector<std::uint32_t> apprBlocked;
+        // cast/NoEffect.cpp: consecutive ZERO readings per (spell, target) and the pairs held off for the fight after SeatRows::kZerosToHold of them. Keys are SeatRows::HoldLedger::Key.
+        std::vector<std::pair<std::uint64_t, int>> nzZeros; std::vector<std::uint64_t> nzHeld;
+        [[nodiscard]] bool ZeroHeld(std::uint32_t form, std::uint32_t target) const { return std::find(nzHeld.begin(), nzHeld.end(), MFO::SeatRows::HoldLedger::Key(form, target)) != nzHeld.end(); }
         [[nodiscard]] bool CastHeld(std::uint32_t form, std::uint32_t target) const { const std::uint64_t k = static_cast<std::uint64_t>(form) << 32; for (std::uint64_t h : csHeld) if (h == k || h == (k | target)) return true; return false; }
         bool   steerNoApproach = false;
         // fix/field-1117b-choice (iaus/Candidates.cpp g_fireRefused, cast/Hands.cpp g_healerThreat): the (spell, foe) pairs his generator refused for a party
@@ -927,6 +930,7 @@ namespace Sim {
             if (s.stagger && Up(d)) Stagger(d, TM::bashStagger, &a);
             if (s.ctrl && Up(d)) {
                 const bool works = CtrlWorks(s, d);
+                NoteZeroEffect(a, s, d, works);
                 if (a.ctl == 0) { ++t.ctrlCasts; if (!works) ++t.ctrlFails; if (Controlled(d)) ++t.ctrlOnControlled; }
                 if (works) { const double until = now + std::clamp<double>(s.ctrlDur, 1.0, 60.0);
                     if (g_v4.interrupt && d.act == Act::Cast && d.hitAt >= 0) { if (d.role == Role::Foe) ++t.foeCastInterrupted; else if (d.ctl == 0 && d.actIaus) ++t.castInterrupted;   // SIM V4: a control effect ends a charge in flight (5.3). Counted
@@ -942,6 +946,36 @@ namespace Sim {
             if (s.turnUndead && !d.spec->undead) return false;
             if (d.spec->dragon || (d.spec->daedra && !s.turnUndead && (s.ctrlCalm || s.ctrlFlee || s.ctrlFrenzy) && d.spec->creature && d.spec->immunePar)) return false;
             return static_cast<float>(d.c.level) <= s.ctrlMaxLevel;
+        }
+        // WHAT cast/WillWork.cpp ANSWERS A FOLLOWER TODAY for a spell on one of the four hostile rows Harbinger ABI 46 seats (adopt-seats, main
+        // 5b17b58e), where that differs from WillWork below. SIM V4 `caststart`, seats today. The oracle keeps WillWork (the truth).
+        //   (d) a pair held after two zero-effect fires is No ("the hold is the verdict itself");
+        //   (a) the level cap stays first (Turn Lesser Undead at a Deathlord is No);
+        //   (c) the keyed effect must be unblocked. The lab's stand-in for its conditions is CtrlWorks. Paralysis immunity is the exception: the
+        //       game has no bit to read it by, so it is Yes unless --seat-immunity seen. A No needs no other hostile damage effect in the spell.
+        [[nodiscard]] Tri WillWorkFor(const Ctl& c, const SimSpell& s, const Body& d) const {
+            MFO::SeatRows::Row r{};
+            if (!g_v4.caststart || g_seatsOld || !SimHostileSeatRow(s.row, r)) return WillWork(s, d);
+            if (c.ZeroHeld(s.e.form, d.c.id)) return Tri::No;
+            if (!s.ctrl) return WillWork(s, d);
+            if (!s.ctrlPar && static_cast<float>(d.c.level) > s.ctrlMaxLevel) return Tri::No;
+            if (CtrlWorks(s, d) || (s.ctrlPar && !g_seatImmunitySeen)) return Tri::Yes;
+            return s.dmg > 0 || s.dot > 0 || s.mpDmg > 0 || s.spDmg > 0 ? Tri::Yes : Tri::No;
+        }
+        // THE ZERO-EFFECT READING (cast/NoEffect.cpp, the rules are native's own SeatRows::Judge / Tally): a follower's spell on a hostile seated row
+        // fired on d and its keyed effect did or did not land. Two ZERO readings in a row hold the pair for the fight; a landed one clears the count.
+        // MODEL: every fire is read, at the start of the settle window (in the game the reading needs a refresh lap or a will-work ask inside 2 to 6 s).
+        void NoteZeroEffect(const Body& a, const SimSpell& s, const Body& d, bool landed) {
+            MFO::SeatRows::Row r{};
+            if (!g_v4.caststart || g_seatsOld || a.ctl < 0 || s.e.source != SpellSource::Spell || !SimHostileSeatRow(s.row, r)) return;
+            MFO::SeatRows::ReadInput in; in.concentration = s.e.concentration; in.otherHostileInstant = s.dmg > 0 || s.mpDmg > 0 || s.spDmg > 0 || s.stagger;
+            in.keyedDurationSec = s.ctrlDur; in.ageSec = MFO::SeatRows::kSettleSec; in.landed = landed;
+            const MFO::SeatRows::Reading rd = MFO::SeatRows::Judge(in); Ctl& c = ctl[static_cast<std::size_t>(a.ctl)]; const std::uint64_t k = MFO::SeatRows::HoldLedger::Key(s.e.form, d.c.id);
+            auto it = std::find_if(c.nzZeros.begin(), c.nzZeros.end(), [&](const auto& p) { return p.first == k; }); if (it == c.nzZeros.end()) { c.nzZeros.push_back({ k, 0 }); it = c.nzZeros.end() - 1; }
+            it->second = MFO::SeatRows::Tally(it->second, rd);
+            if (rd == MFO::SeatRows::Reading::Zero && a.ctl == 0) ++t.castZeroFires;
+            if (it->second >= MFO::SeatRows::kZerosToHold && !c.ZeroHeld(s.e.form, d.c.id)) { c.nzHeld.push_back(k); if (a.ctl == 0) ++t.castZeroHeld;
+                if (trace) std::fprintf(trace, "%7.2f  ZERO EFFECT %s: %s fired %d times on %s (%u) and left nothing. Held off for the fight\n", now, a.c.name.c_str(), s.e.name.c_str(), it->second, d.c.name.c_str(), d.c.id); }
         }
         [[nodiscard]] Tri WillWork(const SimSpell& s, const Body& d) const {   // what Actuation::WillWork would answer (G10)
             if (s.ctrl) return CtrlWorks(s, d) ? Tri::Yes : Tri::No;
@@ -1353,7 +1387,7 @@ namespace Sim {
                     // SIM V4 `caststart` (iaus-sim-v4.md 5; cast/CastOn.cpp OffenseNeverStartedFightLong / ...WindowMs): an offense claim on a row no seat
                     // starts NEVER fires. It holds his hand for the short window, is released, and the spell is held off for the fight on every
                     // target. --seats all = the lab as if Harbinger seated every row.
-                    if (g_v4.caststart && nat == 0 && x.ctrlLive && g_seatsOld && RowNeverStarts(s.row) && s.e.source == SpellSource::Spell) { Ctl& dc = ctl[static_cast<std::size_t>(x.ctl)];
+                    if (g_v4.caststart && nat == 0 && x.ctrlLive && !SimRowSeated(s.row, g_seatsOld) && s.e.source == SpellSource::Spell) { Ctl& dc = ctl[static_cast<std::size_t>(x.ctl)];
                         x.hitAt = -1; x.actEnd = now + static_cast<double>(kNeverShortSec); x.claimUntil = x.actEnd; dc.csHeld.push_back(static_cast<std::uint64_t>(s.e.form) << 32);
                         if (x.ctl == 0) { ++t.castUnseated; ++t.castNeverShort; ++t.castHeldOff; t.neverSec += kNeverShortSec; }
                         if (trace) std::fprintf(trace, "%7.2f  NEVER STARTED %s: %s keys the %s row, no seat starts it. Released after %.1f s, held off this fight\n", now, x.c.name.c_str(), s.e.name.c_str(), kSimRowName[s.row], static_cast<double>(kNeverShortSec));

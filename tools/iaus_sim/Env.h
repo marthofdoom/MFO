@@ -54,11 +54,12 @@ namespace Sim {
         float yieldSec = 0.6f;                       // ASSUMPTION: a friend in his way lets him through after this long
         float passSec = 1.0f;                        // and he may overlap that friend for this long
         float blockSec = 2.0f;                       // no way round a body or a door for this long = the leg ends BLOCKED (Movement Blocked)
-        float stuckSec = 2.0f, stuckU = 30.0f;       // moved under stuckU in stuckSec while a leg wants him to move = stuck (iaus-sim-v4.md 2.5)
+        float stuckSec = 2.0f, stuckU = 30.0f;       // moved under stuckU in stuckSec OF WANTING TO MOVE = stuck (iaus-sim-v4.md 2.5). The window counts wanted seconds: a swing or a stagger between two steps neither feeds it nor clears it
+        float wantGapSec = 3.0f;                     // ASSUMPTION: not asked to move for longer than this = he stood by choice, and the stuck window begins again (review F8: any gap of three steps used to clear it)
         float legGoalU = 200.0f;                     // a goal that moved farther than this starts a new leg
         float oscSec = 3.0f;                         // a new leg heading back within this of the last leg's start is a reversal
         float legMinU = 150.0f;                      // ... when both legs go farther than this (footwork around a foe in reach is not a leg)
-        float reblockU = 300.0f;                     // LootTuning::gateRepeatU: a block this near his previous block is a re-block
+        float reblockU = 300.0f;                     // LootTuning::gateRepeatU: a block this near his previous block is a re-block. The same radius makes an UNREACHABLE or a STUCK end a repeat of his previous end of that kind (review F8)
         float dropSec = 0.6f;                        // ASSUMPTION: the time a drop takes
         float maxDrop = 600.0f;                      // the deepest drop a walker with the ability takes (the README's p95)
         float eyeFrac = 0.90f, torsoFrac = 0.55f, feetU = 16.0f, bodyH = 120.0f, targetMargin = 48.0f;   // native Sightline.cpp: eye -> feet / torso / head, each ray ends 48 short
@@ -86,6 +87,11 @@ namespace Sim {
         [[nodiscard]] bool Any() const { return env || path || bodies || los || caststart || interrupt || drops || foedrops; }
     };
     inline V4 g_v4;
+    // --seat-immunity seen|unseen: does the game's will-work SEE that a foe is immune to paralysis? native cast/WillWork.cpp (c): "Stagger / Paralyze
+    // IMMUNITY is not exposed by the engine as a readable bit ... it is only what the MGEF conditions say; the zero-effect hold catches the rest".
+    // The lab's foes carry the ImmuneParalysis keyword (immunePar) but its spells carry no conditions, so which it is on a given list is NOT KNOWN here.
+    // Default UNSEEN (the game as native describes it: he casts, it lands nothing, twice, and the pair is held). ASSUMPTION, switchable.
+    inline bool g_seatImmunitySeen = false;
     inline bool g_seatsOld = false;   // --seats old: the game before Harbinger ABI 46 (Stagger, Disarm, TargetEffect, Paralyze, Reanimate never start). Default: every row seated
 
     inline EQ::SightTuning g_sightT;   // --sight walls=off|terrain=off|gap=<u>: one layer at a time, so each layer's error can be read alone (2.4)
@@ -101,7 +107,7 @@ namespace Sim {
         std::int32_t door = -1; double doorAt = 0;                                                               // the door he is opening
         double dropUntil = 0; EQ::Vec3 dropTo; std::int32_t dropTri = -1;                                          // a drop in flight
         double legAt = -1e9; float legDx = 0, legDy = 0, legSx = 0, legSy = 0, legGx = 0, legGy = 0, legG0x = 0, legG0y = 0, walked = 0; bool legOpen = false, legReach = false, legLong = false, away = false, exact = false /* his last leg ended STUCK: the next route is searched from where he stands */; float legLen = 0; double awayUntil = 0, exactUntil = 0;
-        float blockX = 0, blockY = 0; bool hadBlock = false;
+        float endX[3] = {}, endY[3] = {}; bool hadEnd[3] = {};   // where his last leg of each kind ended (LegEnd: BLOCKED, UNREACHABLE, STUCK): an end beside it is a repeat
     };
 
     struct EnvPoint { EQ::Vec3 p; std::int32_t tri = -1; std::uint32_t base = 0; std::uint8_t kind = 0; };

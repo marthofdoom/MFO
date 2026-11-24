@@ -9,6 +9,7 @@
 #include "iaus/Core.h"
 #include "iaus/Snapshot.h"
 #include "iaus_sim/Json.h"
+#include "cast/SeatRows.h"   // SIM V4: native's own pure seat table and zero-effect rules (standard types only; the harness reads the same file)
 
 #include <algorithm>
 #include <array>
@@ -363,12 +364,26 @@ namespace Sim {
     // caster for. SEATS TODAY (Harbinger ABI 46, 2026-11-23): Stagger, Disarm, TargetEffect and Paralyze ARE seated, so by default no row is refused.
     // `--seats old` is the game before ABI 46: kSimOldUnseated never start (cast/Archetype.cpp kUnseatedRows as it was). A Script row is never
     // refused: it takes the measured unfired chance like any other, with the SHORT window and a fight-long hold after one failure (review F5).
-    // NOT MIRRORED YET: MFO's adopt-seats will-work (keyed effect, level caps, no reach cap) and its two-zero-fires hold (native/cast/SeatRows.h,
-    // not on main when this was written). To add a row: a value here and its key in SimRowOf.
+    // MIRRORED from MFO's adopt-seats (main 5b17b58e, native/cast/SeatRows.h, which the lab includes): whether a row is served is SeatRows::RowSeated
+    // itself (SimRowSeated below); the keyed-effect will-work and the two-zero-fires hold are Fight::WillWorkFor / NoteZeroEffect (World.h).
+    // NOT MIRRORED (the lab has no such effect or record): Disarm's right-hand-weapon need, Command's summoned need, effect and magic effect
+    // CONDITIONS (the lab's stand-in is the foe's own flags), the approximate-row exemption. To add a row: a value here and its key in SimRowOf.
     enum SimRow : int { kRowNone = 0, kRowSeated, kRowStagger, kRowDisarm, kRowTargetEffect, kRowParalyze, kRowScript, kRowReanimate };
     inline constexpr const char* kSimRowName[] = { "none", "seated", "Stagger", "Disarm", "TargetEffect", "Paralyze", "Script", "Reanimate" };
     inline constexpr int kSimOldUnseated[] = { kRowStagger, kRowDisarm, kRowTargetEffect, kRowParalyze, kRowReanimate };
     [[nodiscard]] inline bool RowNeverStarts(int row) { for (int r : kSimOldUnseated) if (r == row) return true; return false; }   // read only under --seats old
+    // The four hostile rows Harbinger ABI 46 seats, as native names them (cast/Archetype.cpp HostileSeatRow).
+    [[nodiscard]] inline bool SimHostileSeatRow(int row, MFO::SeatRows::Row& out) {
+        switch (row) { case kRowStagger: out = MFO::SeatRows::Row::Stagger; return true; case kRowDisarm: out = MFO::SeatRows::Row::Disarm; return true;
+                       case kRowTargetEffect: out = MFO::SeatRows::Row::TargetEffect; return true; case kRowParalyze: out = MFO::SeatRows::Row::Paralyze; return true; default: return false; }
+    }
+    // Is the row served: native's own rule (SeatRows::RowSeated) on what Harbinger reports. `old` = an ABI under 46 (no coverage word), today = ABI 46
+    // with the four rows and the equip admission covered. Reanimate is not one of the four: it is unseated only in the old game (kSimOldUnseated).
+    [[nodiscard]] inline bool SimRowSeated(int row, bool old) {
+        MFO::SeatRows::Row r{}; if (!SimHostileSeatRow(row, r)) return !(old && RowNeverStarts(row));
+        std::uint32_t cov = MFO::SeatRows::kTypeEquipBit; for (const MFO::SeatRows::RowInfo& i : MFO::SeatRows::kRows) cov |= i.coverageBit;
+        return MFO::SeatRows::RowSeated(old ? MFO::SeatRows::kMinAbiCoverage - 1 : MFO::SeatRows::kMinAbiCoverage, cov, r);
+    }
     // cast/CastOn.cpp OffenseNeverStartedFightLong, by name: the SHORT window and a fight-long hold after ONE failure (also for a spell with no row).
     [[nodiscard]] inline bool RowFightLong(int row) { return row == kRowNone || row == kRowScript; }
     inline constexpr float kNeverShortSec = 4.0f, kNeverLongSec = 6.5f;   // apmf/APMFBridge.h kHealClaimNeverObservedCapMs 4000 / kHoldLastSeenCapMs 6500

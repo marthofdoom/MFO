@@ -376,6 +376,7 @@ def emit_run(classes, label, curves=(), sets=None):
 
 
 def save_summary():
+    SUMMARY["sight_skipped"] = [] if ALLOW_SIGHT_KNOBS else sorted(set(SIGHT_SKIPPED))   # review F11: what the skip list kept out of this run's search
     json.dump(SUMMARY, open(os.path.join(A.out, "summary.json"), "w"), indent=1)
     open(os.path.join(A.out, "summary.md"), "w").write(render_md())
 
@@ -2122,6 +2123,8 @@ def render_md():
             L += ["| %s | %+.2f (%.2f) | %d | %+.2f | %+.0f g | %d / %d | %d | %s |" % (c, v["gap"], v["se"], v["episodes"], v["potionJ_gap"], v["gold_equivalent_gap"], v["baseline_takes"], v["oracle_takes"], v["sell_runs"],
                   "; ".join("(%s) %s %.2f" % (r["class"], r["cluster"], r["dU_per_episode"]) for r in g["clusters"][c][:3])) for c, v in g["cells"].items()] + [""]
     ad = SUMMARY.get("auto_decisions", [])
+    if SUMMARY.get("sight_skipped"):
+        L += ["## Not searched: knobs that read sight", "", "The lab's sight is geometry whose error against the engine's rays is not measured (no parity probe yet), so these were kept out of every stage (`--sight-knobs` lifts it): " + ", ".join("`%s`" % k for k in SUMMARY["sight_skipped"]), ""]
     L += ["## AUTOMATIC DECISIONS (--decisions %s; the rule and the numbers are in summary.json auto_decisions)" % A.decisions, "", "| Kind | Verdict | What | Evidence |", "|---|---|---|---|"]
     L += ["| %s | %s | %s | %s |" % (d["kind"], d["verdict"], d["what"], d["evidence"].replace("|", "/")[:400]) for d in ad if d["verdict"] != "note"] or ["| - | - | none | |"]
     L += ["", "Report-only notes (never blockers): %d" % sum(1 for d in ad if d["verdict"] == "note"), ""]

@@ -86,9 +86,13 @@ namespace Sim {
     enum class LegEnd { Blocked, Unreachable, Stuck };
     inline void EnvLegEnd(Fight& F, Body& x, LegEnd how) {
         Nav& n = x.nav; const bool subj = x.ctl == 0;
+        // AN END BESIDE HIS LAST END OF THE SAME KIND IS A REPEAT (review F8: only a BLOCKED end was compared, so asking again and again for a route
+        // that does not exist, or sticking again and again at one corner, cost nothing). BLOCKED repeats stay Tally::pathReblock; the other two are pathRepeat.
+        { const int k = static_cast<int>(how); const bool rep = n.hadEnd[k] && std::hypot(x.c.x - n.endX[k], x.c.y - n.endY[k]) < g_envT.reblockU;
+          if (subj && rep) { if (how == LegEnd::Blocked) ++F.t.pathReblock; else ++F.t.pathRepeat; }
+          n.hadEnd[k] = true; n.endX[k] = x.c.x; n.endY[k] = x.c.y; }
         if (how != LegEnd::Stuck) {
-            if (subj) { if (how == LegEnd::Blocked) { ++F.t.pathBlocked; if (n.hadBlock && std::hypot(x.c.x - n.blockX, x.c.y - n.blockY) < g_envT.reblockU) ++F.t.pathReblock; } }
-            if (how == LegEnd::Blocked) { n.hadBlock = true; n.blockX = x.c.x; n.blockY = x.c.y; }
+            if (subj && how == LegEnd::Blocked) ++F.t.pathBlocked;
             n.holdUntil = F.now + static_cast<double>(g_envT.retrySec);
             // BLOCKED on the way to a foe (apmf/OffenseApproach.cpp:20: "the approach is BLOCKED (released, foe not re-filed this fight)"): a door he cannot open ends it for the fight.
             if (g_v4.caststart && how == LegEnd::Blocked && n.blocked && x.ctl >= 0 && n.goalBody) { Ctl& c = F.ctl[static_cast<std::size_t>(x.ctl)]; const Body* gb = F.Find(n.goalBody);
@@ -237,11 +241,15 @@ namespace Sim {
         if (n.tri < 0) { EnvAdopt(F, x); if (n.tri < 0) return; }
         if (F.now < n.dropUntil) return;   // falling
         // The offense approach's block (apmf/OffenseApproach.cpp): a foe past the drop cap, or behind a door he cannot open, is not walked to again this
-        // fight. No leg is filed, so this is not stuck time. It is HOLD-UNREACHABLE time when his attack stays on that foe (EnvStep counts it).
-        if (g_v4.caststart && g_v4.path && !away && x.ctl >= 0 && to) { const Ctl& bc = F.ctl[static_cast<std::size_t>(x.ctl)]; if (std::find(bc.apprBlocked.begin(), bc.apprBlocked.end(), to->c.id) != bc.apprBlocked.end()) return; }
+        // fight. No leg is filed, so this is not stuck time. It is HOLD time (Tally::pathHoldSec, the same tally the backoff before the cap feeds: review
+        // F8), and HOLD-UNREACHABLE time too when his attack stays on that foe (EnvStep counts it).
+        if (g_v4.caststart && g_v4.path && !away && x.ctl >= 0 && to) { const Ctl& bc = F.ctl[static_cast<std::size_t>(x.ctl)]; if (std::find(bc.apprBlocked.begin(), bc.apprBlocked.end(), to->c.id) != bc.apprBlocked.end()) { if (subj) F.t.pathHoldSec += TM::dt; return; } }
         const float step = speed * TM::dt; const bool idleBefore = F.now - n.wantAt > 0.5;
-        if (F.now - n.wantAt > 3.0 * static_cast<double>(TM::dt)) { n.progAt = F.now; n.px = x.c.x; n.py = x.c.y; n.stuckSince = -1; n.stuckNoted = false; }
-        n.wantAt = F.now; bool arrived = false, cornered = false;
+        // THE STUCK WINDOW COUNTS WANTED SECONDS (review F8). A gap in the asking (a swing, a stagger, a turn spent on a cast) is taken out of the window
+        // and does not clear it, so a body that asks, fails, swings and asks again is stuck. Only a gap past wantGapSec is standing by choice.
+        if (const double gap = F.now - n.wantAt - static_cast<double>(TM::dt); gap > static_cast<double>(T.wantGapSec)) { n.progAt = F.now; n.px = x.c.x; n.py = x.c.y; n.stuckSince = -1; n.stuckNoted = false; }
+        else if (gap > 0.5 * static_cast<double>(TM::dt)) { n.progAt += gap; if (n.stuckSince >= 0) n.stuckSince += gap; }
+        n.wantAt = F.now; bool arrived = false, cornered = false, held = false;
         if (!g_v4.path) EnvTryStep(F, x, tx, ty, step);
         else if (away) {
             const float fromX = 2.0f * x.c.x - tx, fromY = 2.0f * x.c.y - ty;   // every away caller asks for (him + (him - what he leaves))
@@ -273,7 +281,12 @@ namespace Sim {
                 }
                 if (!arrived && n.legOpen && n.reach && std::hypot(n.goal.x - x.c.x, n.goal.y - x.c.y) < 24.0f && std::fabs(n.goal.z - x.c.z) < T.levelU) arrived = true;   // at his goal (a mover that stops a step short never reaches the last corner)
             }
+            else held = true;
         }
+        // WAITING OUT A HOLD (retrySec after a BLOCKED or an UNREACHABLE end, the offense approach's backoff) is not a leg that makes no progress: he has
+        // no route and is not walking. It is counted as what it is (Tally::pathHoldSec, gated beside stuck%), and the stuck window stands still meanwhile.
+        // Before review F8 the backoff fed stuck% while the same wait past the drop cap fed nothing.
+        if (held) { if (subj) F.t.pathHoldSec += TM::dt; n.progAt += static_cast<double>(TM::dt); if (n.stuckSince >= 0) n.stuckSince += static_cast<double>(TM::dt); return; }
         if (arrived) EnvLegClose(F, x, true);
         // stuck (2.5): under stuckU of ground in stuckSec while a leg wants him to move. Standing cornered is his choice and is counted apart.
         if (arrived || cornered || F.now < n.dropUntil) { n.progAt = F.now; n.px = x.c.x; n.py = x.c.y; }
