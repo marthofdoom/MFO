@@ -1174,35 +1174,58 @@ Shared today, compiled into the lab as they are: `iaus/LootNeed.h` (with `iaus/P
 
 ### 14.8 Checks, cost, and what was not run
 
-Made once, at the end, on the branch head.
+Made once, at the end of the review round, on the branch head with `origin/main` (`2d617b7d`) merged.
 
-- `--world v2`, `--world v3`, `--world v4` against `baseline_builtin.txt`, `baseline_v3_builtin.txt`, `baseline_v4_builtin.txt`: 0 metrics changed each. No baseline file was touched. The loot fixtures are `nopool`, so the pool hash in the world tag is what it was.
-- `sim --env-test`: 81 checks pass. `sim --loot-test`: 12 scenarios, 0 failed. `test_tune_driver.py`: 40 tests pass. A smoke run of the driver's `loot` stage on episodes ends with its summary.
-- `run.sh` with `SIM_CLITEST=1`: every loot check passes. Two checks of batch W FAIL, on `origin/main` (`02066ca6`) exactly as on this branch, so they are not this batch's: (1) `make_fixtures.py --check` reports all 17 batch W fixtures STALE, because `tools/envextract/fmt.py` (round 4) now writes three more sections than the committed files hold. They were NOT rewritten here: that changes the pool hash and so the v4 baseline's tag. (2) the solo walk over the whole library reads 32 wrong trips of 11839 (0.270 percent, the bound is 0.1), 31 of them in one place of the rebuilt library, `x_Skyrim-104217_1_-2`. Both belong to whoever owns batch W's files. The field-log check was skipped (no `_evidence` in the worktree).
-- **The gate on the library** (480 episodes a run: 15 cells, 4 seeds, 8 episodes, the player's script and the second group mixed). `*` = over its bound.
+- **The fight baselines.** `origin/main` fails its own three baselines since `fix/spell-worth` merged without rewriting them: `--world v2` 824 metrics changed, `--world v3` 1099, `--world v4` 899. This branch reads the same three numbers, and against baselines written by main's own binary it reads `--world v2` 0 changed, `--world v3` 0 changed, and `--world v4` the same file byte for byte on the old fixtures. So looting moved no fight. The three baseline files were NOT rewritten here (the drift is not this batch's), except the pool hash in the first line of `baseline_v4_builtin.txt` (14.9).
+- `sim --env-test`: 81 checks pass. `sim --loot-test`: 15 scenarios, 0 failed, 3 of them reproduce a fault of today's rules. `test_tune_driver.py`: 41 tests pass. A smoke run of the driver's `loot` stage on episodes ends with its summary and the two notes (not checked held-out, the gold tie).
+- `run.sh` with `SIM_CLITEST=1`: every loot check passes, and so do the two batch W checks that failed in the first round (the fixtures' `--check`, and the library solo walk now that the duplicate-navmesh place is skipped). Five checks FAIL, all five on `origin/main` exactly as here (main's own binary prints the same numbers): the three baseline compares above and the two `--t2 off` lab-of-section-30 lines (J 79.47 and 80.07 against the 79.31 and 80.10 written in the check), the same spell-worth drift. One loot check was wrong after S1 and was corrected: it asked that no scenario ever count a crime, and `thief-no-recheck`'s variant must. The corrected line was run by hand, not in a second full suite. The same report at 1 thread and at 8 is identical, fights and loot. The field-log check ran against `_evidence`.
+- **The gate on the library** (480 episodes a run: 15 cells, 4 seeds, 8 episodes, the player's script and the second group mixed). The lab's default rules, so with marth's two rulings ON. The last two columns are today's native (`--loot-rule dibsNear=0 --loot-rule gateEvents=0`). `*` = over its bound.
 
-| Row | LoreRim | LoreRim held-out | Tuxborn | Tuxborn held-out | Vanilla | Vanilla held-out | fixtures |
-|---|---|---|---|---|---|---|---|
-| leftRR/ep | 1.04* | 1.76* | 0.99* | 1.98* | 1.19* | 0.66* | 0.33 |
-| goldLeftRR/ep | 0.12* | 0.12* | 0.14* | 0.22* | 0.40* | 0.24* | 0.07 |
-| coinDibsNear/ep | 0.39* | 0.52* | 0.33* | 0.31* | 0.40* | 0.35* | 0.26* |
-| museumLeftRR/ep | 0.00 | 0.00 | 0.01 | 0.08 | 0.02 | 0.01 | 0.00 |
-| crimes | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| guardSeenTakes | 6* | 28* | 0 | 29* | 0 | 3* | 0 |
-| legs/src | 1.42 | 1.94 | 1.46 | 1.74 | 1.61 | 1.35 | 2.85* |
-| restart% | 29.5 | 43.0* | 30.4 | 36.5* | 31.7 | 26.2 | 56.2* |
-| aborted% | 16.1 | 30.2* | 19.6 | 20.8 | 34.0* | 18.7 | 56.9* |
-| reversals/min | 0.28 | 0.37 | 0.33 | 0.51 | 0.24 | 0.28 | 0.50 |
-| twoOnOne/ep | 0.28* | 0.11* | 0.17* | 0.04* | 0.09* | 0.11* | 0.03* |
-| combatLoot s/fight | 0.04 | 0.04 | 0.06 | 0.06 | 0.04 | 0.04 | 0.06 |
-| combatTakes | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
-| walkedPast/ep | 0.60* | 1.75* | 0.71* | 1.64* | 0.34 | 0.69* | 0.51* |
-| stuckOff s/ep | 0.01 | 2.73 | 0.11 | 0.00 | 1.20 | 0.18 | 22.05* |
-| wait free p90 s | 46.3* | 55.2* | 70.1* | 65.6* | 30.9* | 27.0* | 14.1 |
-| wait dibs p90 s | 57.5 | 51.0 | 63.7* | 62.3* | 57.9 | 59.3 | 48.6 |
+| Row | LoreRim | LoreRim held-out | Tuxborn | Tuxborn held-out | Vanilla | Vanilla held-out | fixtures | Tuxborn, today's native | fixtures, today's native |
+|---|---|---|---|---|---|---|---|---|---|
+| `leftRR/ep` | 1.74* | 2.30* | 1.92* | 3.13* | 1.69* | 1.15* | 0.39 | 1.95* | 0.39 |
+| `goldLeftRR/ep` | 0.15* | 0.11* | 0.17* | 0.27* | 0.42* | 0.27* | 0.06 | 0.15* | 0.05 |
+| `coinDibsNear/ep` | 0.02 | 0.06 | 0.03 | 0.02 | 0.09 | 0.02 | 0.04 | 0.36* | 0.24* |
+| `dibsNear/ep` | 0.05 | 0.13* | 0.06 | 0.04 | 0.19* | 0.04 | 0.09 | 0.61* | 0.39* |
+| `roadLeft%` | 49.2 | 69.3* | 41.8 | 51.5 | 72.3* | 67.7* | 48.1 | 46.2 | 52.1 |
+| `leftCarry/ep` | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| `leftGuard/ep` | 0.06 | 4.00* | 0.82 | 1.87* | 0.02 | 0.82 | 0.55 | 0.85 | 0.55 |
+| `leftOutOfRange/ep` | 7.59* | 3.22 | 7.42* | 7.02* | 3.35 | 1.92 | 0.00 | 7.42* | 0.00 |
+| `museumLeftRR/ep` | 0.00 | 0.00 | 0.02 | 0.08 | 0.01 | 0.01 | 0.00 | 0.02 | 0.00 |
+| `crimes` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `guardSeenTakes` | 7* | 24* | 0 | 30* | 0 | 4* | 0 | 0 | 0 |
+| `legs/src` | 1.38 | 1.86 | 1.42 | 1.70 | 1.71 | 1.31 | 2.49* | 1.50 | 2.75* |
+| `restart%` | 29.3 | 41.7* | 28.0 | 36.4* | 36.7* | 25.5 | 53.6* | 30.5 | 56.8* |
+| `aborted%` | 15.2 | 28.8 | 19.5 | 21.1 | 38.0* | 17.9 | 52.8* | 22.2 | 56.6* |
+| `reversals/min` | 0.30 | 0.37 | 0.28 | 0.53 | 0.27 | 0.29 | 0.44 | 0.28 | 0.43 |
+| `twoOnOne/ep` | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| `combatLoot s/fight` | 0.05 | 0.04 | 0.04 | 0.06 | 0.04 | 0.04 | 0.06 | 0.04 | 0.06 |
+| `combatTakes` | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| `walkedPast/ep` | 0.71* | 1.67* | 0.69* | 1.71* | 0.39 | 0.62* | 0.50* | 0.70* | 0.48 |
+| `stuckOff s/ep` | 0.01 | 2.44 | 0.09 | 0.00 | 1.78 | 0.17 | 15.0* | 0.22 | 16.7* |
+| `wait free p90 s` | 90.0* | 90.0* | 90.0* | 90.0* | 90.0* | 67.4* | 19.3 | 90.0* | 19.3 |
+| `wait dibs p90 s` | 90.0* | 90.0* | 87.2* | 90.0* | 90.0* | 90.0* | 60.0* | 89.5* | 60.0* |
+| rows over | 7 | 10 | 6 | 9 | 8 | 7 | 6 | 8 | 7 |
+| value/ep (without gold) | 143.651 (108.848) | 132.228 (107.490) | 131.025 (111.258) | 130.126 (110.626) | 125.398 (111.215) | 126.619 (111.877) | 119.143 (113.377) | 129.274 (111.093) | 118.579 (113.155) |
 
-The game as it is fails the gate on every set: that is the report's point, not a lab failure. The fixtures are trap-heavy by design (a freeze, a locked door, a guarded street), which is their `stuckOff` and `aborted%`. Of the wanted stacks left on Tuxborn's library, per episode: owned 19.4, out of range because the player walked on 4.5, locked 1.5, unreachable 1.5, flora 1.3, the player's dibs 0.8, the episode ended first 0.7, guard 0.7, off the navmesh 0.6, the player's bubble 0.12, blocklisted 0.11, ignored 0.01. 22 to 28 percent of the episodes lose or time out a fight (the natural bracket), and what lies there then is counted as that and nothing else.
-- **Against the field**, per follower-minute (lab: Tuxborn library. Field: `calib_loot.py`, the denominator is an estimate of scanning time): DISPATCH 1.24 against 1.10 (11-18), RETARGET 1.56 against 0.88, `leg ended BLOCKED` 0.14 against 0.20 to 0.68, `RELEASE why=party combat` 0.17 against 0.21, `why=left leash` 0.09 against 0.02 to 0.28, `why=batch done` 0.82 against 0.23 to 1.45, `stuck at his own origin` 0.03 against 0.07. The field blocks two to five times as often as the lab: the lab's world is the navmesh, and what stands on it in the game (furniture, clutter, collision the mesh does not know) is not there. That is X1 of section 10.2 and the largest known gap of this mirror.
-- **The oracle** (Tuxborn, 90 episodes each): library 130.44 for the game against 138.25 (gap 7.81 with gold, 3.12 without), held-out 131.28 against 135.14 (3.87 and 0.83). 11.4 decisions an episode, 0.14 to 0.25 CPU seconds an episode, floored at the game's own play in 11 and 8 of the 90.
-- **CPU**, one thread, the same fights with looting off and on: on the fixtures 2.10 ms an episode against 2.93 (1.4 times, for 61 more simulated seconds), on Tuxborn's library 3.96 against 9.63 (2.4 times). A 480 episode report takes about a second of wall time at 8 threads after the load (a list's loot extract parses in 1 to 2 s).
+The game fails the gate on every set: that is the report's point, not a lab failure. The fixtures are trap-heavy by design (a freeze, a locked door, a guarded street), which is their `stuckOff` and `aborted%`. Against the table of the first round: the two rulings take `coinDibsNear/ep` from 0.26 to 0.52 down to 0.02 to 0.09, `leftRR/ep` is higher because "wanted" is now the shipped table's verdict on the starting bag (a potion he no longer needs at the end still counts), and the wait rows hold the censored waits. Of the wanted stacks left on Tuxborn's library, per episode: owned 23.5, the party lost the fight 10.0, out of range because the player walked on 7.4, unreachable 2.6, locked 1.9, the episode ended first 1.3, guard 0.8, flora 0.7, off the navmesh 0.7, the player's dibs 0.3, ignored 0.20, blocklisted 0.17, the player's bubble 0.16.
+- **Against the field**, per follower-minute (lab: Tuxborn library under TODAY's native rules, since that is what the logs ran. Field: `calib_loot.py`, the denominator is an estimate of scanning time): DISPATCH 1.19 against 1.10 (11-18), RETARGET 1.43 against 0.88, `leg ended BLOCKED` 0.19 against 0.20 to 0.68, `RELEASE why=party combat` 0.13 against 0.21, `why=left leash` 0.05 against 0.02 to 0.28, `why=batch done` 0.82 against 0.23 to 1.45, `stuck at his own origin` 0.06 against 0.07. The field still blocks up to 3.5 times as often as the lab (2 to 5 times in the first round's run): the lab's world is the navmesh, and what stands on it in the game (furniture, clutter, collision the mesh does not know) is not there. That is X1 of section 10.2, the largest known gap of this mirror, and the reason the gate rows are not searched (14.5).
+- **The oracle** (Tuxborn, 90 episodes each, a lower bound, 14.5): library 137.69 for the game against 145.43 (gap 7.73 with gold, 1.37 without), 12.8 decisions an episode, 0.34 CPU seconds an episode, floored at the game's own play in 9 of the 90. Held-out: 41.98 against 137.02. That gap is not loot value: the game's play there holds guard-seen takes (30 in the 480 of the table above, finding N5) at 1000 each, and the oracle's play leaves those takes.
+- **CPU** (first round, not measured again): one thread, the same fights with looting off and on: on the fixtures 2.10 ms an episode against 2.93, on Tuxborn's library 3.96 against 9.63. A 480 episode report takes about a second of wall time at 8 threads after the load.
 - **Not run**: the tune itself (the `loot` stage at size, on episodes, with `--loot-places`). The oracle at size. A list world for the FIGHTS of an episode (`--list`) together with `--loot-list`: the runs above use the built-in fight world in the extracted places.
+
+### 14.9 The review round (Opus review of `9689734b`, 2026-11-24)
+
+| Finding | What was done | Where it is held |
+|---|---|---|
+| S1 the `crimes` row could not fail (it read the rule's own verdict) | crimes and guard-seen takes are read on the truth over the take's landing frame | scenario `thief-no-recheck`: its variant must count a crime |
+| S2 the driver flagged only a gate row that newly FAILED | `loot_gate_check`: any row worse than shipped is an open decision, more crimes or guard-seen takes rejects the table. The guard timers, the bar floor and `gateReadmitSec` are not searched | `test_tune_driver.py test_loot_gate_check`, `LOOT_NOT_SEARCHED` |
+| S3 the gate could be passed by taking less (`takeThreshold`) | "wanted" is the shipped table's verdict on the starting bag, `roadLeft%` counts what any road could take, `walkedPast` plans by the shipped table, a stack left released and reachable is a censored wait | 14.5 "Ignoring loot does not read better", and a CLI check |
+| S4 the actor defer was not cleared without a slot | cleared | |
+| S5 excuses with no gate row | rows `dibsNear/ep`, `leftCarry/ep`, `leftGuard/ep`, `leftOutOfRange/ep`, a museum value | 14.3 |
+| S6 the gate knobs were searched with no signal | not searched, with the reason | `LOOT_NOT_SEARCHED` |
+| Vanilla `x_Skyrim-104217_1_-2` holds duplicate navmeshes | the loader skips such a place and says why | the library solo walk |
+| The batch W fixtures were stale against `tools/envextract/fmt.py` | all 17 rewritten, 48 bytes more each (the extractor's three new sections, empty). Proof that nothing else moved: one binary, the old fixtures against the new, writes a v4 baseline that differs in its first line only (`fixtures#85d7c2c8` to `fixtures#64b360f8`). The committed `baseline_v4_builtin.txt` changed in that line only | `make_fixtures.py --check` |
+| marth's rulings of 11-24 | `Rules::dibsNearEnough` and `Rules::gateEventsOnly`, default ON as native will become, `--loot-rule dibsNear=0` / `gateEvents=0` for today's native | scenarios `ruling-near-is-enough`, `ruling-gate-events-only` |
+
+The review's native verdicts: N2 and N3 are proven in the field logs of 11-18 and 11-23, N1 is proven in code, N6 is the `gateReadmitMoveU` 500 loop of the 11-18 log (item 000EA786). None is fixed here.

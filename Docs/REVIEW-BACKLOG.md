@@ -3767,3 +3767,17 @@ R1 and R2 are FIXED on the branch, with the coordinator's small items (net goal 
 - SEV-4: WillWork HasWorkingHealthDamage accepts PeakValueModifier and excludes Absorb, Fills::Classify the reverse: align.
 - Settled: Turn Lesser Undead 0004D3F9 is Stagger, not hostile, not Health (Skyrim.esm, MysticismMagic.esp); Adamant's third effect is gated on HasMagicEffect 0004B145, so the cap exemption cannot fire above the cap.
 - Open: DoT is counted over its whole duration (no foe time-to-live reader).
+
+### feat/sim-v4-loot (sim v4 batch L; Opus review 2026-11-24 against 9689734b, fix round by Fable)
+
+The review's record as saved (`_agentlogs/mfo/review-sim-loot.md`, verbatim; the full fix list S1 to S6 went to the author by message and is not on disk):
+
+> review done: fix list (crimes row tautological; driver new_fail only; hasDefer not cleared; gateable by takeThreshold; Vanilla x_Skyrim-104217 = duplicate NAVMs). Native: N2/N3 proven 1118+1123; N1 code-proven; N6 gateReadmitMoveU 500 loop 1118 000EA786. worktree removed.
+
+- FIXED in the round (doc `iaus-sim-v4.md` 14.9): S1 crimes row tautological, S2 driver new_fail only, S3 gateable by takeThreshold, S4 hasDefer not cleared, S5 gate rows for the excuses, S6 gate knobs not searched, the duplicate-NAVM place skipped by the loader, the batch W fixtures.
+- NATIVE, NOT FIXED HERE (this batch edits no native file; each needs its own brief): N1 coin dibs need near AND facing (code-proven; marth 11-24: "Near is enough"). N2 / N3 the static-block and locked-door retry cycles (proven in the 11-18 and 11-23 field logs). N6 `gateReadmitMoveU` 500 lifts a gate by its own follower's walk (loop in the 11-18 log, item 000EA786; marth 11-24: real events only, a route-based lift later). N4 the carry peek weighs equipment only. N5 a guard answer asked on the way is used unread at arrival.
+- OPEN, SEV-4 (author): `origin/main` 2d617b7d fails its own three sim baselines (`--world v2` 824, v3 1099, v4 899 metrics changed) since `fix/spell-worth` merged without rewriting them. This branch plays the same fights as main (0 changed against baselines written by main's binary) and did NOT rewrite them. Whoever owns the spell-worth change rewrites the three files after reading the diff.
+- OPEN, SEV-4 (author): the gate COUNT of rows over their bound is not a judge. A table that walks less reads lower on `legs/src`, `restart%`, `reversals/min`, `stuckOff` and `guardSeenTakes`, and where the shipped table is already over a row a worse number adds nothing to the count (takeThreshold 1 ties the shipped count on three of seven sets). The driver compares each row with the shipped number instead. Bounds stay PLACEHOLDERS for marth.
+- OPEN, SEV-4 (author): the wait rows now hold a censored wait for every wanted stack left released and reachable, so on the library (`leftRR/ep` 1.2 to 3.1) both read the episode's 90 s and no longer tell sets apart. A separate "p90 of what was taken" row would bring that back.
+- OPEN, SEV-5 (author): `LOOT_NOT_SEARCHED`'s reason for the gate rows says the field blocks 2 to 5 times as often as the lab. Measured after the round, under today's rules on Tuxborn: `leg ended BLOCKED` 0.19 per follower-minute against the field's 0.20 to 0.68, so 1 to 3.5 times. The reason stands, the figure in the string is the older one.
+- OPEN, SEV-5 (author): the oracle is greedy in decision order (a lower bound, doc 14.5). A search over orders or followers is not built.
