@@ -115,6 +115,11 @@ namespace Sim {
     };
 
     struct EnvPoint { EQ::Vec3 p; std::int32_t tri = -1; std::uint32_t base = 0; std::uint8_t kind = 0; };
+    // SIM V4 BATCH L (Loot.h): a container, a loose item, a flora or an activator of the place. p = the ref, on / tri = the nearest mesh point within 600
+    // units (tri -1 = none: native's navmesh gate drops it), navDist = how far the ref lies from the mesh. key = "<plugin file>:<local id hex>" of its BASE
+    // record, the join to a list's loot extract. owned: the ref or its cell has an owner (README "Ownership").
+    struct LootRef { EQ::Vec3 p, on; std::int32_t tri = -1; float navDist = 0; std::uint32_t id = 0; std::uint8_t kind = 0, baseSig = 0; bool owned = false, locked = false; std::uint16_t count = 0; std::string key, name; };
+    struct LootSpot { EQ::Vec3 a, b; bool flag = false; };   // a fixture's guard (a to b), bystander or body (flag: hostile at death)
 
     struct SimEnv {
         std::string name, cls, set, file; bool interior = true, pool = true; std::uint64_t hash = 0;   // hash: of the file's bytes (the library hash of a run is built from these)
@@ -125,6 +130,7 @@ namespace Sim {
         std::vector<EQ::Wall> walls; EQ::Grid grid;
         std::vector<std::uint32_t> walk, weak;
         std::vector<EnvPoint> entries, spawns, refs;   // load doors on the mesh / actor spawn points / containers and loose items (batch L)
+        std::vector<LootRef> loot; std::vector<LootSpot> guards, bystanders, bodies; bool town = false, fixture = false;   // batch L (Loot.h)
         std::vector<float> triArea; float area0 = 0.0f; std::uint32_t tris0 = 0;   // walk component 0
         int defects = 0, plainDoors = 0;   // plainDoors: door triangles joined from REFS by geometry (no DOOR row)
 
@@ -258,6 +264,16 @@ namespace Sim {
             if (!entry && !actor && !loot) continue;
             EnvPoint p; p.base = r.base; p.kind = r.kind; p.tri = EQ::NearestTri(v, { r.pos[0], r.pos[1], r.pos[2] }, entry ? 300.0f : 200.0f, p.p); if (p.tri < 0) continue;
             (entry ? E->entries : actor ? E->spawns : E->refs).push_back(p); }
+        // batch L: the loot refs, with what Loot.h needs of each (nothing above reads them, so a fight without looting is what it was)
+        for (std::uint32_t i = 0; i < f.refCount(); ++i) { const mfoenv::Ref& r = f.ref(i); if (r.flags & mfoenv::kStartsDisabled) continue;
+            if (r.kind != mfoenv::kContainer && r.kind != mfoenv::kItem && r.kind != mfoenv::kFlora && r.kind != mfoenv::kActivator) continue;
+            LootRef q; q.p = { r.pos[0], r.pos[1], r.pos[2] }; q.tri = EQ::NearestTri(v, q.p, 600.0f, q.on); q.navDist = q.tri < 0 ? 1e9f : std::hypot(q.on.x - q.p.x, q.on.y - q.p.y, q.on.z - q.p.z);
+            q.id = r.id; q.kind = r.kind; q.baseSig = r.baseSig; q.owned = r.reserved != 0; q.locked = (r.flags & mfoenv::kLocked) != 0; q.count = r.count; q.name = f.str(r.baseNameOff);
+            char kb[16]; std::snprintf(kb, sizeof kb, ":%x", r.base & 0xFFFFFFu); q.key = std::string(f.pluginName(r.base)) + kb; E->loot.push_back(std::move(q)); }
+        E->fixture = E->set == "Fixture";
+        { const std::string& m2 = f.metaJson(); JP jp2{ m2 }; J j2; if (!m2.empty() && m2[0] == '{') j2 = jp2.val(); const J& lm = j2["loot"]; E->town = lm["town"].yes(); auto v3 = [](const J& a, std::size_t o) { return EQ::Vec3{ static_cast<float>(a[o].num()), static_cast<float>(a[o + 1].num()), static_cast<float>(a[o + 2].num()) }; };
+          for (const J& g : lm["guards"].a) E->guards.push_back({ v3(g, 0), v3(g, 3), true }); for (const J& g : lm["bystanders"].a) E->bystanders.push_back({ v3(g, 0), v3(g, 0), false });
+          for (const J& g : lm["bodies"].a) E->bodies.push_back({ v3(g, 0), v3(g, 0), g[3].yes() }); }
         return E;
     }
     // A place a fight can be put in: a largest walk component with room for two groups.
@@ -289,7 +305,8 @@ namespace Sim {
 #else
         "tools/iaus_sim/envs";
 #endif
-    inline constexpr const char* kFixtureNames[] = { "open-room", "corridor-l", "doorway", "doorway-open", "doorway-plain", "locked-door", "stair-tower", "ledge", "ridge", "u-corridor", "dead-end", "island", "pillars", "narrow", "seam", "trust-wall", "trust-one-way" };
+    inline constexpr const char* kFixtureNames[] = { "open-room", "corridor-l", "doorway", "doorway-open", "doorway-plain", "locked-door", "stair-tower", "ledge", "ridge", "u-corridor", "dead-end", "island", "pillars", "narrow", "seam", "trust-wall", "trust-one-way",
+        "loot-room", "loot-backs", "loot-freeze", "loot-gate", "loot-town", "loot-shop" };   // batch L: nopool, so no ordinary fight draws them and the pool hash is what it was
     inline bool LoadFixtures(EnvPool& P) { bool ok = true; for (const char* n : kFixtureNames) ok = P.Add(g_envDir + "/" + n + ".mfoenv", true) && ok; return ok; }
     // index.json of the library: every environment of a set (optionally one class). Returns the number loaded.
     inline int LoadSet(EnvPool& P, const std::string& set, const std::string& cls) {

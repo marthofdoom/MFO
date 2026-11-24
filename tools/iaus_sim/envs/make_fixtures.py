@@ -5,6 +5,7 @@ so the simulator loads fixtures and extracted environments through the same read
 
     python3 tools/iaus_sim/envs/make_fixtures.py            # rewrite every <name>.mfoenv from <name>.txt
     python3 tools/iaus_sim/envs/make_fixtures.py --check    # exit 1 when a committed .mfoenv differs from its .txt
+    python3 tools/iaus_sim/envs/make_fixtures.py [--check] <name> ...   # only the named fixtures
 
 THE .txt FORMAT
     cell <units>            size of one map square (default 128)
@@ -25,6 +26,15 @@ THE .txt FORMAT
     seam X                           squares with x >= X are a second navmesh, joined by kind 0 links
     nopool                           scenario only: never drawn for an ordinary fight of the built-in world
     defect a b                       TRUTH: no way from a to b. The mesh a planner reads still has it (a sim-only DFCT section)
+  LOOT (sim v4 batch L; squares by their letter, several lines may name one square):
+    loot a container [owned] [locked]      a container ref (its contents are drawn by the sim)
+    loot a item <FixtureItem> [N] [owned]  a loose item of the sim's fixture item table (tools/iaus_sim/Logistics.h Items), N of it
+    loot a coinpurse                       a coin purse (flora whose produce is coin)
+    loot a lever                           an activator (a lever / a gate's switch)
+    guard a [b]                            a guard at a, walking to b and back      bystander a      a witness who is no guard
+    body a [bystander]                     a body lying there when the place loads (bystander: not hostile at death)
+    town                                   the place is a town (the player's location is under a town anchor)
+  guard / bystander / body / town go to META "loot" (sim-only keys). Loot refs are ordinary REFS rows, owner in `reserved` as the extractor writes it.
 
 Two squares share an edge when both of the edge's corners stand at the same height (within 8 units) in both. So a ramp joins
 the floor at its foot and at its top, and a platform beside a lower floor is a ledge."""
@@ -35,7 +45,7 @@ import fmt   # noqa: E402  (the extractor's own writer structs)
 
 
 def parse(path):
-    f = {'cell': 128.0, 'interior': True, 'class': 'fixture', 'rows': [], 'z': [], 'ramp': [], 'drop': [], 'portal': [], 'seam': None, 'defect': [], 'pool': True}
+    f = {'cell': 128.0, 'interior': True, 'class': 'fixture', 'rows': [], 'z': [], 'ramp': [], 'drop': [], 'portal': [], 'seam': None, 'defect': [], 'pool': True, 'loot': [], 'guard': [], 'bystander': [], 'body': [], 'town': False}
     inmap = False
     for raw in open(path):
         line = raw.rstrip('\n')
@@ -54,6 +64,8 @@ def parse(path):
         elif t[0] in ('drop', 'portal', 'defect'): f[t[0]].append((t[1], t[2]))
         elif t[0] == 'seam': f['seam'] = int(t[1])
         elif t[0] == 'nopool': f['pool'] = False
+        elif t[0] in ('loot', 'guard', 'bystander', 'body'): f[t[0]].append(t[1:])
+        elif t[0] == 'town': f['town'] = True
         else: raise SystemExit('%s: unknown line %r' % (path, line))
     return f
 
@@ -132,10 +144,10 @@ def build(name, f):
         A, B = named[a], named[b]; s = side_between(A, B); dfct.append((mesh_of(*A), tid[A] + SIDE[s][0], SIDE[s][1], 0))
     # refs and doors
     S = fmt.Strings(); plug = [S.add('fixture.esm')]; refs = []; doors = [[] for _ in range(nmesh)]
-    def ref(kind, sig, x, y, flags=0, lock=0):
+    def ref(kind, sig, x, y, flags=0, lock=0, name=None, count=0, owner=0):
         h = sum(hz[(x, y)]) / 4.0; px = (x + 0.5) * C; py = (H - y - 0.5) * C
         refs.append((len(refs) + 1, 0x100 + kind, 1, kind, sig, flags, px, py, h, 0.0, 0.0, 0.0, 1.0, px - 32, py - 32, h, px + 32, py + 32, h + 128,
-                     0, lock, 0, 0, (0x900 + len(refs)) if flags & 16 else 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0, S.add('Fixture%d' % kind), 0, 0))
+                     0, lock, 0, count, (0x900 + len(refs)) if flags & 16 else 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, 0, 0, S.add(name or 'Fixture%d' % kind), 0, owner))
         return len(refs) - 1
     for (x, y) in sorted(sq, key=lambda k: (k[1], k[0])):
         ch = at(x, y); m = mesh_of(x, y); t = tris[m][tid[(x, y)]]; t2 = tris[m][tid[(x, y)] + 1]
@@ -148,6 +160,22 @@ def build(name, f):
             row[13:19] = [px - 10, py - C / 2, row[8], px + 10, py + C / 2, row[8] + 300] if along_x else [px - C / 2, py - 10, row[8], px + C / 2, py + 10, row[8] + 300]; refs[r] = tuple(row)
         if ch == '~': t['water'] = t2['water'] = True
         if ch == '=': t['pref'] = t2['pref'] = True
+    # loot (batch L): after every map ref, so a fixture without loot lines is the file it was
+    OWNER = 0x777   # any owner id of plugin 0: the sim only asks "owned or not"
+    for row in f['loot']:
+        x, y = named[row[0]]; what = row[1]; owned = 'owned' in row[2:]
+        if what == 'container': ref(1, 2, x, y, flags=(8 if 'locked' in row[2:] else 0) | (128 if owned else 0), lock=(50 if 'locked' in row[2:] else 0), name='FixtureChest', owner=OWNER if owned else 0)
+        elif what == 'item': ref(4, 5, x, y, flags=128 if owned else 0, name=row[2], count=int(row[3]) if len(row) > 3 and row[3].isdigit() else 1, owner=OWNER if owned else 0)
+        elif what == 'coinpurse': ref(7, 20, x, y, name='FixtureCoinPurse')
+        elif what == 'lever': ref(2, 3, x, y, name='FixtureLever')
+        else: raise SystemExit('%s: unknown loot kind %r' % (name, what))
+    def spot(c):
+        x, y = named[c]; return [(x + 0.5) * C, (H - y - 0.5) * C, sum(hz[(x, y)]) / 4.0]
+    lootmeta = {}
+    if f['town']: lootmeta['town'] = True
+    if f['guard']: lootmeta['guards'] = [spot(r[0]) + spot(r[1] if len(r) > 1 else r[0]) for r in f['guard']]
+    if f['bystander']: lootmeta['bystanders'] = [spot(r[0]) for r in f['bystander']]
+    if f['body']: lootmeta['bodies'] = [spot(r[0]) + [0 if 'bystander' in r[1:] else 1] for r in f['body']]
     meshes = []; allv = []; allt = []; alll = []; alld = []
     for m in range(nmesh):
         vs = verts[m]; mn = [min(v[i] for v in vs) for i in range(3)]; mx = [max(v[i] for v in vs) for i in range(3)]
@@ -157,6 +185,7 @@ def build(name, f):
             fl = t.get('ext', 0) | (0x400 if t.get('door') else 0) | (0x200 if t.get('water') else 0) | (0x40 if t.get('pref') else 0) | 0x800
             allt.append((*t['v'], *t['nb'], fl, 0))
     meta = {'name': name, 'set': 'Fixture', 'class': f['class'], 'interior': f['interior'], 'plugins': ['fixture.esm'], 'cells': [], 'pool': f['pool'], 'counts': {'tris': len(allt)}}
+    if lootmeta: meta['loot'] = lootmeta
     return meta, plug, S, meshes, allv, allt, alll, alld, refs, dfct
 
 
@@ -175,9 +204,10 @@ def write(path, built):
 
 
 def main():
-    check = '--check' in sys.argv; bad = 0
+    check = '--check' in sys.argv; bad = 0; only = [a for a in sys.argv[1:] if not a.startswith('--')]   # names: only those fixtures (batch L writes its own and leaves batch W's files as they are)
     for fn in sorted(os.listdir(HERE)):
         if not fn.endswith('.txt'): continue
+        if only and fn[:-4] not in only: continue
         name = fn[:-4]; out = os.path.join(HERE, name + '.mfoenv'); built = build(name, parse(os.path.join(HERE, fn)))
         if check:
             tmp = out + '.chk'; write(tmp, built); same = os.path.exists(out) and open(tmp, 'rb').read() == open(out, 'rb').read(); os.remove(tmp)

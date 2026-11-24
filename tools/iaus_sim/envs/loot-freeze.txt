@@ -1,0 +1,20 @@
+# Batch L, field 11-17g: the mesh says the pocket at b opens from a. The truth is a wall. Loot stands past it, reachable round the pocket.
+nopool
+exterior
+class fixture_loot
+map
+#######################
+#P....................#
+#.......###...........#
+#......ab.#..h..i.....#
+#.......###...........#
+#...........j..k......#
+#######################
+end
+defect a b
+defect b a
+loot b item Gold001 40
+loot h item RestoreHealth02 1
+loot i item RestoreHealth03 1
+loot j item RestoreMagicka02 1
+loot k item RestoreStamina02 1

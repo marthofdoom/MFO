@@ -1,0 +1,15 @@
+# Batch L: three bodies around the player, who stands among them. (coin-behind-player: the coin of a body he never faces)
+nopool
+class fixture_loot
+map
+###############
+#.............#
+#....a..b.....#
+#......P......#
+#....c........#
+#.............#
+###############
+end
+body a
+body b
+body c
