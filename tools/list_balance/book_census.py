@@ -45,11 +45,12 @@ def verdict(s):
     elif shape == 'script' or (kind == 'buff' and not self_ and all(a == SCRIPT for a in ar)): n = 0
     else: n = 4
     area = any(e['area'] > 0 for e in fx) or p['payload'] > 0
-    blast = self_ and not conc and n == 1 and p['impact']
+    blast = self_ and not conc and SUMMON not in ar and ((n in (1, 2) and (area or p['impact'])) or p['hazHostile'])
     placed = (tl or shape == 'wall') and SUMMON not in ar   # M1: a summon is kept
     if s['castType'] == 'ConstantEffect': d = 'not castable'
     elif kind == 'buff' and not (conc and not self_) and shape not in ('summon', 'reanimate') and LIGHT in ar and s['delivery'] in ('Aimed', 'TargetLocation'): d = 'unanimated road only'
-    elif blast or placed: d = 'target location'
+    elif placed: d = 'target location'
+    elif blast: d = 'hostile area around himself: blocked for now (no animated road, no bystander check)'
     elif n == 0: d = 'nature unknown'
     elif not any(0 <= a <= 46 and a not in (1, 43) for a in ar): d = "its effects are script-only or unknown archetypes: IAUS cannot weight what it does"
     else: d = 'keep'

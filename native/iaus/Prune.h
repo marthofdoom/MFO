@@ -53,11 +53,17 @@ namespace MFO::Iaus::Prune {
         return a_hazardDropsToGround && a_concentration && !a_selfDelivery;
     }
 
-    // INTERIM (MFO-B865 review F1): a Self, non-concentration OFFENSE spell with an impact hazard (Fire Storm) was Wall -> Placement before the shape
-    // change; as SelfAoE it would be IAUS-kept and cast on the unanimated self-stream road (CastSelfDirect). Keep dropping exactly that set until the
-    // animated self-blast road exists (Docs/REVIEW-BACKLOG.md "self-delivered AoE OFFENSE spell", Frost Nova). Delete this rule when that road lands.
-    [[nodiscard]] inline bool IsSelfBlastPlacement(bool a_selfDelivery, bool a_concentration, bool a_offense, bool a_impactHazard) {
-        return a_selfDelivery && !a_concentration && a_offense && a_impactHazard;
+    // INTERIM BLOCK (marth 2026-11-24 "Block them for now", decision D2): the sentient AI casts no Self, fire-and-forget, hostile AREA spell (Frost Nova,
+    // Fire Storm, Blizzard). Their only road is the unanimated self-stream (CastSelfDirect) and nothing yet counts the townsfolk in the area. Gambit rules are
+    // unchanged. DELETE this rule when packages M2 (area census) and M4 (animated self-blast road) have landed (placed-spells-plan.md).
+    //   offense        nature Offense OR Control: a hostile spell by CasterConsent::ClassifySpell that is not a self cloak, ward, heal, buff or summon.
+    //                  Control counts: Fire Storm and Frost Nova carry a Demoralize / Paralysis rider, so their nature is Control.
+    //   area           Prune::BlastUnits > 0 (an EFIT area, or an explosion that carries a payload)
+    //   impactHazard   the older trigger of this rule (MFO-B865 review F1), kept: such a spell is an area whatever its EFIT area says
+    //   hostileHazard  it spawns a caster-centred hazard whose spell is hostile (SpellArchetype::hazardHostile; Blizzard), whatever kind its own flags give
+    [[nodiscard]] inline bool IsSelfBlastPlacement(bool a_selfDelivery, bool a_concentration, bool a_offense, bool a_area, bool a_impactHazard,
+                                                   bool a_hostileHazard) {
+        return a_selfDelivery && !a_concentration && ((a_offense && (a_area || a_impactHazard)) || a_hostileHazard);
     }
 
     // ── Placed spells (placed-spells-plan.md L1) ─────────────────────────────────────────────────────────
@@ -100,6 +106,7 @@ namespace MFO::Iaus::Prune {
         bool castable = true;            // Vocab::IsCastableSpell (kSpell, not constant effect)
         bool roadUnsupported = false;    // Actuation::CastRoadUnsupported (the animation rule)
         bool targetLocation = false;     // IsPlacement's answer
+        bool selfBlast = false;          // PlacementIn::selfBlast: names the reason (Drop::SelfBlast), never decides alone
         Nature nature = Nature::Unknown;
         bool weighable = true;           // WeighableSpell: at least one effect IAUS can value
     };
@@ -118,11 +125,11 @@ namespace MFO::Iaus::Prune {
     }
     // Unweighted (batch I item 6, marth 11-12 on Q91: "MFO should hide spells we can't weight if we don't know what they do"):
     // the nature is stated but NO effect of the spell is one IAUS can value. APPENDED; the value is only logged, never saved.
-    enum class Drop : std::uint8_t { Keep = 0, NotCastable, Unanimated, Placement, UnknownNature, Unweighted };
+    enum class Drop : std::uint8_t { Keep = 0, NotCastable, Unanimated, Placement, UnknownNature, Unweighted, SelfBlast };   // SelfBlast: the interim block (IsSelfBlastPlacement)
     [[nodiscard]] inline Drop StaticDrop(const StaticIn& a_in) {
         if (!a_in.castable) return Drop::NotCastable;
         if (a_in.roadUnsupported) return Drop::Unanimated;
-        if (a_in.targetLocation) return Drop::Placement;
+        if (a_in.targetLocation) return a_in.selfBlast ? Drop::SelfBlast : Drop::Placement;
         if (a_in.nature == Nature::Unknown) return Drop::UnknownNature;
         if (!a_in.weighable) return Drop::Unweighted;
         return Drop::Keep;
@@ -133,6 +140,7 @@ namespace MFO::Iaus::Prune {
         case Drop::NotCastable:   return "not castable";
         case Drop::Unanimated:    return "unanimated road only";
         case Drop::Placement:     return "target location";
+        case Drop::SelfBlast:     return "hostile area around himself: blocked for now (no animated road, no bystander check)";
         case Drop::UnknownNature: return "nature unknown";
         case Drop::Unweighted:    return "its effects are script-only or unknown archetypes: IAUS cannot weight what it does";
         }

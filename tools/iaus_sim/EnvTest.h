@@ -306,7 +306,16 @@ namespace Sim {
             { const SimSpell s = V("Aimed", "Concentration", "\"proj\":true,\"impact\":true,\"drops\":true", hurt); ok(s.e.drop == D::Placement && s.foeDrop == D::Keep, "placed: a wall is no IAUS candidate, a foe keeps it"); }
             { const SimSpell s = V("TargetLocation", "FireAndForget", "\"proj\":true", hurt); ok(s.e.drop == D::Placement && s.foeDrop == D::Placement, "placed: a rune is dropped"); }
             { const SimSpell s = V("TargetLocation", "FireAndForget", "", "\"archetype\":18,\"av\":-1,\"area\":0"); ok(s.e.drop == D::Keep && s.e.nature == Prune::Nature::Summon && s.foeDrop == D::Keep, "placed: a target location summon is kept (M1)"); }
-            { const SimSpell s = V("Self", "FireAndForget", "\"impact\":true", hurtArea); ok(s.e.drop != D::Keep && s.foeDrop == D::Keep, "placed: a self blast with an impact hazard is blocked, a foe keeps it"); }
+            { const SimSpell s = V("Self", "FireAndForget", "\"impact\":true", hurtArea); ok(s.e.drop == D::SelfBlast && s.foeDrop == D::Keep, "placed: a self blast with an impact hazard is blocked, a foe keeps it"); }
+            { const SimSpell s = V("Self", "FireAndForget", "", hurtArea); ok(s.e.drop == D::SelfBlast, "placed: Frost Nova (self, area, no impact hazard) is blocked"); }
+            { const SimSpell s = V("Self", "FireAndForget", "\"payload\":100", hurt); ok(s.e.drop == D::SelfBlast, "placed: a self blast by a payload explosion is blocked"); }
+            { const SimSpell s = V("Self", "FireAndForget", "\"hazHostile\":true", "\"archetype\":40,\"av\":-1,\"area\":0"); ok(s.e.drop == D::SelfBlast, "placed: a self hazard with a hostile spell (Blizzard) is blocked"); }
+            { const SimSpell s = V("Self", "FireAndForget", "", "\"hostile\":true,\"archetype\":7,\"av\":-1,\"area\":40"); ok(s.e.drop == D::SelfBlast, "placed: a self area control spell is blocked"); }
+            { const SimSpell s = V("Self", "FireAndForget", "", "\"hostile\":true,\"detrimental\":true,\"archetype\":35,\"av\":24,\"area\":10"); ok(s.e.drop == D::Keep && s.e.nature == Prune::Nature::Buff, "placed: a self cloak is kept"); }
+            { const SimSpell s = V("Self", "Concentration", "", hurtArea); ok(s.e.drop == D::Keep, "placed: a self concentration spell is not covered"); }
+            { const SimSpell s = V("Self", "FireAndForget", "", hurt); ok(s.e.drop == D::Keep, "placed: a self hostile spell with no area is not covered"); }
+            { const SimSpell s = V("Aimed", "FireAndForget", "\"proj\":true", hurtArea); ok(s.e.drop == D::Keep, "placed: an aimed area spell (Fireball) is kept"); }
+            { const SimSpell s = V("Self", "FireAndForget", "", "\"archetype\":0,\"av\":24,\"area\":20"); ok(s.e.drop == D::Keep && s.e.nature == Prune::Nature::Heal, "placed: a self area heal is kept"); }
           }
           g_v4 = keep; }
         std::printf("ENV-TESTS %s: %d checks, %d failed  (fixtures %zu loaded, %zu skipped)\n", fail ? "FAIL" : "PASS", n, fail, g_envPool.all.size(), g_envPool.skipped.size());

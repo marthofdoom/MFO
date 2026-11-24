@@ -61,8 +61,8 @@ namespace MFO::Iaus::SpellBook {
     // verdict MakeEntry gives every book entry (castable, a road MFO can cast it by, not a placement spell, a nature the record
     // states, an effect list IAUS can weight: item 6) plus the class fit of ruling Q34 (the live ClassGate's spellsOnClass /
     // spellsFromMastered, exactly as Generate reads them). Form data only: any thread. a_why (optional) gets a static literal
-    // when the answer is no.
-    [[nodiscard]] bool WouldWeigh(RE::SpellItem* a_spell, const ClassGate& a_gate, const char** a_why = nullptr);
+    // when the answer is no; a_drop (optional) gets the static verdict (Keep when the class fit alone said no).
+    [[nodiscard]] bool WouldWeigh(RE::SpellItem* a_spell, const ClassGate& a_gate, const char** a_why = nullptr, Prune::Drop* a_drop = nullptr);
 
     // WORKER. The last measured book, or nullptr when there is none fresh enough (never read, older than
     // kTrustSec, VR). Posts ONE main-thread refresh when the book is missing, kRefreshSec old or dirty.

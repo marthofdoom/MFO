@@ -1737,13 +1737,27 @@ namespace {
             Check(Prune::StaticDrop(in) == Prune::Drop::Keep, "B865: a bolt with an impact hazard is kept");
             in.targetLocation = true;   // a rune: delivery TargetLocation, not read from the impact hazard
             Check(Prune::StaticDrop(in) == Prune::Drop::Placement, "B865: a rune is unchanged");
-            Check(Prune::IsSelfBlastPlacement(true, false, true, true), "B865 F1: a Self FF Offense spell with an impact hazard (Fire Storm) is still dropped (interim)");
-            Check(!Prune::IsSelfBlastPlacement(true, false, true, false), "B865 F1: a Self blast with no impact hazard is not covered by the interim drop");
-            Check(!Prune::IsSelfBlastPlacement(true, true, true, true), "B865 F1: a Self concentration spell is not covered");
-            Check(!Prune::IsSelfBlastPlacement(true, false, false, true), "B865 F1: a non-Offense Self spell is not dropped");
-            Check(!Prune::IsSelfBlastPlacement(false, false, true, true), "B865 F1: an aimed bolt with an impact hazard is kept");
-            in.targetLocation = Prune::IsSelfBlastPlacement(true, false, true, true);
-            Check(Prune::StaticDrop(in) == Prune::Drop::Placement, "B865 F1: the Self blast is dropped as Placement");
+            // the interim self-blast block (marth 11-24, D2): self, concentration, offense (Offense or Control), area, impact hazard, hostile hazard
+            const auto blast = [](bool s, bool c, bool o, bool ar, bool im, bool hz) { return Prune::IsSelfBlastPlacement(s, c, o, ar, im, hz); };
+            Check(blast(true, false, true, true, true, false), "D2: Fire Storm (self FF hostile, area, impact hazard) is blocked");
+            Check(blast(true, false, true, true, false, false), "D2: Frost Nova (self FF hostile, area, no impact hazard) is blocked");
+            Check(blast(true, false, true, false, true, false), "D2: a self FF hostile spell with an impact hazard and no stated area stays blocked (B865 F1)");
+            Check(blast(true, false, false, false, false, true), "D2: a self FF spell whose hazard's spell is hostile (Blizzard) is blocked whatever its own flags say");
+            Check(!blast(true, false, true, false, false, false), "D2: a self hostile spell with no area at all is not covered");
+            Check(!blast(true, true, true, true, true, true), "D2: a Self concentration spell is not covered");
+            Check(!blast(true, false, false, true, true, false), "D2: a self buff / cloak / ward / heal with an area is not covered");
+            Check(!blast(false, false, true, true, true, true), "D2: an aimed blast (Fireball) is kept");
+            in.selfBlast = in.targetLocation = true;
+            Check(Prune::StaticDrop(in) == Prune::Drop::SelfBlast, "D2: the block names its own reason");
+            in.targetLocation = false;
+            Check(Prune::StaticDrop(in) == Prune::Drop::Keep, "D2: the reason bit never decides alone (a summon wins in IsPlacement)");
+            // natures: what must stay a candidate is never Offense / Control
+            Prune::NatureIn nat; nat.kind = Prune::Kind::Offense; nat.selfCloak = true;
+            Check(Prune::ClassifyNature(nat) == Prune::Nature::Buff, "D2: a hostile self cloak's nature is Buff (kept)");
+            nat = {}; nat.kind = Prune::Kind::Offense; nat.ward = true;
+            Check(Prune::ClassifyNature(nat) == Prune::Nature::Ward, "D2: a ward's nature is Ward (kept)");
+            nat = {}; nat.kind = Prune::Kind::Offense; nat.control = true;
+            Check(Prune::ClassifyNature(nat) == Prune::Nature::Control, "D2: a blast with a fear / paralysis rider (Fire Storm) is Control, which the block covers");
         }
         {   // placed-spells L1: the one placement rule, today's answers
             using P = Prune::PlacementIn;

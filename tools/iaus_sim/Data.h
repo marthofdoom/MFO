@@ -331,7 +331,7 @@ namespace Sim {
         std::vector<SimSpell> spells;   // the castable pool a follower's book is drawn from (taught by a BOOK)
         std::vector<SimSpell> scrolls;  // SCRL records (the list's scrolls a follower may carry)
         std::vector<SimSpell> reanimSpells;   // card G7: the list's Reanimate spells (table rows only; AddPoolSpell)
-        int keptReanim = 0, dropUnweighted = 0, dropUnanimated = 0;
+        int keptReanim = 0, dropUnweighted = 0, dropUnanimated = 0, dropSelfBlast = 0;
         std::vector<FRace> races;
         FClass cls[3];                  // melee, ranged, mage
         std::vector<Weapon> wOneHand, wDagger, wTwoHand, wBow, wCrossbow;
@@ -532,7 +532,6 @@ namespace Sim {
         // ("placed", list_balance/extract_world.py placed_row). A spell row without "placed" is a hand-written one (EnvTest): no impact hazard, no projectile.
         {
             const J& pl = sp["placed"];
-            const bool ff = !conc;
             const bool outranked = !spellShape || anyScript || anyBound || anyCloak || ward || anyLight || (self && archs(kArSpawnHazard));   // cast/Archetype.cpp: the shapes tested before Wall
             Prune::PlacementIn in;
             in.targetLocationDelivery = dl == "TargetLocation";
@@ -542,8 +541,9 @@ namespace Sim {
             in.summon    = summon;
             // A FOE's spells are the engine AI's, not IAUS's: the two kinds only IAUS's book leaves out (a wall, a self blast) stay castable for a foe (Load.h reads foeDrop).
             { Prune::PlacementIn foe = in; foe.wall = false; out.foeDrop = e.drop; if (Prune::IsPlacement(foe)) out.foeDrop = Prune::Drop::Placement; }
-            in.selfBlast = Prune::IsSelfBlastPlacement(self, !ff, e.nature == Prune::Nature::Offense, pl["impact"].yes());
-            if (Prune::IsPlacement(in)) e.drop = Prune::Drop::Placement;
+            in.selfBlast = Prune::IsSelfBlastPlacement(self, conc, e.nature == Prune::Nature::Offense || e.nature == Prune::Nature::Control,
+                                                       e.areaUnits > 0.0f || pl["payload"].num() > 0.0, pl["impact"].yes(), pl["hazHostile"].yes());
+            if (Prune::IsPlacement(in)) { Prune::StaticIn st; st.nature = Prune::Nature::Buff; st.targetLocation = true; st.selfBlast = in.selfBlast; e.drop = Prune::StaticDrop(st); }
             // cast/SpellSupport.cpp CastRoadUnsupported (Drop::Unanimated, tested before Placement as in StaticDrop): a Buff-kind Light aimed or at a location (Magelight).
             if (buffKind && !(conc && !self) && spellShape && anyLight && (dl == "Aimed" || in.targetLocationDelivery)) e.drop = Prune::Drop::Unanimated;
         }
@@ -597,7 +597,7 @@ namespace Sim {
         // its book entry stays dropped for IAUS; a table row with cond.corpse_within casts it at a corpse. It enters a book only by name
         // (a class row's Reanimate role, --teach reanimate), never by the random draw, so no other class's book changes.
         else if (s.reanimate && g_t2.reanimate && s.e.drop == Prune::Drop::UnknownNature) { ++b.keptReanim; b.reanimSpells.push_back(std::move(s)); }
-        else { ++b.natures[0]; switch (s.e.drop) { case Prune::Drop::Placement: ++b.dropPlace; break; case Prune::Drop::NotCastable: ++b.dropNotCast; break; case Prune::Drop::Unweighted: ++b.dropUnweighted; break; case Prune::Drop::Unanimated: ++b.dropUnanimated; break; default: ++(s.reanimate ? b.dropReanim : b.dropUnknown); } }
+        else { ++b.natures[0]; switch (s.e.drop) { case Prune::Drop::Placement: ++b.dropPlace; break; case Prune::Drop::NotCastable: ++b.dropNotCast; break; case Prune::Drop::Unweighted: ++b.dropUnweighted; break; case Prune::Drop::Unanimated: ++b.dropUnanimated; break; case Prune::Drop::SelfBlast: ++b.dropSelfBlast; break; default: ++(s.reanimate ? b.dropReanim : b.dropUnknown); } }
     }
 
     inline void TagRoles(Data& d) {
