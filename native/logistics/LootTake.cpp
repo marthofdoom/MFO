@@ -127,7 +127,11 @@ namespace MFO::Logistics {
             std::sort(takes.begin(), takes.end(),
                       [](const Take& a, const Take& b) { return a.mag > b.mag; });
 
-            if (a_peek) return !takes.empty();
+            if (a_peek) {   // N4: the peek weighs like the take
+                for (const auto& t : takes)
+                    if (FitsCarryWeight(a_follower, t.obj->GetWeight() * static_cast<float>(t.count))) return true;
+                return false;
+            }
             bool moved = false;
             for (const auto& t : takes) {
                 if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
@@ -297,7 +301,7 @@ namespace MFO::Logistics {
                 if (!obj || data.first <= 0) continue;
                 if (obj->GetFormID() != kGold001 && !IsCoinLoot(obj)) continue;
                 if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
-                if (a_peek) return true;
+                if (a_peek) return true;   // no carry-weight gate on coin (above), so the peek weighs nothing either
                 takes.push_back({ obj, data.first });
             }
             if (a_peek || takes.empty()) return false;
@@ -375,7 +379,7 @@ namespace MFO::Logistics {
                 if (IsQuestObjectInstance(data.second.get())) continue;
                 if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
                 if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
-                if (a_peek) return true;
+                if (a_peek) { if (FitsCarryWeight(a_follower, obj->GetWeight() * static_cast<float>(data.first))) return true; continue; }   // N4: the peek weighs like the take
                 takes.push_back({ obj, data.first });
             }
             if (a_peek) return false;
@@ -414,7 +418,7 @@ namespace MFO::Logistics {
                 if (IsQuestObjectInstance(data.second.get())) continue;
                 if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
                 if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
-                if (a_peek) return true;
+                if (a_peek) { if (FitsCarryWeight(a_follower, obj->GetWeight() * static_cast<float>(data.first))) return true; continue; }   // N4: the peek weighs like the take
                 takes.push_back({ obj, data.first });
             }
             if (a_peek) return false;
@@ -442,7 +446,7 @@ namespace MFO::Logistics {
                 if (want <= 0) continue;
                 if (IsQuestObjectInstance(data.second.get())) continue;
                 if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
-                if (a_peek) return true;
+                if (a_peek) { if (FitsCarryWeight(a_follower, obj->GetWeight() * static_cast<float>(std::min(data.first, want)))) return true; continue; }   // N4
                 takes.push_back({ obj, std::min(data.first, want) });
             }
             if (a_peek) return false;
@@ -483,7 +487,7 @@ namespace MFO::Logistics {
                 if (IsQuestObjectInstance(data.second.get())) continue;
                 if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
                 if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
-                if (a_peek) return true;
+                if (a_peek) { if (FitsCarryWeight(a_follower, obj->GetWeight() * static_cast<float>(data.first))) return true; continue; }   // N4: the peek weighs like the take
                 takes.push_back({ obj, data.first });
             }
             if (a_peek) return false;
@@ -548,7 +552,7 @@ namespace MFO::Logistics {
                 if (IsQuestObjectInstance(data.second.get())) continue;
                 if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
                 if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
-                if (a_peek) return true;
+                if (a_peek) { if (FitsCarryWeight(a_follower, obj->GetWeight() * static_cast<float>(data.first))) return true; continue; }   // N4: the peek weighs like the take
                 takes.push_back({ obj, data.first });
             }
             if (a_peek) return false;

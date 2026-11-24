@@ -350,7 +350,7 @@ namespace MFO::Logistics {
                              v.takeCount, v.why);
             if (!v.take) continue;
             if (!TheftGate::Takeable(a_follower, a_src, obj)) continue;   // theft gate: no copy he may own, no take
-            if (a_peek) return true;
+            if (a_peek) { if (FitsCarryWeight(a_follower, obj->GetWeight() * static_cast<float>(v.takeCount))) return true; continue; }   // N4: the peek weighs like the take
             items.push_back({ obj, std::move(c), data.first, v.score });
         }
         if (a_peek) return false;
