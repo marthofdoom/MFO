@@ -345,7 +345,7 @@ taught spell, 0 differ from L1's lab verdict. Blocked although their own flags s
 the Apocalypse circles, `WB_A100_TalonsOfNirn_Spell_PC`, `ArnimaCircleMaraSpellDark`. LoreRim: the same circles and Talons, `_LIP_Sanctuary`, `_K01_StormZone`,
 `TVR_Cleric_D050_Spell_ConsecratedGround`, `TVR_Cleric_D100_Spell_StormOfVengeance`, `TVR_Shadow_D100_Spell_DrainingMist`. A hostile effect on a townsman is a crime
 whatever the caster calls it. The hazard arm cannot tell a circle from Blizzard: both are a benign Spawn
-Hazard whose spell carries hostile effects and no condition (Circle of Strength absorbs stamina, Glory and the Moons absorb, Talons of Nirn, Sanctuary and
+Hazard whose spell carries hostile effects; conditions are not read (Circle of Strength absorbs stamina, Glory and the Moons absorb, Talons of Nirn, Sanctuary and
 Consecrated Ground damage). A circle stays only if marth rules that a harm other than health is allowed, and Sanctuary / Consecrated Ground not even then.
 
 **Review F4 (2026-11-24, after the table above): the rule is per effect and reads the hostile FLAG** (`Prune::HostileAreaEffect`: hostile flag AND its own EFIT
