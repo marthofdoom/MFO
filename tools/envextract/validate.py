@@ -181,7 +181,7 @@ def _geo_dist_seg(p, a, b):
 
 
 def run_file(path):
-    e = fmt.read(path); bad = []; warn = 0; swapbad = 0; stale = noowner = 0
+    e = fmt.read(path); bad = []; warn = 0; swapbad = 0; stale = noowner = 0; cut = 0
     M, V, T, L, D, R = e['meshes'], e['verts'], e['tris'], e['links'], e['doors'], e['refs']
     for mi, m in enumerate(M):
         vb, nv, tb, nt, lb, nl, db, nd = m[5:13]
@@ -192,6 +192,9 @@ def run_file(path):
             for k in range(3):
                 n = t[3 + k]
                 if n >= nt or n < -1: bad.append('mesh %d tri %d nb' % (mi, ti)); continue
+                if t[6] & (0x1000 << k):
+                    cut += 1
+                    if n != -1 or t[6] & (1 << k): bad.append('mesh %d tri %d cut flag on a live or external edge' % (mi, ti))
                 if n < 0: continue
                 u = T[tb + n]; ea = (V[vb + t[k]], V[vb + t[(k + 1) % 3]])
                 back = [j for j in range(3) if u[3 + j] == ti]
@@ -222,13 +225,39 @@ def run_file(path):
         if s[0] >= len(L): bad.append('seam link idx')
         elif L[s[0]][3] != 0: bad.append('seam on a non-portal link')
         if not s[1] > 0: bad.append('seam gap')
+        if any(x != x or abs(x) > 1e9 for x in s[1:]): bad.append('seam value')
+    for d in e.get('dref', []):
+        if d[3] != d[3] or abs(d[3]) > 1e9: bad.append('door row distance')
+    for l in e['links']:
+        if l[8] != l[8] or abs(l[8]) > 1e9: bad.append('link dz')
     for l in e.get('land', []):
         if any(h != h or abs(h) > 1e6 for h in l[2:]): bad.append('land height')
     for r in R:
         if r[35] and (r[35] >> 24) >= len(e['plugins']): bad.append('owner plugin idx')
     print('%s: %d meshes %d tris %d links %d doors %d refs -> %s' % (os.path.basename(path), len(M), len(T), len(L), len(D), len(R), ('OK' if not bad else 'BAD %s' % bad[:5]) + (' (%d one-way neighbour edges, as in the game data)' % warn if warn else '') + (' [%d neighbour pairs not the swapped edge]' % swapbad if swapbad else '')
-          + (' [%d stale link targets, %d owner-less link rows]' % (stale, noowner) if stale or noowner else '')))
+          + (' [%d stale link targets, %d owner-less link rows]' % (stale, noowner) if stale or noowner else '') + (' [%d bad edges cut and marked]' % cut if cut else '')))
     return 0 if not bad else 1
+
+
+def split_check(idx=None):
+    """The held-out places and the library places of ALL sets together: no cell is in both windows, every place is on the side its block hashes to,
+    every exterior window lies inside one block.  -> (problems list, counts)"""
+    import coverage
+    p = os.path.join(CACHE, 'index.json')
+    if idx is None:
+        if not os.path.exists(p): return [], {}
+        idx = json.load(open(p))['sets']
+    lib = {}; held = {}; bad = []; n = [0, 0]
+    for sn, sd in idx.items():
+        for part, dest, want in (('envs', lib, 'lib'), ('heldout', held, 'held')):
+            for r in sd.get(part, []):
+                u = coverage.parse_unit_id(r['id']); n[0 if want == 'lib' else 1] += 1
+                if coverage.side(u) != want: bad.append('%s %s is on the %s side but listed as %s' % (sn, r['id'], coverage.side(u), want))
+                if not coverage.centre_ok(u): bad.append('%s %s window crosses a block edge' % (sn, r['id']))
+                for c in coverage.window_cells(u): dest.setdefault(c, []).append('%s %s' % (sn, r['id']))
+    for c in sorted(set(lib) & set(held), key=str):
+        bad.append('cell %s is in a library window (%s) and a held-out window (%s)' % (c, lib[c][0], held[c][0]))
+    return bad, dict(library=n[0], heldout=n[1], overlapCells=len(set(lib) & set(held)))
 
 
 def run(a):
@@ -239,4 +268,9 @@ def run(a):
             files += [os.path.join(d, f) for f in fs if f.endswith('.mfoenv')]
     rc = 0
     for f in sorted(files): rc |= run_file(f)
+    bad, cnt = split_check()
+    if cnt:
+        print('library / held-out split over all sets: %d library places, %d held-out places, overlapping cells %d -> %s' % (cnt['library'], cnt['heldout'], cnt['overlapCells'], 'OK' if not bad else 'BAD'))
+        for b in bad[:20]: print('  ' + b)
+        rc |= 1 if bad else 0
     return rc

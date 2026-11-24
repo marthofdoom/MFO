@@ -1,8 +1,9 @@
 """Write one .mfoenv for a candidate unit from a scan."""
 import math, struct
-import fmt, navm as N, refs as R, features as F, land
+import fmt, navm as N, refs as R, features as F, land, anomaly as AN
 
-TOOL_VERSION = 2
+TOOL_VERSION = 3
+TF_CUT0 = 0x1000          # TRIS.flags: internal edge k (bit 0x1000 << k) was one-way or not the swapped edge in the game data; the neighbour is cut (nb = -1)
 LF_STALE_TARGET, LF_NO_OWNER_EDGE, LF_DZ_UNKNOWN = 1, 2, 4   # LINK.flags bits
 
 
@@ -97,25 +98,63 @@ def seam_rows(links, meshes, verts, tris, min_gap=0.25):
     return out
 
 
+DOOR_DZ = 100.0        # a door joins a triangle only when the joined point is within this height of the door's origin
+DOOR_NEAR = 200.0      # ... and, when no triangle contains the door's position, within this horizontal distance
+
+
+def _closest_on_segments(p, a, b):
+    """vectorised: closest point on each segment a[i]-b[i] to p (3,) -> (n,3)"""
+    import numpy as np
+    d = b - a; L = (d * d).sum(1); L[L == 0] = 1.0
+    t = np.clip(((p - a) * d).sum(1) / L, 0.0, 1.0)
+    return a + t[:, None] * d
+
+
 def door_rows(doorinfo, doors, meshes, verts, tris):
-    """DREF rows: every door ref joined to its navmesh triangle: the exact one from a DOOR row when the ref has one, else the nearest triangle
-    centroid within 200 units (-1 when none).  doorinfo = [(refIdx, pos, openDefault, lockLevel, teleport, startsDisabled, keyId)]."""
+    """DREF rows: every door ref joined to its navmesh triangle.  The exact one from a DOOR row when the ref has one; else the triangle whose footprint
+    CONTAINS the door's x,y (the one nearest in height), else the triangle with the nearest point to the door; either way the joined point must be
+    within DOOR_DZ of the door in height (and a nearest point within DOOR_NEAR horizontally), else -1.  doorinfo = [(refIdx, pos, openDefault,
+    lockLevel, teleport, startsDisabled, keyId)].  Row: (refIdx, meshIdx, tri, distance to the joined point, ...)."""
     import numpy as np
     exact = {d[5]: (d[0], d[1]) for d in doors if d[5] >= 0}
-    cent = []; owner = []
+    A = []; B = []; Cc = []; owner = []
     if tris:
         V = np.asarray(verts, dtype=np.float64)
         for mi, m in enumerate(meshes):
             T = np.asarray([t[:3] for t in tris[m[7]:m[7] + m[8]]], dtype=np.int64)
-            if len(T): cent.append(V[m[5] + T].mean(1)); owner += [(mi, i) for i in range(len(T))]
-    C = np.concatenate(cent) if cent else np.zeros((0, 3))
+            if len(T): A.append(V[m[5] + T[:, 0]]); B.append(V[m[5] + T[:, 1]]); Cc.append(V[m[5] + T[:, 2]]); owner += [(mi, i) for i in range(len(T))]
+    A = np.concatenate(A) if A else np.zeros((0, 3)); B = np.concatenate(B) if B else np.zeros((0, 3)); Cc = np.concatenate(Cc) if Cc else np.zeros((0, 3))
+    if len(A):
+        lo = np.minimum(np.minimum(A, B), Cc); hi = np.maximum(np.maximum(A, B), Cc)
     out = []
     for ri, pos, openDef, lock, tele, off, key in doorinfo:
-        if ri in exact: mi, ti = exact[ri]; out.append((ri, mi, ti, 0.0, int(openDef), lock, tele, off, key)); continue
-        if len(C):
-            d = np.linalg.norm(C - np.asarray(pos), axis=1); j = int(d.argmin())
-            if d[j] <= 200.0: out.append((ri, owner[j][0], owner[j][1], float(d[j]), int(openDef), lock, tele, off, key)); continue
-        out.append((ri, -1, -1, 0.0, int(openDef), lock, tele, off, key))
+        tail = (int(openDef), lock, tele, off, key)
+        if ri in exact: mi, ti = exact[ri]; out.append((ri, mi, ti, 0.0, *tail)); continue
+        hit = None
+        if len(A):
+            p = np.asarray(pos, dtype=np.float64)
+            sel = np.nonzero((lo[:, 0] <= p[0] + DOOR_NEAR) & (hi[:, 0] >= p[0] - DOOR_NEAR) & (lo[:, 1] <= p[1] + DOOR_NEAR) & (hi[:, 1] >= p[1] - DOOR_NEAR))[0]
+            if len(sel):
+                a, b, c = A[sel], B[sel], Cc[sel]
+                v0 = b - a; v1 = c - a; v2 = p - a                               # barycentric coordinates of (x, y) in each triangle
+                den = v0[:, 0] * v1[:, 1] - v1[:, 0] * v0[:, 1]; ok = np.abs(den) > 1e-9; den[~ok] = 1.0
+                u = (v2[:, 0] * v1[:, 1] - v1[:, 0] * v2[:, 1]) / den; w = (v0[:, 0] * v2[:, 1] - v2[:, 0] * v0[:, 1]) / den
+                inside = ok & (u >= 0) & (w >= 0) & (u + w <= 1)
+                zplane = a[:, 2] + u * v0[:, 2] + w * v1[:, 2]
+                dz = np.abs(p[2] - zplane)
+                cand = np.nonzero(inside & (dz <= DOOR_DZ))[0]
+                if len(cand): j = cand[int(dz[cand].argmin())]; hit = (int(sel[j]), 0.0)
+                else:
+                    # nearest point on the edges of every triangle (a point inside a triangle's footprint was the containing case above); the point must be within DOOR_DZ in height and DOOR_NEAR horizontally
+                    bestd = None
+                    for e0, e1 in ((a, b), (b, c), (c, a)):
+                        q = _closest_on_segments(p, e0, e1); d3 = np.linalg.norm(q - p, axis=1)
+                        good = (np.abs(q[:, 2] - p[2]) <= DOOR_DZ) & (np.linalg.norm(q[:, :2] - p[:2], axis=1) <= DOOR_NEAR)
+                        d3 = np.where(good, d3, np.inf); k = int(d3.argmin())
+                        if np.isfinite(d3[k]) and (bestd is None or d3[k] < bestd[0]): bestd = (float(d3[k]), int(sel[k]))
+                    if bestd: hit = (bestd[1], bestd[0])
+        if hit: mi, ti = owner[hit[0]]; out.append((ri, mi, ti, hit[1], *tail))
+        else: out.append((ri, -1, -1, 0.0, *tail))
     return out
 
 
@@ -138,7 +177,7 @@ def export(sc, unit, groups, by, cls, feat, path, setname, win=1, name=None):
     ext = {}
     for ck, c in cells.items():
         if c['grid'] is not None and not c['flags'] & 1 and not c['persist']: ext[(c['world'], c['grid'][0], c['grid'][1])] = ck
-    refrows = []; refidx = {}; nstart_off = 0; doorinfo = []
+    refrows = []; refidx = {}; nstart_off = 0; doorinfo = []; ncut = 0
     for u in units:
         for rk, (kind, sig, bmin, bmax) in by.get(u, ()):
             ref = sc['refs'][rk]; (ck, fl, isactor, nm, pos, rot, scale, ep, tel, lock, cnt) = ref[:11]
@@ -165,12 +204,13 @@ def export(sc, unit, groups, by, cls, feat, path, setname, win=1, name=None):
         nt = len(m['tris']); nvx = len(m['verts']); v = m['verts']
         tri_base_of.append(tbase)
         for x, y, z in v.tolist(): verts.append((x, y, z))
-        owner = {}
+        owner = {}; ow, ns, _int = AN.edge_scan(m); cut = set(ow) | set(ns)
         for ti, t in enumerate(m['tris'].tolist()):
             v0, v1, v2, n0, n1, n2, fl, cv = t[0][0], t[0][1], t[0][2], t[1][0], t[1][1], t[1][2], t[2], t[3]
             nb = [n0, n1, n2]
             for e in range(3):
                 if fl & (1 << e): owner[nb[e]] = (ti, e); nb[e] = -1
+                elif (ti, e) in cut: nb[e] = -1; fl |= TF_CUT0 << e; ncut += 1
             tris.append((v0, v1, v2, nb[0], nb[1], nb[2], fl, cv))
         nl = 0
         if m['links'] is not None:
@@ -225,7 +265,13 @@ def export(sc, unit, groups, by, cls, feat, path, setname, win=1, name=None):
     for ck, c in sorted(cellinfo.items()):
         wh, src = water_height(sc, c)
         cell_meta.append(dict(id='%08X' % eid(ck), edid=c['edid'], interior=bool(c['flags'] & 1), gridX=c['grid'][0] if c['grid'] else None,
-                              gridY=c['grid'][1] if c['grid'] else None, flags=c['flags'], waterHeight=wh, waterSource=src, owner=eid(c['owner']) if c.get('owner') else 0))
+                              gridY=c['grid'][1] if c['grid'] else None, flags=c['flags'], quadHide=c.get('quad', 0), waterHeight=wh, waterSource=src, owner=eid(c['owner']) if c.get('owner') else 0))
+    world_meta = []
+    for wk in sorted({u[1] for u in units if u[0] == 'x'}):
+        wd = sc['worlds'].get(wk)
+        par = wd[2] if wd and len(wd) > 2 else 0; pf = wd[3] if wd and len(wd) > 3 else 0
+        world_meta.append(dict(id='%08X' % eid(wk), edid=wd[0] if wd else '', parent='%08X' % eid(par) if par else None, parentFlags=pf,
+                               useParentLand=bool(par and pf & 1)))      # a child world that uses its parent's land data: ignore the LAND section for it
     order = sorted(env['plug'].items(), key=lambda kv: kv[1]); plugs = [S.add(n) for n, _ in order]
     kinds = {}
     for r in refrows: kinds[r[3]] = kinds.get(r[3], 0) + 1
@@ -234,9 +280,9 @@ def export(sc, unit, groups, by, cls, feat, path, setname, win=1, name=None):
     ndisp = sum(1 for k in bad if library.unit_of_mesh(sc, k) in set(units))
     meta = dict(tool='envextract', formatVersion=fmt.VERSION, toolVersion=TOOL_VERSION, name=name or '', set=setname, **{'class': cls},
                 interior=unit[0] == 'i', unit=list(unit[1:]) if unit[0] == 'x' else ['%08X' % unit[1]],
-                plugins=[n for n, _ in order], cells=cell_meta, features=feat, refCountsByKind={str(k): v for k, v in sorted(kinds.items())},
+                plugins=[n for n, _ in order], cells=cell_meta, worlds=world_meta, features=feat, refCountsByKind={str(k): v for k, v in sorted(kinds.items())},
                 counts=dict(landCells=len(land_rows), doorRefs=len(dref), seams=len(seam), meshes=len(meshes), verts=len(verts), tris=len(tris), links=len(links), doors=len(doors), refs=len(refrows),
-                            refsStartDisabled=nstart_off, displacedMeshesDropped=ndisp, components=len(set(walk)), weakComponents=len(set(weak))),
+                            refsStartDisabled=nstart_off, edgesCut=ncut, displacedMeshesDropped=ndisp, components=len(set(walk)), weakComponents=len(set(weak))),
                 walkComponents=comp_meta)
     fmt.write(path, meta, plugs, S, meshes, verts, tris, links, doors, refrows, tcmp, dref, seam, land_rows)
     return meta

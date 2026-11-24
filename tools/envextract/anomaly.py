@@ -11,24 +11,50 @@ COARSE = 256.0             # coarse graph bin, units
 LAYER_Z = 200.0            # coarse nodes of one bin are separated into floors by this much z
 
 
-def analyze_mesh(m, resolve_target, target_mesh):
-    """m: features.parse_np result.  resolve_target(raw) -> key (links), target_mesh(key) -> parse_np result or None.
-    -> dict of counts / areas for this mesh."""
+def _geo_eq(a, b): return abs(a[0] - b[0]) <= 0.51 and abs(a[1] - b[1]) <= 0.51 and abs(a[2] - b[2]) <= 0.51
+
+
+def edge_scan(m):
+    """Internal neighbour edges of one mesh that are not a clean pair.  -> (oneway, notswapped, internal): the first two are lists of
+    (triangle, edge), `internal` counts every internal (not external, not open) edge.  oneway = the neighbour has no edge back; notswapped =
+    the neighbour points back but its edge is not the same two points in the opposite direction.  Cached in m['_es']."""
+    es = m.get('_es')
+    if es is not None: return es
     T = m['tris']; V = m['verts']; n = len(T)
-    nb = T['nb'].tolist(); fl = T['fl'].tolist(); vv = T['v'].tolist(); cv = T['cv']
-    Vl = V.tolist()
-    oneway = notswapped = 0
-    def eq(a, b): return abs(a[0] - b[0]) <= 0.51 and abs(a[1] - b[1]) <= 0.51 and abs(a[2] - b[2]) <= 0.51
+    nb = T['nb'].tolist(); fl = T['fl'].tolist(); vv = T['v'].tolist(); Vl = V.tolist()
+    oneway = []; notswapped = []; internal = 0
     for t in range(n):
         f = fl[t]
         for e in range(3):
             if f & (1 << e): continue
             u = nb[t][e]
             if u < 0: continue
+            internal += 1
             back = [j for j in range(3) if nb[u][j] == t and not (fl[u] & (1 << j))]
-            if not back: oneway += 1; continue
+            if not back: oneway.append((t, e)); continue
             a = Vl[vv[t][e]]; b = Vl[vv[t][(e + 1) % 3]]
-            if not any(eq(a, Vl[vv[u][(j + 1) % 3]]) and eq(b, Vl[vv[u][j]]) for j in back): notswapped += 1
+            if not any(_geo_eq(a, Vl[vv[u][(j + 1) % 3]]) and _geo_eq(b, Vl[vv[u][j]]) for j in back): notswapped.append((t, e))
+    m['_es'] = es = (oneway, notswapped, internal)
+    return es
+
+
+def clean_nb(m):
+    """neighbour table (n, 3) with the bad internal edges of edge_scan cut (-1).  The export cuts the same edges and marks them (TRIS flags 0x1000 << edge)."""
+    c = m.get('_nb')
+    if c is not None: return c
+    nb = m['tris']['nb'].astype(np.int64).copy(); ow, ns, _ = edge_scan(m)
+    for t, e in ow + ns: nb[t, e] = -1
+    m['_nb'] = nb
+    return nb
+
+
+def analyze_mesh(m, resolve_target, target_mesh):
+    """m: features.parse_np result.  resolve_target(raw) -> key (links), target_mesh(key) -> parse_np result or None.
+    -> dict of counts / areas for this mesh."""
+    T = m['tris']; V = m['verts']; n = len(T)
+    nb = clean_nb(m).tolist(); fl = T['fl'].tolist(); vv = T['v'].tolist(); cv = T['cv']
+    Vl = V.tolist()
+    ow, ns, internal = edge_scan(m); oneway = len(ow); notswapped = len(ns)
     P = V[T['v'].astype(np.int64)]
     nrm = np.cross(P[:, 1] - P[:, 0], P[:, 2] - P[:, 0]); ln = np.linalg.norm(nrm, axis=1)
     area = 0.5 * ln; ln[ln == 0] = 1.0
@@ -54,7 +80,7 @@ def analyze_mesh(m, resolve_target, target_mesh):
         if sl[t]:
             r = find(t); z = float(cz[t]); lo[r] = min(lo.get(r, z), z); hi[r] = max(hi.get(r, z), z)
     rise = max((hi[r] - lo[r] for r in lo), default=0.0)
-    out = dict(tris=n, oneway=oneway, notswapped=notswapped, a0=bands[0], a1=bands[1], a2=bands[2], a3=bands[3], steepRise=rise,
+    out = dict(tris=n, edges=internal, oneway=oneway, notswapped=notswapped, a0=bands[0], a1=bands[1], a2=bands[2], a3=bands[3], steepRise=rise,
                coverTris=int((cv != 0).sum()), doorTris=m['ndoors'], ownerless=0, stale=0, kind3=0, dropLow=0, dropMid=0, dropHigh=0, links=m['nlinks'],
                kind0=0, kind12=0)
     if m['links'] is not None:
@@ -91,7 +117,7 @@ def place_components(meshes, keyidx, resolve_target):
         return x
     area = np.zeros(n)
     for (k, m), o in zip(meshes, off):
-        T = m['tris']; fl = T['fl'].tolist(); nb = T['nb'].tolist()
+        T = m['tris']; fl = T['fl'].tolist(); nb = clean_nb(m).tolist()
         P = m['verts'][T['v'].astype(np.int64)]
         area[o:o + len(T)] = 0.5 * np.linalg.norm(np.cross(P[:, 1] - P[:, 0], P[:, 2] - P[:, 0]), axis=1)
         for t in range(len(T)):
@@ -119,22 +145,41 @@ def place_components(meshes, keyidx, resolve_target):
     return (ca[big] / tot if ca else 0.0), islands, [find(g) for g in range(n)], off
 
 
+LATTICE = COARSE / 2       # sampling step inside a triangle that is bigger than a coarse bin
+
+
 def coarse_graph_features(meshes, keyidx, resolve_target):
-    """Coarse graph of a place: nodes = (256 unit bin, floor) cells holding walkable triangles; edges = triangle adjacency (internal, kind 0/1/2
-    links inside the place).  -> dict: nodes, loops (cyclomatic number of the main component), deadEnds (degree 1 nodes), chokes (articulation
-    points), span (longest shortest path found by a double sweep, units), pathy (share of nodes with degree <= 2)."""
+    """Coarse graph of a place: nodes = (256 unit bin, floor) cells that a walkable TRIANGLE touches (rasterised, not the centroid: a big
+    flat triangle covers every bin under it); edges = lattice neighbours inside one triangle, and triangle adjacency (internal, kind 0/1/2
+    links inside the place).  -> dict: nodes, loops (cyclomatic number of the main component), deadEnds (degree 1 nodes), chokes
+    (articulation points), span (longest shortest path found by a double sweep, units), pathy (share of nodes with degree <= 2)."""
     node = {}; adj = []
     def nid(x, y, z):
         key = (int(math.floor(x / COARSE)), int(math.floor(y / COARSE)), int(math.floor(z / LAYER_Z)))
         i = node.get(key)
         if i is None: i = node[key] = len(adj); adj.append(set())
         return i
-    ids = []
+    ids = []          # per mesh: node id of each triangle's centroid (the triangle's anchor)
     for k, m in meshes:
-        T = m['tris']; P = m['verts'][T['v'].astype(np.int64)]; c = P.mean(1)
-        ids.append([nid(*row) for row in c.tolist()])
+        T = m['tris']; P = m['verts'][T['v'].astype(np.int64)].astype(np.float64); c = P.mean(1)
+        span = np.maximum(P[:, :, 0].max(1) - P[:, :, 0].min(1), P[:, :, 1].max(1) - P[:, :, 1].min(1))
+        I = [nid(*row) for row in c.tolist()]
+        for t in np.nonzero(span > LATTICE)[0].tolist():       # a big triangle: sample it on a lattice, connect lattice neighbours
+            a, b, cc = P[t]; kk = min(120, 3 * int(math.ceil(float(span[t]) / (3 * LATTICE))))     # multiple of 3: the centroid is a lattice point
+            ii, jj = np.meshgrid(np.arange(kk + 1), np.arange(kk + 1), indexing='ij'); ok = (ii + jj) <= kk
+            w1 = ii / kk; w2 = jj / kk; w0 = 1.0 - w1 - w2
+            pts = w0[..., None] * a + w1[..., None] * b + w2[..., None] * cc
+            grid = -np.ones((kk + 1, kk + 1), dtype=np.int64)
+            for x, y in zip(*np.nonzero(ok)): grid[x, y] = nid(*pts[x, y].tolist())
+            for da, db in ((1, 0), (0, 1), (1, -1)):
+                for x, y in zip(*np.nonzero(ok)):
+                    x2, y2 = x + da, y + db
+                    if 0 <= x2 <= kk and 0 <= y2 <= kk and ok[x2, y2]:
+                        u, v = int(grid[x, y]), int(grid[x2, y2])
+                        if u != v: adj[u].add(v); adj[v].add(u)
+        ids.append(I)
     for mi, (k, m) in enumerate(meshes):
-        T = m['tris']; fl = T['fl'].tolist(); nb = T['nb'].tolist(); I = ids[mi]
+        T = m['tris']; fl = T['fl'].tolist(); nb = clean_nb(m).tolist(); I = ids[mi]
         for t in range(len(T)):
             for e in range(3):
                 u = nb[t][e]

@@ -11,7 +11,8 @@ numpy (installed here, 2.5.3; the raster features use it). Nothing is installed 
 
     envextract.py scan     --set Vanilla|LoreRim|Tuxborn        # read plugins -> ~/.cache/mfo-env/_scan/<set>.pkl
     envextract.py library  --set NAME [--count N] [--heldout-count M] [--coverage-n N] [--seed S] [--changed-only]
-                                                                # reject anomalies, coverage pick, write library + held-out + index.json
+                                                                # reject anomalies, split, coverage pick, write library + held-out + index.json
+    envextract.py coverage [--coverage-n N]                     # tag / pair coverage of ALL sets together (reads index.json)
     envextract.py sample   --set NAME --class C --seed S --count K   # draw MORE environments of a class (seeded, deterministic)
     envextract.py svg      FILE.mfoenv [OUT.svg]                # top-down picture to eyeball
     envextract.py validate [--set NAME | FILE ...]              # NVNM self-check over every navmesh / env files
@@ -26,11 +27,15 @@ candidates to places where a mod supplied a navmesh.
 
     ~/.cache/mfo-env/index.json                       all sets, every environment, class, size, features
     ~/.cache/mfo-env/<set>/<set>.<class>.<id>.mfoenv  one environment each (id = plugin name + local id + grid, load-order independent)
-    ~/.cache/mfo-env/<set>/heldout/                    the held-out places: same coverage, never a place (or an overlapping window) of the library
+    ~/.cache/mfo-env/<set>/heldout/                    the held-out places: same coverage; disjoint from every library place of EVERY set (one global hash split)
     ~/.cache/mfo-env/<set>/sample-<class>-<seed>/      what `sample` drew
     ~/.cache/mfo-env/_scan/<set>.pkl                  scan cache (tool-internal)
 
 ## File format `MFOENV` v2 (little endian, 4-byte aligned, no dependencies)
+
+Round 5 (tool version 3, still format 2): TRIS flags `0x1000 << k` mark internal edge k as CUT (the game data had it one-way or not the swapped
+edge; `nb[k]` is -1 there, see "How the library is picked"); META gets `worlds[]` (`parent`, `parentFlags`, `useParentLand`) and `cells[].quadHide`
+(CELL XCLC flags: bit0 hides land quad SW, bit1 SE, bit2 NW, bit3 NE); DREF is joined by containing triangle (below). No struct changed.
 
 Round 4 added sections (DREF, SEAM, LAND) and used the `reserved` field of REFS and two new ref flag bits, all append-only: no struct changed, the
 version stays 2 and `envfile.h` still loads older v2 files (the three sections are optional; a file without them reports 0 rows).
@@ -143,7 +148,9 @@ Window cells that have no navmesh still contribute their refs.
 
 DREF (24): `u32 refIdx; i32 meshIdx; i32 tri; f32 dist; u8 openDefault; u8 lockLevel; u8 teleport; u8 startsDisabled; u32 key`. One row per
 door ref in REFS (plain doors and teleport doors). The triangle is the one of the navmesh DOOR row that names the ref (`dist` 0), else the
-triangle whose centroid is nearest within 200 units (`dist` = that distance), else -1 / -1. `openDefault` = the ref's XACT action flags carry
+triangle whose x,y footprint CONTAINS the door's position (the one nearest in height; `dist` 0), else the triangle with the nearest point to
+the door (`dist` = that 3D distance); a joined point must be within 100 units of the door in height, a nearest point also within 200 units
+horizontally, else -1 / -1. `openDefault` = the ref's XACT action flags carry
 "open by default" (bit 0x8; the layout comes from community docs and the single data point that doors with XACT 0x0D exist, not from
 observation in the game). `lockLevel`/`key` are the ref's XLOC. `startsDisabled` = REFS flag bit6 (the resolved start state).
 
@@ -155,6 +162,11 @@ LAND (4360): `i16 gridX, gridY; f32 h[1089]`. One row per exterior grid cell of 
 vertices, `h[y*33 + x]`, 128 units apart, y south to north, x west to east, origin `grid * 4096` (world space). Decoded from VHGT (f32 offset
 then 33x33 signed bytes, row start = previous row start + first byte, then cumulative, times 8). A crest without navmesh is in these heights.
 Checked against the navmesh: the terrain is at or under the navmesh (the navmesh sits on terrain, rocks and buildings), see Validation.
+CHILD WORLDS: a worldspace whose WRLD record names a parent (`META.worlds[].parent`) with the parent flag "use land data" (PNAM bit 0,
+`useParentLand`) takes its terrain from the parent: its own LAND records (some are present in the plugins) are NOT what the engine draws, so a
+consumer MUST IGNORE the LAND rows of a world with `useParentLand` true and fall back to the navmesh heights. Measured on the vanilla masters: the
+city worlds that carry the flag (bit 0 of PNAM) have 0 to 19 own LAND cells (a few are leftovers), against 94 to 1123 in the big worlds without it. `cells[].quadHide` says which
+quarter of a cell's land is force-hidden (the LAND rows still hold its heights); ignore the heights of a hidden quarter.
 
 Ownership: `REFS.reserved` = the owner id (0 none): the ref's own XOWN, else the cell's XOWN. Flags bit7 = owner is an NPC_ (else a faction or
 other form), bit8 = inherited from the cell. `META.cells[].owner` is the cell's owner id. Loose items (kind 4), containers (kind 1, with base id
@@ -230,7 +242,7 @@ water is walkable (followers wade); treat flagged triangles as a movement cost /
 
 * Real collision meshes (line of sight, projectile blocking, wall thickness): they are `.nif` files in BSAs / loose meshes.
   REFS carry `modelOff` and the base bounds so a later step can fetch them. Until then occlusion is the OBND box.
-* Terrain height away from the navmesh (LAND is not exported).
+* Terrain height of a child world that uses its parent's land data (its LAND rows are ignored, see LAND), and of a force-hidden quad.
 * What scripts decide: which disabled refs get enabled, which doors are locked after a quest.
 * Actor stats: use the world json (list_balance) joined by `(plugin, local)` base ids.
 

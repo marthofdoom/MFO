@@ -57,13 +57,17 @@ def pass1(i):
                         world=K(c['world']), flags=dat[0] | (dat[1] << 8 if len(dat) > 1 else 0),
                         grid=struct.unpack_from('<ii', cl, 0) if cl and len(cl) >= 8 and not fl & P.F_PERSISTENT else None, persist=bool(fl & P.F_PERSISTENT),
                         water=struct.unpack('<f', d[b'XCLW'])[0] if b'XCLW' in d and len(d[b'XCLW']) >= 4 else None,
+                        quad=struct.unpack_from('<I', cl, 8)[0] if cl and len(cl) >= 12 and not fl & P.F_PERSISTENT else 0,      # XCLC flags: bits 0..3 force-hide the land quad (SW, SE, NW, NE)
                         edid=d.get(b'EDID', b'').split(b'\0')[0].decode('latin-1'), plugin=i,
                         owner=K(struct.unpack_from('<I', d[b'XOWN'], 0)[0]) if b'XOWN' in d and len(d[b'XOWN']) >= 4 else 0)))
                 elif sig == b'WRLD':
                     if fl & P.F_DELETED: continue
                     d = dict(P.subrecords(pg.data, o, size, fl)); dn = d.get(b'DNAM')
+                    wn = d.get(b'WNAM'); pn = d.get(b'PNAM')
                     out['worlds'].append((K(fid), d.get(b'EDID', b'').split(b'\0')[0].decode('latin-1'),
-                                          struct.unpack_from('<ff', dn, 0) if dn and len(dn) >= 8 else None))
+                                          struct.unpack_from('<ff', dn, 0) if dn and len(dn) >= 8 else None,
+                                          K(struct.unpack_from('<I', wn, 0)[0]) if wn and len(wn) >= 4 else 0,       # parent worldspace
+                                          struct.unpack_from('<H', pn, 0)[0] if pn and len(pn) >= 2 else 0))        # parent flags: bit 0 = use land data
                 elif sig == b'NAVM':
                     if fl & P.F_DELETED: out['navm'].append((K(fid), None)); continue
                     nv = dict(P.subrecords(pg.data, o, size, fl)).get(b'NVNM')
@@ -169,7 +173,7 @@ def scan_set(order, where, procs=6, log=print):
         for k, v in o['bases'].items():
             if v is None: bases.pop(k, None)
             else: bases[k] = v
-        for k, e, w in o['worlds']: worlds[k] = (e, w)
+        for k, e, w, par, pf in o['worlds']: worlds[k] = (e, w, par, pf)
     p1 = None
     # cells that hold a navmesh: interior from the NVNM parent, exterior from world+grid
     navcells = set(); navinfo = {}

@@ -3,6 +3,7 @@
 // load() validates EVERYTHING before any accessor can be used: a file that loads can be traversed without bounds checks
 // by the caller (every index in the tables is in range, strings are terminated, sections are aligned and inside the file).
 #pragma once
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -34,7 +35,8 @@ struct Ref {    // 128
 static_assert(sizeof(Mesh) == 72 && sizeof(Vert) == 12 && sizeof(Tri) == 16 && sizeof(Link) == 24 && sizeof(Door) == 20 &&
               sizeof(Comp) == 4 && sizeof(Ref) == 128 && sizeof(DoorRef) == 24 && sizeof(Seam) == 32 && sizeof(Land) == 4360, "layout");
 
-enum TriFlag : uint16_t { kEdge0Ext = 1, kEdge1Ext = 2, kEdge2Ext = 4, kDeleted = 8, kNoLarge = 0x10, kOverlap = 0x20, kPreferred = 0x40, kWater = 0x200, kDoor = 0x400 };
+enum TriFlag : uint16_t { kEdge0Ext = 1, kEdge1Ext = 2, kEdge2Ext = 4, kDeleted = 8, kNoLarge = 0x10, kOverlap = 0x20, kPreferred = 0x40, kWater = 0x200, kDoor = 0x400,
+                         kCutEdge0 = 0x1000, kCutEdge1 = 0x2000, kCutEdge2 = 0x4000 };   // kCutEdge<k>: internal edge k was one-way / not the swapped edge in the game data, nb[k] was set to -1
 enum LinkFlag : uint16_t { kStaleTarget = 1, kNoOwnerEdge = 2, kDzUnknown = 4 };
 enum Kind : uint8_t { kDoorRef, kContainer, kActivator, kFurniture, kItem, kActor, kStatic, kFlora, kTree };
 enum RefFlag : uint16_t { kPersistent = 1, kLeveledActor = 2, kHasEnableParent = 4, kLocked = 8, kTeleport = 16, kEnableInverted = 32, kStartsDisabled = 64, kOwnerIsNpc = 128, kOwnerFromCell = 256 };   // Ref.reserved = owner id (0 none)
@@ -135,6 +137,7 @@ public:
             if (l.targetMeshIdx < -1 || l.targetMeshIdx >= (int64_t)meshN_) return fail(err, "link target mesh");
             if (l.targetMeshIdx >= 0 && !(l.flags & kStaleTarget) && l.targetTri >= mesh_[l.targetMeshIdx].triCount) return fail(err, "link target triangle");
             if (!idOk(l.targetMeshId)) return fail(err, "link id plugin index");
+            if (!std::isfinite(l.dz)) return fail(err, "link dz not finite");
         }
         for (uint32_t i = 0; i < doorN_; ++i) {
             const Door& d = door_[i];
@@ -155,8 +158,16 @@ public:
             if (d.meshIdx < -1 || d.meshIdx >= (int64_t)meshN_) return fail(err, "door ref row mesh");
             if (d.tri < -1 || (d.tri >= 0 && (d.meshIdx < 0 || d.tri >= (int64_t)mesh_[d.meshIdx].triCount))) return fail(err, "door ref row triangle");
             if (!idOk(d.key)) return fail(err, "door ref row key id");
+            if (!std::isfinite(d.dist)) return fail(err, "door ref row distance not finite");
         }
-        for (uint32_t i = 0; i < seamN_; ++i) if (seam_[i].linkIdx >= linkN_) return fail(err, "seam link index");
+        for (uint32_t i = 0; i < seamN_; ++i) {
+            const Seam& sm = seam_[i];
+            if (sm.linkIdx >= linkN_) return fail(err, "seam link index");
+            if (!std::isfinite(sm.gap)) return fail(err, "seam gap not finite");
+            for (int j = 0; j < 3; ++j) if (!std::isfinite(sm.from[j]) || !std::isfinite(sm.to[j])) return fail(err, "seam point not finite");
+        }
+        for (uint32_t i = 0; i < landN_; ++i)
+            for (int j = 0; j < 1089; ++j) if (!std::isfinite(land_[i].h[j])) return fail(err, "land height not finite");
         return true;
     }
 

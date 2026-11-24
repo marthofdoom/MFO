@@ -245,10 +245,23 @@ def ref_features(sc, cands, min_static=R.DEFAULT_MIN_STATIC):
                     if ref[8]: f['nTele'] += 1
                     if ref[9]: f['nLocked'] += 1
     for f in cands.values():
+        f['nRefs'] = sum(f[n] for n in names.values())
         f['nStuff'] = f['nCont'] + f['nFurn']; mu = max(f.get('areaUnits2', 1e6) / 1e6, 0.01)
         f['clutter'] = (f['nItem'] + f['nCont'] + f['nActi'] + f['nFlora'] + f['nFurn']) / mu     # small things to loot / bump into, per million units^2
         f['occl'] = (f['nLarge'] + f['nTree']) / mu                                                # large statics and trees (occluders), per million units^2
     return by
+
+
+def exterior_reach(cands, content, ring=(2, 3)):
+    """sets f['reach'] (0/1) on every candidate.  Interiors: 1 (they were already filtered by reachable_cells).  An exterior window is reachable when it
+    holds a teleport door, or a candidate of the same worldspace at Chebyshev distance in `ring` (a neighbouring window, touching or one cell apart) has
+    content.  content(f) -> bool."""
+    have = {u for u, f in cands.items() if u[0] == 'x' and content(f)}
+    for u, f in cands.items():
+        if u[0] == 'i': f['reach'] = 1; continue
+        near = any(('x', u[1], u[2] + dx, u[3] + dy) in have for dx in range(-ring[1], ring[1] + 1) for dy in range(-ring[1], ring[1] + 1)
+                   if ring[0] <= max(abs(dx), abs(dy)) <= ring[1])
+        f['reach'] = 1 if f.get('nTele', 0) > 0 or near else 0
 
 
 def place_flags(sc, units):

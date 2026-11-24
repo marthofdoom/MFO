@@ -216,10 +216,64 @@ class Anomalies(unittest.TestCase):
         self.assertGreaterEqual(g['nodes'], 1)
     def test_reject_and_tags(self):
         import coverage as CV
-        f = dict(interior=True, oneway=0, notswapped=0, stale=0, ownerless=0, kind3=0, mainShare=1.0)
-        self.assertEqual(CV.reject_reasons(f, set(), 0.6), [])
-        f2 = dict(f, oneway=2, kind3=1, mainShare=0.3)
-        self.assertEqual(CV.reject_reasons(f2, {'displaced_mesh'}, 0.6), ['displaced_mesh', 'one_way_or_not_swapped_edges', 'kind3_portals', 'small_main_component'])
+        f = dict(interior=True, edges=1000, oneway=0, notswapped=0, stale=0, ownerless=0, kind3=0, mainShare=1.0)
+        self.assertEqual(CV.reject_reasons(f, set()), [])
+        self.assertEqual(CV.reject_reasons(dict(f, oneway=4, notswapped=1), set()), [])                    # 0.5 percent of the edges: allowed, the edges are cut
+        f2 = dict(f, oneway=7, kind3=1, mainShare=0.3)
+        self.assertEqual(CV.reject_reasons(f2, {'displaced_mesh', 'plugin_moved_refs'}), ['displaced_mesh', 'bad_edge_share', 'kind3_portals', 'small_main_component'])   # moved refs never reject
+        ex = dict(f, interior=False, mainShare=0.5, nRefs=0, tris=10, reach=0)
+        self.assertEqual(CV.reject_reasons(ex, set()), ['sparse_exterior', 'unreachable_exterior'])         # exteriors: main share 0.4, content and reachability needed
+        self.assertEqual(CV.reject_reasons(dict(ex, nRefs=20, reach=1), set()), [])
+        self.assertEqual(CV.reject_reasons(dict(ex, tris=2000, reach=1), set()), [])
+    def test_split_is_global_and_disjoint(self):
+        import coverage as CV
+        self.assertEqual(CV.parse_unit_id('i_Skyrim-00ABCD'), ('i', 'Skyrim-00ABCD')); self.assertEqual(CV.parse_unit_id('x_Skyrim-00003C_-5_12'), ('x', 'Skyrim-00003C', -5, 12))
+        us = [('x', 'W-1', gx, gy) for gx in range(-30, 30) for gy in range(-30, 30) if CV.centre_ok(('x', 'W-1', gx, gy))]
+        self.assertFalse(CV.centre_ok(('x', 'W-1', 0, 5)) and CV.centre_ok(('x', 'W-1', 11, 5)))              # block edge cells are not centres
+        lib = [u for u in us if CV.side(u) == 'lib']; held = [u for u in us if CV.side(u) == 'held']
+        self.assertTrue(lib and held)
+        cl = set().union(*[CV.window_cells(u) for u in lib]); ch = set().union(*[CV.window_cells(u) for u in held])
+        self.assertFalse(cl & ch)                                                                             # windows of the two sides never share a cell
+        self.assertEqual(CV.side(('x', 'W-1', 3, 3)), CV.side(('x', 'W-1', 8, 9)))                            # one block, one side
+        self.assertEqual(CV.side(('i', 'A-1')), CV.side(('i', 'A-1')))
+    def test_validate_split_catches_overlap(self):
+        import validate, coverage as CV
+        u = ('x', 'W-1', 5, 5); other = ('x', 'W-1', 5, 5 + CV.BLOCK * 7)
+        mk = lambda uu: 'x_%s_%d_%d' % (uu[1], uu[2], uu[3])
+        want = CV.side(u); idx = {'S': {'envs': [{'id': mk(u)}] if want == 'lib' else [], 'heldout': [{'id': mk(u)}] if want == 'held' else []}}
+        self.assertEqual(validate.split_check(idx)[0], [])
+        idx2 = {'A': {'envs': [{'id': mk(u)}], 'heldout': []}, 'B': {'envs': [], 'heldout': [{'id': mk(u)}]}}
+        self.assertTrue(validate.split_check(idx2)[0])                                                        # same place in both lists: reported
+    def test_bias_table_and_status(self):
+        import coverage as CV
+        cands = {('i', 1): dict(interior=True, tris=10, narrow=0.0, layer=0.0, wide=0.0), ('i', 2): dict(interior=True, tris=10, narrow=0.0, layer=0.0, wide=0.0)}
+        rows = CV.bias_table(cands, {('i', 1): 'c', ('i', 2): 'c'}, {('i', 1): ['x'], ('i', 2): []}, {('i', 1): ['x'], ('i', 2): ['y']})
+        row = [r for r in rows if r[:2] == ('tag', 'interior')][0]; self.assertEqual(row[2:], (2, 2, 1))
+        ts = {('i', 1): frozenset(['interior'])}
+        st = {r[0]: r[4] for r in CV.table(cands, {u: ts.get(u, frozenset()) for u in cands}, [], [], 2)}
+        self.assertEqual(st['water_large'], 'NONE AVAILABLE'); self.assertEqual(st['interior'], 'SHORT')
+    def test_bad_edges_cut_and_marked(self):
+        import anomaly as AN, export, features as F
+        sq = [(0, 0, 0), (100, 0, 0), (100, 100, 0), (0, 100, 0)]
+        m = F.parse_np(S.nvnm(sq, [(0, 1, 2, -1, -1, 1, 0, 0), (0, 2, 3, -1, -1, -1, 0, 0)], cell=1))
+        self.assertEqual(AN.edge_scan(m)[0], [(0, 2)]); nb = AN.clean_nb(m); self.assertEqual(int(nb[0, 2]), -1)
+        self.assertEqual(AN.analyze_mesh(m, lambda r: r, lambda k: None)['edges'], 1)
+    def test_door_join(self):
+        import export
+        verts = [(0, 0, 0), (100, 0, 0), (0, 100, 0), (1000, 0, 500), (1100, 0, 500), (1000, 100, 500)]
+        tris = [(0, 1, 2, -1, -1, -1, 0, 0), (0, 1, 2, -1, -1, -1, 0, 0)]
+        meshes = [(1, 0, 0, 0, 0, 0, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1), (2, 0, 0, 0, 0, 3, 3, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1)]
+        di = lambda pos: [(0, pos, 0, 0, 0, 0, 0)]
+        r = export.door_rows(di((20, 20, 40)), [], meshes, verts, tris)[0]; self.assertEqual((r[1], r[2], r[3]), (0, 0, 0.0))         # contained, 40 above the floor
+        r = export.door_rows(di((20, 20, 300)), [], meshes, verts, tris)[0]; self.assertEqual(r[1], -1)                                # 300 above: no join
+        r = export.door_rows(di((-30, 20, 10)), [], meshes, verts, tris)[0]; self.assertEqual((r[1], r[2]), (0, 0)); self.assertAlmostEqual(r[3], (900 + 100) ** 0.5, 3)   # outside the footprint: nearest point
+        r = export.door_rows(di((1050, 50, 480)), [], meshes, verts, tris)[0]; self.assertEqual((r[1], r[2]), (1, 0))                  # the upper triangle is the one within 100
+    def test_big_triangle_is_rasterised(self):
+        import anomaly as AN, features as F
+        big = F.parse_np(S.nvnm([(0, 0, 0), (6000, 0, 0), (0, 6000, 0)], [(0, 1, 2, -1, -1, -1, 0, 0)], cell=1))
+        g = AN.coarse_graph_features([(1, big)], {1: 0}, lambda k, raw: raw)
+        self.assertGreater(g['nodes'], 100)                                                                   # one big flat triangle covers many bins, not one centroid bin
+        self.assertLess(g['pathy'], 0.5)
     def test_coverage_pick(self):
         import coverage as CV
         rng = random.Random(3); cands = {}; tagsets = {}
@@ -233,7 +287,8 @@ class Anomalies(unittest.TestCase):
         for t in names:
             if any(t in tagsets[u] for u in cands): self.assertGreaterEqual(sum(1 for u in ch if t in tagsets[u]), 2) if not unmet else None
         ch2, _ = CV.pick(cands, tagsets, 2, 5, 7, 0.02); self.assertLessEqual(len(ch2), 5)  # the cap wins, the rest is reported unmet
-        ch3, un3 = CV.pick(cands, tagsets, 2, 100, 7, 0.02, exclude=set(ch)); self.assertFalse(set(ch) & set(ch3))   # held-out never reuses a library place
+        ch3, un3 = CV.pick(cands, tagsets, 2, 100, 7, 0.02, exclude=set(ch)); self.assertFalse(set(ch) & set(ch3))   # an excluded place is never picked again
+        self.assertTrue(un3 or all(sum(1 for u in ch3 if t in tagsets[u]) >= 2 for t in names if any(t in tagsets[u] for u in cands)))   # availability counts the full set: what the exclusion starved is reported unmet
 
 
 class CppNewSections(unittest.TestCase):
