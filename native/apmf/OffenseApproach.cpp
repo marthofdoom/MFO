@@ -28,6 +28,7 @@
 #include "APMFBridge.h"
 #include "APMFBridge_internal.h"
 #include "APMF_API.h"
+#include "probes/Probes.h"   // N0 [probe-trust]: the lived sign "the engine refused a path we found" (log only)
 #include "Config.h"
 #include "Confidence.h"   // LeashRadius: the block is scoped to the radius it was given up at
 #include "iaus/Core.h"    // DefaultTuning: the engine-dropped backoff (offenseApproachBackoffSec)
@@ -410,6 +411,7 @@ namespace MFO::APMFBridge {
                     // The backoff repeats at most Tuning::offenseApproachDropCap times per (follower, foe) per fight (review F2): past it the ending is a
                     // block as before, so a foe the engine can never path to does not cycle forever.
                     bool engineDropped = ours && info.state == APMF_API::kApproachState_EngineDropped;
+                    if (engineDropped) Probes::NoteLived(Probes::Lived::EngineDropped, fid, std::format("ch.24 approach to {:08X}: the engine's own path to the foe failed (distance {:.0f}, R {:.0f})", c.foe, info.distance, info.radius).c_str());   // N0 passive, log only
                     if (engineDropped && ++g_offDropCount[fid][c.foe] > static_cast<int>(Iaus::DefaultTuning().offenseApproachDropCap)) engineDropped = false;
                     const bool block = ours && Blocks(info.state) && !engineDropped;
                     const float backoffSec = Iaus::DefaultTuning().offenseApproachBackoffSec;

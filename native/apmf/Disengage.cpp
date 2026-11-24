@@ -27,6 +27,7 @@
 #include "APMFBridge.h"
 #include "APMFBridge_internal.h"
 #include "APMF_API.h"
+#include "probes/Probes.h"   // N0 [probe-point]: the point claim watched as a general mover
 
 #include <chrono>
 #include <cmath>
@@ -156,6 +157,7 @@ namespace MFO::APMFBridge {
             std::scoped_lock lk(g_disengageMx);
             g_drives[id] = d;
         }
+        Probes::PointOpen(id, "disengage", a_point, a_radius);   // passive watch, log only
         const RE::NiPoint3 me = a_follower->GetPosition();
         spdlog::info("[disengage] {:08X} '{}': running to {:.0f},{:.0f},{:.0f} ({:.0f}u away, R {:.0f}; ch.24 point+hold h={}, "
                      "ch.7 deny: {})",
@@ -226,6 +228,7 @@ namespace MFO::APMFBridge {
             g_drives.erase(it);
         }
         ReleaseBoth(d);
+        Probes::PointClose(a_follower, a_why);   // passive watch, log only
         spdlog::info("[disengage] {:08X}: drive released (ch.24 h={}, ch.7 h={}; {}) after {:.1f} s{}", a_follower, d.approach,
                      d.deny, a_why ? a_why : "", std::chrono::duration<float>(std::chrono::steady_clock::now() - d.at).count(),
                      d.arrived ? ", he had arrived" : ", he had NOT arrived");

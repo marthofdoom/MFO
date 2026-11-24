@@ -13,6 +13,7 @@
 #include "APMFBridge.h"
 #include "APMFBridge_internal.h"
 #include "APMF_API.h"
+#include "probes/Probes.h"   // N0 [probe-point]: the point claim watched as a general mover
 
 #include <chrono>
 #include <cmath>
@@ -90,6 +91,7 @@ namespace MFO::APMFBridge {
             std::scoped_lock lk(g_groundMx);
             g_steps[id] = Step{ h, a_foe->GetFormID(), std::chrono::steady_clock::now() };
         }
+        Probes::PointOpen(id, "give-ground", RE::NiPoint3{ prm.posX, prm.posY, prm.posZ }, kRadius);   // passive watch, log only
         spdlog::info("[ground] {:08X} '{}': step back from {:08X} '{}' ({:.0f}u away) to {:.0f},{:.0f},{:.0f} (R {:.0f}, h={})", id,
                      a_follower->GetName() ? a_follower->GetName() : "?", a_foe->GetFormID(), a_foe->GetName() ? a_foe->GetName() : "?",
                      len, prm.posX, prm.posY, prm.posZ, kRadius, h);
@@ -132,6 +134,7 @@ namespace MFO::APMFBridge {
             const auto it = g_steps.find(a_follower);
             if (it != g_steps.end() && it->second.handle == s.handle) g_steps.erase(it);
         }
+        Probes::PointClose(a_follower, why);   // passive watch, log only
         spdlog::info("[ground] {:08X}: step back h={} over: {} (the area carried the bound {} time(s), last distance to the point {:.0f})",
                      a_follower, s.handle, why, applied, dist);
     }
@@ -147,6 +150,7 @@ namespace MFO::APMFBridge {
         }
         if (s.handle == APMF_API::kInvalidHandle) return;
         if (const auto* api = g_apmf.load(std::memory_order_relaxed)) api->Release(s.handle);
+        Probes::PointClose(a_follower, a_why);   // passive watch, log only
         spdlog::info("[ground] {:08X}: step back h={} released ({})", a_follower, s.handle, a_why ? a_why : "");
     }
 }

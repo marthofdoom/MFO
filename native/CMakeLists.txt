@@ -107,6 +107,10 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     iaus/Candidates.cpp
     iaus/Fills.cpp
     iaus/SwingSeq.cpp
+    probes/Probes.cpp
+    probes/Traversal.cpp
+    probes/RayCost.cpp
+    probes/PointWatch.cpp
     iaus/Hide.cpp
     iaus/EnvQuery.cpp
     iaus/PathSearch.cpp

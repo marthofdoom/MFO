@@ -142,6 +142,14 @@ namespace MFO::Config {
             if (a_key == "fSaintHealPerSec")  { setF(g_saintHealPerSec,  0.0f, 1000.0f); return; }   // default 30/s
             if (a_key == "fSaintUndeadPerSec") { setF(g_saintUndeadPerSec, 0.0f, 1000.0f); return; } // default 30/s
 
+            // N0 PASSIVE PROBES ([Probes], INI-only): sequential ifs, not the else-if chains below (C1061). Default ON in a dev DLL only.
+            if (a_key == "bProbeTraversal")   { setB(g_probeTraversal);  return; }   // [probe-trav]
+            if (a_key == "bProbeDrop")        { setB(g_probeDrop);       return; }   // [probe-drop]
+            if (a_key == "bProbeRayCost")     { setB(g_probeRayCost);    return; }   // [probe-ray]
+            if (a_key == "bProbeTrust")       { setB(g_probeTrust);      return; }   // [probe-trust]
+            if (a_key == "bProbePoint")       { setB(g_probePoint);      return; }   // [probe-point]
+            if (a_key == "iProbeLinesPerMin") { setI(g_probeLinesPerMin, 1, 600); return; }
+
             // TOWN ERRANDS (R1a): a chain of its own -- the main chain below is already long enough that one more
             // `else if` per key risks MSVC's nested-block limit (C1061).
             if      (a_key == "bTownErrands")       { setB(g_townErrands);   return; }   // default ON; OFF = the old proximity trade
@@ -463,6 +471,12 @@ namespace MFO::Config {
             g_castSelf           = false;   // forced self-cast route -- OFF (gated) until deck-confirmed
             g_progProbe          = false;   // progression sinker probe -- OFF everywhere by default
             g_attackObserve      = false;   // [atk-obs] passive attack-event probe -- OFF everywhere by default (Deck INI arms it)
+            g_probeTraversal     = kProbesDefaultOn;   // N0 probes: ON in a dev (MFO_DEV_SELFTEST) DLL only
+            g_probeDrop          = kProbesDefaultOn;
+            g_probeRayCost       = kProbesDefaultOn;
+            g_probeTrust         = kProbesDefaultOn;
+            g_probePoint         = kProbesDefaultOn;
+            g_probeLinesPerMin   = 60;
             g_crimeGoldProbe     = false;   // [crime-probe] passive bounty probe -- OFF everywhere by default
             g_perkEntryProbe     = false;   // [perk-probe] passive perk-entry probe -- OFF everywhere by default
             g_spellShapeCensus   = true;    // [shape-census] load-time log-only census -- ON

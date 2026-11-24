@@ -416,3 +416,13 @@ Setup: the DEV `MFO.dll`, `MFO_Classes.esl` on, `bClassTree=1`, the test followe
 
 ## Aim probe in the T2 session (marth 11-12, Q-S-4)
 `[Debug] bAimProbe=1` (and Harbinger `[ProjectileAim] bProbe=1`). With an Archer-class follower, fight 3+ ranged fights per list; capture the `[aim]` lines so the follower miss rate feeds the lab's H5 miss budget model.
+
+## N0 movement probes (`feat/n0-probes`, one play session, log only)
+Deploy the DEV-SELFTEST DLL (probes default ON there; a release DLL needs `[Probes] bProbeTraversal=1`, `bProbeDrop=1`, `bProbeRayCost=1`, `bProbeTrust=1`, `bProbePoint=1`). Followers: two, on Sentient AI, with Follower Parkour Plus if the list has it (without it `[probe-trav]` stays silent, and that is an answer). Then `python3 tools/field/calib_traversal.py MFO.log`.
+- **Traversal.** Walk up a ledge 150 to 400 units high and a tall rock with the followers behind you, then jump down a cliff. PASS = `[probe-trav]` lines with STOP, a duration and a dz (up and down), and an INTERRUPT or NO-STOP when one gives up. No line at all = no parkour events on this list.
+- **Drop link.** Stand on a cliff top over a navmeshed slope and walk away so the followers have to come down. PASS = a `[probe-drop]` line per follower that comes down, and its `graph traversal event=` word (NONE = he used a drop link or fell; the answer 9a waits for).
+- **Ray cost.** Fight three or four fights with a mage and an archer follower. PASS = a `[probe-ray]` summary every 30 s per site with a mean in microseconds.
+- **Trust.** Send them looting through a town with a locked or odd door, and fast-travel or enter a door with them left behind. PASS = `[probe-trust]` lines named `leg-blocked-static`, `leg-stuck-timeout`, `jump` and so on, each with a position.
+- **Point road.** Take a hit-and-run fight so a follower gives ground or disengages (a low-health Thief, a mage with a foe close). PASS = `[probe-point]` OPEN / progress / CLOSED lines with "walked N inside", the figure that says whether a small R pins him.
+- **Not in this session:** the light level (no reader yet), foes' own traversal, a point claim with a small radius.
+
