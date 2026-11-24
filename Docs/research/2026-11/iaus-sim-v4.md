@@ -1080,7 +1080,7 @@ The clocks are native's: one follower is served per pump (133 ms), and a followe
 
 One episode is counted into `Loot.h LTally`. `--loot-report` prints it per class (`LOOT`), the events under the field log's own names per follower-minute (`LOOTRATE`, the names `calib_loot.py` prints as `FIELDRATE`), every stack the game's own scorer wanted and left with the reason (`LOOTLEFT`), what was left because no loot road takes it (`LOOTNOROAD`, by item kind with its gold: off-class gear, books, ingredients), and the gate (`LOOTGATE`).
 
-"Wanted" is the SHIPPED table's verdict on the bag each follower BEGAN the episode with (review S3). It is not the table under search and not the bag he ends with: judged that way, a table that takes nothing wants nothing, a full bag wants nothing, and leaving loot would read as a clean ledger. `walkedPast/ep` is judged by the shipped table too, and the two wait rows count a stack left released and reachable as a wait that lasted to the episode's end (a censored wait). So no row gets better because a table wants less. Each wanted stack left gets the first reason that holds: the party lost the fight, carry weight, owned, locked, flora, town container, guard, off-navmesh or unreachable (no route from the player on the true mesh), out of range (the player left), the player's dibs, then the reasons that count as RELEASED AND REACHABLE: GATED, blocklisted, a follower stuck at his origin, the episode ended first, the player's bubble, the island verdict, the candidate cap, beyond every follower's scan radius, and `ignored` when none of them holds.
+"Wanted" is the SHIPPED table's verdict on the bag each follower BEGAN the episode with (review S3). It is not the table under search and not the bag he ends with: judged that way, a table that takes nothing wants nothing, a full bag wants nothing, and leaving loot would read as a clean ledger. `walkedPast/ep` is judged by the shipped table too, and the two wait rows count a stack left released and reachable as a wait that lasted to the episode's end (a censored wait). This does NOT make every row safe from a table that wants less (loot review R3: the sentence that stood here said it did, and was false). `leftRR` and the censored waits do not see an ignored dibs stack: the claim clock (`Loot.h TierReleased`) runs only for categories in the LIVE plan, so a stack of an ignored category is `player dibs (never scanned)` and is not counted. The value, `dibsNear` and `roadLeft%` do catch it, and `loot_gate_check` now rejects a table that is worse on `leftRR`, `goldLeftRR`, `roadLeft%` or `dibsNear` beyond noise. The ledger side is MFO-B863. Each wanted stack left gets the first reason that holds: the party lost the fight, carry weight, owned, locked, flora, town container, guard, off-navmesh or unreachable (no route from the player on the true mesh), out of range (the player left), the player's dibs, then the reasons that count as RELEASED AND REACHABLE: GATED, blocklisted, a follower stuck at his origin, the episode ended first, the player's bubble, the island verdict, the candidate cap, beyond every follower's scan radius, and `ignored` when none of them holds.
 
 | Gate row | Bound | Field case it stands for |
 |---|---|---|
@@ -1105,7 +1105,7 @@ Every bound is a PLACEHOLDER for marth to set. Where a field log shows the numbe
 
 ### 14.4 The field cases as scenarios
 
-`--loot-test` plays fifteen. Each runs under the lab's rules and under a variant, and says what must hold of both. The lab's default rules are native's with marth's two rulings of 11-24 ON (14.6 N1 and N6), which native does not have yet. `--loot-rule dibsNear=0` and `--loot-rule gateEvents=0` give today's native, and the two scenarios that reproduce those faults are pinned to it.
+(The text and table below are batch L's. Since bundle A `--loot-test` plays 24 and native has the rulings: section 16.1.) `--loot-test` plays fifteen. Each runs under the lab's rules and under a variant, and says what must hold of both. The lab's default rules are native's with marth's two rulings of 11-24 ON (14.6 N1 and N6), which native does not have yet. `--loot-rule dibsNear=0` and `--loot-rule gateEvents=0` give today's native, and the two scenarios that reproduce those faults are pinned to it.
 
 | Scenario | Field case | Variant | Verdict |
 |---|---|---|---|
@@ -1139,13 +1139,13 @@ Every bound is a PLACEHOLDER for marth to set. Where a field log shows the numbe
 - More `crimes` or `guardSeenTakes` than the shipped table REJECTS the table: `kept` is emptied, the reason and `kept_before_reject` are in the summary.
 - A kept table that loses value on the held-out places is an open decision.
 
-Not searched, each with its reason in `LOOT_NOT_SEARCHED` (26 rows): `guardFreshSec`, `guardUnreadMaxSec`, `guardRepostSec` and `guardBarFloorSec` are a guard rule's timers, a safety rule and not a value trade (a value search would only ever shorten the caution). `gateReadmitSec` is marth's "no timer" ruling. The six gate rows (`gateConeDeg`, `gateBeyondU`, `gateReadmitMoveU`, `gateRepeatU`, `gateShortU`, `gateNearU`) have no signal yet (review S6): the field blocks 2 to 5 times as often as the lab (14.8), so a value found here says nothing about the game. They become searchable once the lab's block rate matches a field log. `offClassDwellSec` is an equip notice no loot rule reads. **Known tie**: `loot.gold` and `loot.valuables` are not independent. Native's Valuables road takes coin too (`LootTake.cpp`), so with valuables in the plan the gold row decides only the order. The stage records it as a note on every run. `--loot-world stops` is the old lab.
+Not searched, each with its reason in `LOOT_NOT_SEARCHED` (26 rows): `guardFreshSec`, `guardUnreadMaxSec`, `guardRepostSec` and `guardBarFloorSec` are a guard rule's timers, a safety rule and not a value trade (a value search would only ever shorten the caution). `gateReadmitSec` is marth's "no timer" ruling. The six gate rows (`gateConeDeg`, `gateBeyondU`, `gateReadmitMoveU`, `gateRepeatU`, `gateShortU`, `gateNearU`) have no signal yet (review S6): the field builds of 11-17 and 11-18 read 0.20 to 0.68 blocks per follower-minute against the lab's 0.19 under those builds' rules, 1 to 3.5 times (14.8. No field log exists yet under the events-and-pass rule), and the gate knobs are inert or within noise on every set of places, so a value found here says nothing about the game. They become searchable once the lab's block rate matches a field log. `offClassDwellSec` is an equip notice no loot rule reads. **Known tie**: `loot.gold` and `loot.valuables` are not independent. Native's Valuables road takes coin too (`LootTake.cpp`), so with valuables in the plan the gold row decides only the order. The stage records it as a note on every run. `--loot-world stops` is the old lab.
 
 **Ignoring loot does not read better** (review S3). `--set loot.takeThreshold=1.0` (take almost nothing) against the shipped table, 480 episodes a set: the value falls on every set (Tuxborn 131.03 to 115.09, fixtures 119.14 to 115.00), `leftRR/ep`, `dibsNear/ep`, `roadLeft%` and `walkedPast/ep` get worse on all seven sets, and the count of rows over their bound is never lower: LoreRim 7 against 7, its held-out 10 against 10, Tuxborn 8 against 6, its held-out 10 against 9, Vanilla 8 against 8, its held-out 8 against 7, fixtures 9 against 6. The ties are sets where the shipped table is already over on the same rows. The rows that DO read lower for a table that walks less are the walking rows (`legs/src`, `restart%`, `reversals/min`, `stuckOff`, `guardSeenTakes`), which is what they measure. That is why the driver compares every row with the shipped table's number and not the count. A CLI check holds the fixtures case.
 
 ### 14.6 What the mirror shows about the game (native findings)
 
-Each is today's rule doing what its code says, read in a scenario or in the library runs. None was changed here: native is not this batch's to edit.
+**N1 to N4 and N6 are fixed in native by `efd097dc` (2026-11-24) and mirrored (16.1). N5 stands.** The text below is as found. Each is that day's rule doing what its code says, read in a scenario or in the library runs. None was changed here: native is not this batch's to edit.
 
 - **N1, coin left on bodies** (`LootTake.cpp TierReleased`, read line by line for this). Coin, jewelry, soul gems and valuables are released by the player's dibs only when he has been within 512 units AND facing the source for 6 s, or 3 s after he went 700 units from it, or after 45 s if he was NEVER within 512. A player who stands among the bodies and does not turn to one of them never releases it: near once, so the 45 s clock is off, never facing, never 700 away. Scenario `coin-behind-player`: three bodies round a standing player, all three coins left for the whole episode. On the library `coinDibsNear/ep` is 0.31 to 0.52 (coin left under his dibs with him within 700 units at the end), on every set, held-out or not. This is the largest single reason coin is left. **marth's ruling of 11-24: "Near is enough"** (near 6 s, facing or not). It is the lab's default (`Rules::dibsNearEnough`, `--loot-rule dibsNear=0` for today's native) and NOT in native yet. On Tuxborn's library it takes `coinDibsNear/ep` from 0.36 to 0.03 and `dibsNear/ep` from 0.61 to 0.06, and the value from 129.27 to 131.03 (both rulings on).
 - **N2, a thing the mesh reaches and the world does not** (`Service.cpp:1338-1402`, `StuckAtOrigin.cpp`). A static block with no door or lever is never recorded against the item. The first block is a bump, the second "no ground closed" defers the item and is the second stuck hit, he is "stuck himself", every loot of his is off until he stands 300 units away, the follow package takes him there, and the item is his nearest candidate again. Scenario `freeze-1117g` under today's rule: 27 legs in 120 s for one potion he cannot reach, 23 of them restarts, a cycle of about 8.5 s. He does take everything else, which is what the 11-17 fix was for. The field's 11-18 session has the same shape: 4 "stuck himself", 4 "left the stuck point", 7 first-block bumps.
@@ -1179,7 +1179,7 @@ Made once, at the end of the review round, on the branch head with `origin/main`
 - **The fight baselines.** `origin/main` fails its own three baselines since `fix/spell-worth` merged without rewriting them: `--world v2` 824 metrics changed, `--world v3` 1099, `--world v4` 899. This branch reads the same three numbers, and against baselines written by main's own binary it reads `--world v2` 0 changed, `--world v3` 0 changed, and `--world v4` the same file byte for byte on the old fixtures. So looting moved no fight. The three baseline files were NOT rewritten here (the drift is not this batch's), except the pool hash in the first line of `baseline_v4_builtin.txt` (14.9).
 - `sim --env-test`: 81 checks pass. `sim --loot-test`: 15 scenarios, 0 failed, 3 of them reproduce a fault of today's rules. `test_tune_driver.py`: 41 tests pass. A smoke run of the driver's `loot` stage on episodes ends with its summary and the two notes (not checked held-out, the gold tie).
 - `run.sh` with `SIM_CLITEST=1`: every loot check passes, and so do the two batch W checks that failed in the first round (the fixtures' `--check`, and the library solo walk now that the duplicate-navmesh place is skipped). Five checks FAIL, all five on `origin/main` exactly as here (main's own binary prints the same numbers): the three baseline compares above and the two `--t2 off` lab-of-section-30 lines (J 79.47 and 80.07 against the 79.31 and 80.10 written in the check), the same spell-worth drift. One loot check was wrong after S1 and was corrected: it asked that no scenario ever count a crime, and `thief-no-recheck`'s variant must. The corrected line was run by hand, not in a second full suite. The same report at 1 thread and at 8 is identical, fights and loot. The field-log check ran against `_evidence`.
-- **The gate on the library** (480 episodes a run: 15 cells, 4 seeds, 8 episodes, the player's script and the second group mixed). The lab's default rules, so with marth's two rulings ON. The last two columns are today's native (`--loot-rule dibsNear=0 --loot-rule gateEvents=0`). `*` = over its bound.
+- **The gate on the library, BEFORE bundle A (the table after it is in 16.1)** (480 episodes a run: 15 cells, 4 seeds, 8 episodes, the player's script and the second group mixed). The lab's default rules, so with marth's two rulings ON. The last two columns are today's native (`--loot-rule dibsNear=0 --loot-rule gateEvents=0`). `*` = over its bound.
 
 | Row | LoreRim | LoreRim held-out | Tuxborn | Tuxborn held-out | Vanilla | Vanilla held-out | fixtures | Tuxborn, today's native | fixtures, today's native |
 |---|---|---|---|---|---|---|---|---|---|
@@ -1273,6 +1273,8 @@ Effect on the built-in baseline: the stream unit moves the casters (evoker, seed
 
 ### 15.3 Field-size books, and the field's failure reproduced
 
+(The tables of 15.3 and 15.4 are BEFORE bundle A: the oracle's world has since gained real summons, the summon limit and hazards. Not re-measured. The driver's `spells` stage prints its own.)
+
 `--books field` gives a caster the mix of Jesper's book (74 offense, 4 control, 13 heal, 8 buff, 3 ward. Summon 6 is an ASSUMPTION, his line holds none) times a size drawn per follower between 60 and 120 percent, from the world's taught spell records of each nature that his skill allows, without replacement, seeded by the fight. A class off the Mage line holds 35 percent of it (ASSUMPTION). A spell he cannot pay for stays in the book, as in the field. Costs, magnitudes and perk multipliers are the list's own, as before. `--books heldout` draws from the other half of the records (a hash of the editor id), so a tuning is checked on spells no search saw. The built-in world has 17 spells and gives what it has: field-size books need a list world.
 
 `book_from_log.py` (a real follower's `[spellbook]` dump as a book) is not built. It needs the dump keyed by (plugin, local id) and the extract keyed the same way. Neither is today.
@@ -1332,7 +1334,7 @@ What it says:
 - **The fact cause is gone.** Under the old rules it was 76 percent of a Tuxborn warlock's regret and 85 percent of a LoreRim evoker's. Today it is 0 in every row. That is the fix/spell-worth mirror doing what it was written for.
 - **The regret itself did not fall.** What is left is gate and weight. On Tuxborn it is mostly gate and cross family: the oracle's best cast is a spell of another family that IAUS vetoed or scored under the floor, not a better bolt. On LoreRim weight leads for mage, conjurer and healer. The within-family part is under 2 U per fight for mage, evoker and warlock, and 7 to 22 U for healer and LoreRim's conjurer.
 - **The world's own numbers.** Today's pick is 13 to 39 percent under the best castable spell of its family in effect per cast second, and 22 to 79 percent under the best across families. Under the old rules 13 to 47 and 34 to 79. So the spell choice inside a family got a little better and is still not good. That is what the spells stage and the SpellWorth table are for.
-- Healer on Tuxborn reads worse today (32 to 59). One fight of the six carries most of it. Not a finding until the tune's four seeds say so.
+- Healer on Tuxborn reads worse today (32 to 59). One fight of the six carries most of it. Answered in 16.5: noise.
 
 The hand and sight causes are 0 except one row. Each run costs what an oracle fight costs: 3,263 and 4,357 CPU seconds for the two Tuxborn tables, 10,627 and 8,067 for LoreRim's (30 fights each, the full race).
 
@@ -1347,6 +1349,8 @@ The closable gap is the gap times the (a) share of the divergence cost. It is an
 **The cuts of 6.2.** Built: 2 (a cell's seed count grows only while its gap is not measured well enough, from 6), 3 and 4 (`table_slice`: a gap fight's command and cache key hold only its own class's values and the T1 rows', so one class's accepted value re-runs one class, and a class that took nothing replays the shipped measurement). Not built: 1 (bands subject-only) changes what the bands mean and waits for marth. 5 is marth's call by the standing rule. 6 was batch W's.
 
 **Validation** (6.4): `test_tune_driver.py ChoiceBatch` plants an improvement and a regression for each stage on a fixed set of results. The stage accepts the first and rejects the second, and rejects a value that fails only on fresh fights, only held out, or only because the gap rose when the oracle ran again.
+
+**Since bundle A**: an accepted SET is checked too, not only each value (`held_out_check`: start against final on held-out places and books, on seeds nothing else read), at the end of a class's follow values, of the spells values, and for the whole table at the joint gate, which now plays with the accepted shared values (`final_sets`). New auto-decision kinds `held-out set` and `loot gate`.
 
 ### 15.6 The SpellWorth skeleton (S11b), and what filling it needs
 
@@ -1403,7 +1407,7 @@ The knobs, in the order I would use them, none of which touches how hard the ora
 **Before the tune, once, on this world** (9.6 and 10.3 item 3. `B` is the round's simulator, `<out>/bin/sim` after the first start, or a `SIM_OUT` build. `W` is `--world v4 --env-set all --env-hold train --books field`, `C` is `--oracle-prune target --oracle-pair 0.10 --oracle-nmin 4`):
 
 1. The oracle-relative bounds of `Playstyles.h`, then rewrite the rows from the `ORCSURV` and `ORCHEAL` lines. 960 fights with every follower planned: ESTIMATE 80 to 150 CPU hours.
-   `taskset -c 0-7 nice -n 19 $B --no-json --threads 8 $W $C --seed 1 --fights 1 --rating 0 --class-oracle 160 --gap-scenarios 0 --classes mage,evoker,conjurer,warlock,healer,priest --parked > /mnt/gaming/modlists/Projects/_tuning/pre-v4/bounds.txt`
+   `taskset -c 0-7 nice -n 19 $B --no-json --threads 8 $W $C --seed 1 --fights 1 --rating 0 --class-oracle 160 --gap-scenarios 0 --classes mage,evoker,conjurer,warlock,healer > /mnt/gaming/modlists/Projects/_tuning/pre-v4/bounds.txt`
 2. The potion-worth tables: the driver's `prep` stage measures each list's own. The built-in header: `python3 tools/iaus_sim/potion_worth.py --header`, then rebuild.
 3. Heal timing under pressure (v3 15.6): the command of item 1 with `--class-oracle 24 --gap-bracket strong2 --classes healer,priest,mage`.
 4. The pathing gate's bounds (`kPathBounds`): `$B --no-json --threads 8 $W --classes beta1 --seeds 1,2,3 --path-oracle 8`, then the rows from the `ORCPATH` lines.
@@ -1411,9 +1415,9 @@ The knobs, in the order I would use them, none of which touches how hard the ora
 
 **The tune.** Idle priority is the default, stop and resume are the same command:
 
-`python3 tools/iaus_sim/live/run_round.py --out /mnt/gaming/modlists/Projects/_tuning/r3-v4 --label "sim v4: follow the oracle, spell choice" -- --cells all --worlds builtin,LoreRim,Tuxborn,Vanilla`
+`python3 tools/iaus_sim/live/run_round.py --out /mnt/gaming/modlists/Projects/_tuning/r3-v4 --label "sim v4: follow the oracle, spell choice" -- --cells 15 --worlds builtin,LoreRim,Tuxborn,Vanilla`
 
-`--world v4` and the cuts are the driver's defaults, so they are not on the line. The Beta 1 cells first: `--cells 15` on its own `--out`.
+`--world v4` and the cuts are the driver's defaults, so they are not on the line. `--cells 15` is the ruling of 2026-11-24 (T1 and T2 only: the 12 tree-ON rows of T2 and below and the 3 base cells). The estimates above are for 38 cells.
 
 ### 15.8 Checks, and what was not run
 
@@ -1430,8 +1434,88 @@ Not run: a driver smoke on the merged tree with the cuts (the smoke of 954ccf60 
 
 - **LoreRim still puts unmeasured spells on top** under today's rules (15.3). `t.unmeasuredDamage` is the knob. If the spells stage cannot close it the placeholder is the wrong shape and the SpellWorth table has to carry it.
 - **The capped Turn is not in the lab** (15.3): the lab's will-work answers a capped pair No on the next lap.
-- **The lab's world deals no damage for a hazard a spell spawns** (15.2), so walls and runes are worth nothing to the oracle. Needs three fields from `tools/list_balance`.
+- Fixed by bundle A (section 16): the hazard a spell spawns, the review items R2 to R5, the set check. Runes stay unmeasured (16.3).
 - **The cost estimate stands on few fights.** An oracle fight costs between 1 and 400 CPU seconds depending on how the fight goes. The first night of the round gives the real figure: `progress.log` holds every run's time.
 - **The pair rule's width is a number somebody chose** (0.10 U, under the 0.3 U the oracle itself calls not worth dithering over). The replay is how to move it.
 - **The stealthy-caster term of the on-foe dominance is not in the replay** (no stealthy caster in the dump). It only makes the test stricter.
 - `book_from_log.py`, the bands subject-only (6.2 item 1), smaller books in the rollouts: not built.
+
+## 16. Bundle A as built (branch `feat/sim-v4-pretune`, 2026-11-24)
+
+The last sim work before the one T1/T2 tune. Plan: `sim-pretune-plan.md`. `tools/iaus_sim`, `tools/list_balance` and docs, no native change.
+
+### 16.1 The gate rules of efd097dc (item 4)
+
+`Loot.h` mirrors native's rules: the pass lift (native's own `GatePassCrossed` and `GatePassStepPlausible`), the sweep on every lap, no idle lift, the live-gate rule (N3), the same-item stall strike (N2), and one carry test for the peek and the take (N4). `passMaxGapSec`, `passSlackU` and `gateFloorU` restate constants inside native function bodies: a driver test greps them out of `LootTravel_internal.h`. `--loot-rule native1124=0` and `gateEvents=0` are the builds before it.
+
+`--loot-test`: 24 scenarios. The old arms still show the old faults (25 legs at the locked door, 27 in the freeze, 15 at the carry limit). Under the default rules the same places read 3, 7 and 0 legs.
+DEVIATION: the plan bounds `stall-same-item` at 3 legs, the bound is 4 (native erases the last block at each strike, so an item costs two blocks a strike, two strikes).
+
+The gate on the library (as the table of 14.8: 480 episodes a run, fight world built in):
+
+| Row | LoreRim | LoreRim held-out | Tuxborn | Tuxborn held-out | Vanilla | Vanilla held-out | fixtures | Tuxborn, before efd097dc |
+|---|---|---|---|---|---|---|---|---|
+| `leftRR/ep` | 1.704* | 2.256* | 2.056* | 2.948* | 1.831* | 1.123* | 0.285 | 2.006* |
+| `goldLeftRR/ep` | 0.138* | 0.129* | 0.179* | 0.237* | 0.481* | 0.263* | 0.031 | 0.154* |
+| `coinDibsNear/ep` | 0.019 | 0.067 | 0.033 | 0.017 | 0.071 | 0.035 | 0.019 | 0.379* |
+| `dibsNear/ep` | 0.046 | 0.125* | 0.062 | 0.044 | 0.148* | 0.050 | 0.035 | 0.631* |
+| `roadLeft%` | 48.646 | 68.351* | 42.673 | 51.475 | 72.019* | 68.006* | 45.786 | 46.336 |
+| `leftCarry/ep` | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| `leftGuard/ep` | 0.062 | 3.869* | 0.860 | 1.973* | 0.023 | 0.879 | 0.548 | 0.863 |
+| `leftOutOfRange/ep` | 7.571* | 3.273 | 7.523* | 6.990* | 3.431 | 1.898 | 0.000 | 7.527* |
+| `museumLeftRR/ep` | 0.000 | 0.000 | 0.017 | 0.067 | 0.015 | 0.010 | 0.000 | 0.017 |
+| `crimes` | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| `guardSeenTakes` | 7.000* | 21.000* | 0.000 | 25.000* | 0.000 | 4.000* | 0.000 | 0.000 |
+| `legs/src` | 1.374 | 1.920 | 1.467 | 1.709 | 1.767 | 1.295 | 1.586 | 1.486 |
+| `restart%` | 29.762 | 40.324* | 29.713 | 36.653* | 37.434* | 25.058 | 26.993 | 29.482 |
+| `aborted%` | 15.531 | 30.857* | 20.892 | 21.443 | 39.914* | 16.975 | 29.144 | 20.436 |
+| `reversals/min` | 0.302 | 0.414 | 0.289 | 0.529 | 0.276 | 0.296 | 0.330 | 0.271 |
+| `twoOnOne/ep` | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| `combatLoot s/fight` | 0.049 | 0.041 | 0.042 | 0.063 | 0.045 | 0.044 | 0.056 | 0.041 |
+| `combatTakes` | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 |
+| `walkedPast/ep` | 0.644* | 1.606* | 0.727* | 1.783* | 0.400 | 0.633* | 0.458 | 0.702* |
+| `stuckOff s/ep` | 0.008 | 1.254 | 0.334 | 0.000 | 1.126 | 0.136 | 4.324 | 0.229 |
+| `wait free p90 s` | 90.000* | 90.000* | 90.000* | 90.000* | 90.000* | 61.733* | 18.233 | 90.000* |
+| `wait dibs p90 s` | 89.133* | 85.333* | 88.800* | 90.000* | 90.000* | 90.000* | 51.633 | 88.800* |
+| value/ep (without gold) | 144.750 (109.066) | 133.412 (106.830) | 131.806 (111.977) | 130.119 (110.565) | 126.566 (112.201) | 126.206 (111.136) | 118.736 (112.792) | 130.347 (112.152) |
+
+With the mirror, the fixtures (5 places) are under every bound. The other sets move little (not tested against their spread): the rules change the places with a locked door or an unreachable item, which are few.
+
+### 16.2 Summons (item 5)
+
+`--v4 summons=on|off` (`Env.h`). On: the summoned actor is the list's own NPC (`extract_world.py spawned` reads MGEF DATA +8, `compile_world.py summonSpecs`, one per level bucket), runs the actor AI, stands on the mesh, draws foes and blocks doors. `Fight::commanded` is the engine's list.
+
+| Native rule (`cast/Summon.cpp`) | Lab (`World.h`) | |
+|---|---|---|
+| Live: this spell's own live creature blocks this spell | `SummonGate` kSummonLive | proven by test |
+| Landing: the appear window | none: a summon appears at once | MODEL |
+| Limit: every listed entry, dead and thralls included, against `iMaxSummonedCreatures` through entry point 0x44, rounded half up | `CommandedBy` against `SummonLimit` | proven by test. The perk grant (his skill meets its threshold, best row) is MODEL |
+| The engine evicts the oldest at landing | `LandCommanded` | proven by test. MFO never casts into it (IAUS, the oracle and tables use the gate) |
+| | spawn 150 units ahead, level by the caster's bucket, gone with its caster, a dead one listed 3 s | MODEL |
+
+`kSummon` (`Data.h`) holds every number. A list compiled before the new field is refused by the driver (`check_world`).
+
+Conjurations are nearly all `TargetLocation`, and native and the lab both drop them (16.6), so on a list world a book holds only the few Self summons (Tuxborn 4, Vanilla 0). The feature is exercised by the fixtures and the Self summons until that is decided.
+
+### 16.3 Hazards (item 6)
+
+`--v4 hazards=on|off`. The extractor reads native's two roads (archetype 40 to the HAZD, or the impact data set's IPCT NAM2). HAZD DATA (40 bytes) was read off Skyrim.esm and is self-checked. The hazard spell goes through the one classifier and the one damage path (`SpellHit`), credited to its owner. `kHazard` holds the numbers.
+- **The impact road, MODEL**: only a concentration, non-self stream whose hazard drops to the ground (flag 16) lays one. A bolt's impact hazard burns what it MISSED into.
+- **Runes stay unmeasured** (MFO-B864): the damage is in the effect itself and the spell is `TargetLocation`, not in a hazard.
+- Foes do not avoid a hazard, and it hurts only the owner's enemies (MODEL).
+- Measured (`haz-*.txt`, evoker, Tuxborn and Vanilla, 6 natural fights each, on against off): regret 2.039 against 2.042 and 2.138 against 2.051. Nearly nothing: the oracle does not lean on walls here. The spell names the oracle picks are not printed, so the plan's count of wall picks was not taken.
+
+### 16.4 The proof
+
+- Features off: `--v4 summons=off,hazards=off` against batch C's v4 baseline (meta line retagged) 0 metrics changed at 1 and 8 threads. v2 and v3 baselines untouched, v3 0 changed. `baseline_v4_builtin.txt` was rewritten once, 0 changed at 1 and 8 threads.
+- `--env-test` 105 checks, `--loot-test` 24, driver tests 58, live tests 25 (1 skipped), `SIM_CLITEST=1 run.sh` CLI-CHECKS PASS on `5321ebc3`. The merge of `origin/main` (`535a3ab9`) leaves the binary byte for byte the same, so the suite was not run again.
+- Extracted lists rebuilt once, the old files are in `backup-pre-pretune/`.
+
+### 16.5 Answered: is healer regret on Tuxborn worse under today's rules?
+
+`--spell-rules old` against `today`, seeds 1, 2, 3, 18 natural fights each, `--world v3 --books field`: 16.54 (se 6.5) against 23.03 (se 13.3) U per fight, same fights' difference +6.5 (se 10.2). Under 2 se: NOISE by the rule written beforehand. One fight (seed 1 fight 1, 47 to 220) carries it, and seeds 2 and 3 go down (10.2 to 1.2, 16.0 to 15.6). Cause: gate 256.5 to 361.2, weight 20.7 to 53.2, fact 20.6 to 0.0 U over the 18. The weight part (heal against heal 16.6 to 29.1, heal against offense 0 to 9.4) is the one to look at if a larger run ever shows a difference. The spell facts are no longer a cause.
+
+### 16.6 Found, not fixed (native questions)
+
+- **Conjurations never reach IAUS** (`iaus/Prune.h:93`, filled at `iaus/SpellBook.cpp:253`). By data: Vanilla 14 of 14 taught, Tuxborn 307 of 311, LoreRim 204 dropped. The design rule (iaus-design.md section 2) names "runes and other Target Location spells", and a summon is caught by the delivery. It has its own cast road, so the reason for the rule (where to put it) does not hold.
+- **`HasImpactHazard` (`cast/Archetype.cpp:214`) calls a missed bolt's burn mark a wall.** In Vanilla: Firebolt, Flames, Frostbite, Fireball, Ice Spike, Ice Storm, Incinerate, the Icy Spear, Expel / Banish / Command Daedra read shape Wall, and IAUS drops Wall as Placement. In lists whose spells carry a Script effect (Tuxborn and most of LoreRim) the shape is ScriptRider, tested first, so they are kept. The lab does not model this: it drops `TargetLocation` only, so its VANILLA world offers spells the game's IAUS would drop.

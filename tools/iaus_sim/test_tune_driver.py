@@ -60,7 +60,7 @@ class World(unittest.TestCase):   # the driver always names the world (v4 by def
 
 
 class ChoiceBatch(unittest.TestCase):   # sim v4 batch C (iaus-sim-v4.md 15): the follow stage, the spells stage, their readers
-    NAMES = ("all_knobs", "class_knobs", "final_curves", "follow_oracle", "follow_iaus", "judge", "card_potion_gate", "log", "save_summary", "regret_runs", "spell_knobs", "scope", "cells")
+    NAMES = ("all_knobs", "class_knobs", "final_curves", "follow_oracle", "follow_iaus", "judge", "card_potion_gate", "log", "save_summary", "regret_runs", "spell_knobs", "scope", "cells", "gapi_runs")
 
     def setUp(self):
         self.saved = {k: getattr(T, k) for k in self.NAMES}
@@ -71,6 +71,74 @@ class ChoiceBatch(unittest.TestCase):   # sim v4 batch C (iaus-sim-v4.md 15): th
         T.SUMMARY["open_decisions"], T.SUMMARY["auto_decisions"] = [], []
         T.log = lambda m: None
         T.save_summary = lambda: None
+        # the set checks (choice review R3): the IAUS arm on held-out places, seeds 7601... setgain: curve spec or --set string -> U it adds there
+        self.setgain, self.settasks = {}, []
+
+        def gapi(tasks):
+            self.settasks += tasks
+            return [{(s, j): 50.0 + 0.1 * j + sum(self.setgain.get(k, 0.0) for k in table) + self.setgain.get(sets, 0.0) for j in range(4)} for w, c, table, s, sets, hold in tasks]
+        T.gapi_runs = gapi
+
+    def test_the_held_out_set_check(self):
+        T.cells = lambda: ["evoker", "knight"]
+        self.setgain = {"evoker:9.1.a=2.0": 0.5, "t.x=1": -2.0}
+        ho = T.held_out_check([], ["evoker:9.1.a=2.0"], ["evoker", "knight"])
+        self.assertTrue(ho["ok"])
+        self.assertEqual(ho["pooled"][0], 0.5)
+        self.assertEqual(ho["seeds"], [T.HOLD_FINAL0, T.HOLD_FINAL0 + 1])                  # seeds nothing else reads
+        self.assertTrue(all(t[5] for t in self.settasks))                                  # every run on the held-out places and books
+        self.assertGreater(T.HOLD_FINAL0, T.FOLLOW_FRESH0 + T.FULL["gap_max_seeds"])
+        ho = T.held_out_check([], [], ["evoker", "knight"], None, "t.x=1")                 # a shared table alone can fail it
+        self.assertFalse(ho["ok"])
+        self.assertIn("-2.00", ho["why"])
+
+    def test_joint_grades_the_whole_table_and_fails_on_the_held_out_check(self):   # choice review R2, R3
+        saved = {k: getattr(T, k) for k in ("jmany", "held_out_check", "final_sets")}
+        try:
+            reqs = []
+            T.cells = lambda: ["knight"]
+            T.final_curves = lambda: ["knight:1.1.a=2"]
+            T.final_sets = lambda: "t.x=1"
+            T.jmany = lambda rs: (reqs.extend(rs), [[(70.0, 0, 0.0)] * len(r[6]) for r in rs])[1]
+            gates = []
+            T.card_potion_gate = lambda cls, anchor, new, new_sets=None: (gates.append(new_sets), {"ok": True, "fails": []})[1]
+            calls = []
+            T.held_out_check = lambda a, b, who, a_sets=None, b_sets=None: (calls.append((a, b, who, a_sets, b_sets)), {"ok": False, "why": "the 1-cell mean is -1.00 U (se 0.20)", "pooled": [-1.0, 0.2], "cells": {}, "seeds": [7601, 7606]})[1]
+            T.stage_joint()
+            jo = T.SUMMARY["stages"]["joint"]
+            self.assertEqual({(r[3], r[4]) for r in reqs}, {((), None), (("knight:1.1.a=2",), "t.x=1")})   # shipped: no row, no shared value. final: both
+            self.assertEqual(calls, [([], ["knight:1.1.a=2"], ["knight"], None, "t.x=1")])
+            self.assertEqual(gates, ["t.x=1"])                                               # the class card reads the table that ships
+            self.assertTrue(jo["verdict"].startswith("FAIL") and "held-out" in jo["verdict"], jo["verdict"])
+            T.final_curves = lambda: []                                                      # a shared value alone is a table to gate
+            T.held_out_check = lambda a, b, who, a_sets=None, b_sets=None: {"ok": True, "why": "", "pooled": [0.0, 0.1], "cells": {}, "seeds": [7601, 7606]}
+            T.stage_joint()
+            self.assertEqual(T.SUMMARY["stages"]["joint"]["verdict"], "PASS")
+        finally:
+            for k, v in saved.items():
+                setattr(T, k, v)
+
+    def test_follow_drops_a_set_that_is_worse_held_out(self):
+        self.plant({"evoker:9.1.a=2.0": 1.5})
+        self.setgain = {"evoker:9.1.a=2.0": -3.0}
+        T.stage_follow()
+        fo = T.SUMMARY["stages"]["follow"]
+        self.assertEqual(fo["kept"]["evoker"], [])
+        self.assertEqual(T.final_curves(), [])
+        self.assertIn("held-out", fo["cells"]["evoker"]["verdict"])
+        self.assertNotIn("gap_after", fo["cells"]["evoker"])
+        self.assertFalse(any(r["accepted"] for r in fo["rows"]["evoker"]))
+        self.assertEqual([d["kind"] for d in T.SUMMARY["auto_decisions"]], ["held-out set"])
+
+    def test_spells_drops_a_set_that_is_worse_held_out(self):
+        self.spell_world({"t.unmeasuredDamage=0.25": 1.0}, {"t.unmeasuredDamage=0.25": 1.0})
+        self.setgain = {"t.unmeasuredDamage=0.25": -3.0}
+        T.stage_spells()
+        sp = T.SUMMARY["stages"]["spells"]
+        self.assertEqual(sp["kept"], [])
+        self.assertNotIn("report_final", sp)
+        self.assertEqual(T.spell_sets(), [])
+        self.assertFalse(sp["held_out_set"]["ok"])
 
     def tearDown(self):
         for k, v in self.saved.items():
@@ -116,7 +184,7 @@ class ChoiceBatch(unittest.TestCase):   # sim v4 batch C (iaus-sim-v4.md 15): th
         T.follow_oracle = oracle
         T.follow_iaus = lambda cls, table, seeds, hold=False: {"builtin": {(s + (0 if seeds[0] == 6001 else 1000), j): 50.0 + n + add(table, hg if hold else (gain if seeds[0] == 6001 else fg)) for (s, j), n in zip(keys, noise)}}
         T.judge = lambda cls, kept, spec, forced=False, fence=False: {"accepted": fence, "why": "FENCE HOLDS" if fence else "strict judge called", "steps": {}}
-        T.card_potion_gate = lambda cls, anchor, new: {"ok": True, "fails": []}
+        T.card_potion_gate = lambda cls, anchor, new, new_sets=None: {"ok": True, "fails": []}
         T.scope = lambda: ["evoker"]
 
     def test_follow_accepts_a_planted_improvement_and_rejects_a_planted_regression(self):   # design 6.4
@@ -359,11 +427,11 @@ class CardGateF4F5(unittest.TestCase):   # review F4 / F5 of b59b0a1a
         saved = T.play_metrics
         try:
             # start has no taunt sample, the new table has one far outside the knight's bound: graded against the bare bound
-            T.play_metrics = lambda cls, curves: ({"contact%": (80.0, 0.1)} if curves == ["a"] else {"contact%": (80.0, 0.1), "taunt/min": (0.0, 0.1)})
+            T.play_metrics = lambda cls, curves, sets=None: ({"contact%": (80.0, 0.1)} if curves == ["a"] else {"contact%": (80.0, 0.1), "taunt/min": (0.0, 0.1)})
             g = T.card_potion_gate("knight", ["a"], ["b"])
             self.assertTrue(any("taunt_per_min" in f for f in g["fails"]), g["fails"])
             # start present, new missing: FAIL
-            T.play_metrics = lambda cls, curves: ({"contact%": (80.0, 0.1), "taunt/min": (3.0, 0.1)} if curves == ["a"] else {"contact%": (80.0, 0.1)})
+            T.play_metrics = lambda cls, curves, sets=None: ({"contact%": (80.0, 0.1), "taunt/min": (3.0, 0.1)} if curves == ["a"] else {"contact%": (80.0, 0.1)})
             g = T.card_potion_gate("knight", ["a"], ["b"])
             self.assertTrue(any("taunt_per_min" in f and "no sample" in f for f in g["fails"]), g["fails"])
         finally:
@@ -503,6 +571,24 @@ class NewTables(unittest.TestCase):   # tune 2.11.1: one knob = one native membe
         for n, _, _ in T.LOOT_KNOBS + T.LOOT_EPISODE_KNOBS:
             self.assertIn('"%s"' % n, tune_h, n)   # every searched row is one `--set` reaches (Tune.h kLootKnobsF / kLootKnobsI)
 
+    def test_stale_list_is_refused(self):
+        d = tempfile.mkdtemp()
+        for name, text, want in (("old", '{"archetype":18,"av":-1}', True), ("new", '{"archetype":18,"summon":[3,4]}', False), ("none", '{"archetype":0}', False)):
+            p = os.path.join(d, name)
+            open(p, "w").write(text)
+            self.assertEqual(T.stale_spawns(p), want, name)
+
+    def test_loot_gate_constants_mirror_native(self):
+        # three numbers the lab cannot include (they sit in engine-typed code): Loot.h Rules against native
+        here = os.path.dirname(os.path.abspath(T.__file__))
+        native = open(os.path.join(here, "..", "..", "native", "logistics", "LootTravel_internal.h"), encoding="utf-8").read()
+        lab = open(os.path.join(here, "Loot.h"), encoding="utf-8").read()
+        for nat, mine in (("kPassMaxGapSec", "passMaxGapSec"), ("kPassSlackU", "passSlackU"), ("kGateFloorBand", "gateFloorU")):
+            a = re.findall(r"constexpr float\s+%s\s*=\s*([0-9.]+)f;" % nat, native)
+            b = re.findall(r"\b%s = ([0-9.]+)f" % mine, lab)
+            self.assertEqual((len(a), len(b)), (1, 1), nat)
+            self.assertEqual(float(a[0]), float(b[0]), nat)
+
     def test_loot_episode_command_and_key(self):
         d = tempfile.mkdtemp()
         T.A = types.SimpleNamespace(bin=os.path.join(d, "sim"), out=d, builtin_worth=None, loot_places="")
@@ -518,15 +604,29 @@ class NewTables(unittest.TestCase):   # tune 2.11.1: one knob = one native membe
         self.assertEqual(T.loot_world_args(True)[1], "Tuxborn/heldout")
         self.assertNotEqual(k0, T.key_of("builtin", "epi:melee", "g3", [], None, None))   # another set of places is another cache key
 
-    def test_loot_gate_check(self):
-        notes = []
-        T.open_decision = lambda what, why: notes.append((what, why))
-        ship = {"gate": {"crimes": [0.0, False], "leftRR/ep": [1.0, True], "roadLeft%": [40.0, False]}}
-        self.assertIsNone(T.loot_gate_check("train", ship, {"gate": {"crimes": [0.0, False], "leftRR/ep": [0.9, True], "roadLeft%": [40.0, False]}}))
-        self.assertEqual(notes, [])
-        self.assertIsNone(T.loot_gate_check("train", ship, {"gate": {"crimes": [0.0, False], "leftRR/ep": [0.2, False], "roadLeft%": [55.0, False]}}))   # worse, under its bound: flagged all the same
-        self.assertEqual(len(notes), 1); self.assertIn("roadLeft%", notes[0][1])
-        self.assertIn("crimes", T.loot_gate_check("heldout", ship, {"gate": {"crimes": [1.0, True], "leftRR/ep": [1.0, True], "roadLeft%": [40.0, False]}}))   # a hard row: rejected
+    def test_loot_gate_check(self):   # loot review R2: paired per seed, beyond noise, and the "takes less" rows reject
+        notes, saved = [], T.open_decision
+        T.open_decision = lambda what, why, **kw: notes.append((what, why))
+        try:
+            def rep(crimes, **rows):   # row -> per-seed values (4 seeds); the gate value is their mean
+                rows["crimes"] = crimes
+                return {"gate": {k: [sum(v) / len(v), False] for k, v in rows.items()}, "seeds": {k: dict(zip(range(9501, 9505), v)) for k, v in rows.items()}}
+            ship = rep([0, 0, 0, 0], **{"leftRR/ep": [1.0, 1.2, 0.8, 1.0], "roadLeft%": [40.0, 41.0, 39.0, 40.0], "restart%": [20.0, 22.0, 18.0, 20.0]})
+            why, rows = T.loot_gate_check("train", ship, rep([0, 0, 0, 0], **{"leftRR/ep": [1.3, 0.9, 0.9, 1.0], "roadLeft%": [40.0, 41.0, 39.0, 40.5], "restart%": [20.0, 23.0, 17.5, 20.0]}))
+            self.assertIsNone(why)                                           # worse on some seeds, not beyond noise: neither flagged nor rejected
+            self.assertEqual(notes, [])
+            self.assertEqual(rows["leftRR/ep"][4], "ok")
+            why, rows = T.loot_gate_check("train", ship, rep([0, 0, 0, 0], **{"leftRR/ep": [1.0, 1.2, 0.8, 1.0], "roadLeft%": [40.0, 41.0, 39.0, 40.0], "restart%": [25.0, 27.5, 23.0, 25.0]}))
+            self.assertIsNone(why)                                           # another row worse beyond noise: a note
+            self.assertEqual(len(notes), 1); self.assertIn("restart%", notes[0][1])
+            why, rows = T.loot_gate_check("heldout", ship, rep([0, 0, 0, 0], **{"leftRR/ep": [1.0, 1.2, 0.8, 1.0], "roadLeft%": [55.0, 57.0, 54.0, 56.0], "restart%": [20.0, 22.0, 18.0, 20.0]}))
+            self.assertIn("roadLeft%", why)                                  # a reject row worse beyond noise, though under its bound: REJECTED
+            self.assertEqual(rows["roadLeft%"][4], "REJECT")
+            why, _ = T.loot_gate_check("heldout", ship, rep([0, 1, 0, 0], **{"leftRR/ep": [1.0, 1.2, 0.8, 1.0], "roadLeft%": [40.0, 41.0, 39.0, 40.0], "restart%": [20.0, 22.0, 18.0, 20.0]}))
+            self.assertIn("crimes", why)                                     # one more crime: rejected, no noise band
+            self.assertEqual(set(T.LOOT_REJECT_ROWS), {"leftRR/ep", "goldLeftRR/ep", "roadLeft%", "dibsNear/ep"})
+        finally:
+            T.open_decision = saved
 
     def test_values_in_range(self):
         shares = {"dangerSpan", "magickaWinLine", "staminaWinLine", "winNeed", "wealthFrac", "restoreCostScale", "restoreUseWeight", "floor", "foodMinGain",

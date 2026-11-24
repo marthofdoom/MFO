@@ -1,7 +1,7 @@
 #pragma once
 // iaus_sim/LootCli.h -- SIM V4 BATCH L: the runs (iaus-sim-v4.md 14.7). HOST-ONLY.
 //   --loot-report N     N episodes per class and seed in the run's places: the tally, the events under the field log's names, the gate
-//   --loot-scenario X   the field cases as scenarios (all | a name): each under today's rules and under the rule it was fixed from
+//   --loot-scenario X   the field cases as scenarios (all | a name): each under the default rules (native's) and under the rule it was fixed from
 //   --loot-test         the known-answer checks (the scenarios' verdicts): LOOT-TESTS PASS|FAIL
 //   --loot-oracle N     the loot oracle against the game on N episodes per class
 //   --loot-score        with --loot-report: SEED lines (mean episode value per seed) for the tune driver's loot stage
@@ -34,19 +34,25 @@ namespace Sim::Loot {
     inline int RunReport(const Data& D, const std::vector<SimClass>& all, const std::vector<SimClass>& t1, const std::string& only, const std::vector<std::uint64_t>& seeds, int threads, const Opts& o) {
         const auto places = Places(); const auto scope = Scope(all, only); if (places.empty() || scope.empty()) { std::fprintf(stderr, "--loot-report: no place with loot (--world v4, or --env-set) or no class\n"); return 2; }
         (void)Logi::PotionFloor();   // computed once, before the threads
-        const int n = o.report, jobs = static_cast<int>(scope.size() * seeds.size()) * n; std::vector<LTally> per(scope.size()); std::vector<double> seedSum(seeds.size(), 0.0); std::atomic<int> next{ 0 }; std::mutex mx;
+        const int n = o.report, jobs = static_cast<int>(scope.size() * seeds.size()) * n; std::vector<LTally> per(scope.size()), perSeed(seeds.size()); std::vector<double> seedSum(seeds.size(), 0.0); std::atomic<int> next{ 0 }; std::mutex mx;
+        // --loot-score (loot review R1): the same episode once more under the SHIPPED table, when the table under search is another one, for ScoreOver. The shipped table scores itself with no charge.
+        static const MFO::Iaus::LootTuning kShipped{}; const MFO::Iaus::LootTuning liveT = Tune().loot; const bool pairShipped = o.score && std::memcmp(&liveT, &kShipped, sizeof kShipped) != 0;
         const auto t0 = std::chrono::steady_clock::now();
         auto work = [&]() { for (;;) { const int job = next.fetch_add(1); if (job >= jobs) return; const int k = job % n, si = (job / n) % static_cast<int>(seeds.size()), ci = job / n / static_cast<int>(seeds.size());
                 const std::uint64_t h = SimEnv::Mix(seeds[Z(si)] * 1000003ULL + static_cast<std::uint64_t>(ci) * 7919 + static_cast<std::uint64_t>(k) * 104729);
                 Episode ep = MakeEpisode(D, *scope[Z(ci)], all, t1, h, SpecFor(o, h, places[h % places.size()]));
                 if (o.trace == job) ep.W.trace = stdout;
                 IausPolicy P; ep.Run(P);
-                std::scoped_lock lk(mx); per[Z(ci)].Merge(ep.W.t); seedSum[Z(si)] += ep.Score(true); } };
+                long shippedHard = ep.Hard();
+                if (pairShipped) { EpSpec sp = SpecFor(o, h, places[h % places.size()]); sp.tuning = &kShipped; Episode es = MakeEpisode(D, *scope[Z(ci)], all, t1, h, sp); IausPolicy Ps; es.Run(Ps); shippedHard = es.Hard(); }
+                std::scoped_lock lk(mx); per[Z(ci)].Merge(ep.W.t); perSeed[Z(si)].Merge(ep.W.t); seedSum[Z(si)] += o.score ? ep.ScoreOver(shippedHard) : ep.Score(true); } };
         { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(work); for (auto& x : th) x.join(); }
         const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         if (o.score) { for (std::size_t s = 0; s < seeds.size(); ++s) std::printf("SEED %llu  J=%.4f (scenarios 0.00, natural 0.00)\nSWITCH %llu 0 1.000\n", static_cast<unsigned long long>(seeds[s]), seedSum[s] / (n * static_cast<double>(scope.size())), static_cast<unsigned long long>(seeds[s])); return 0; }
         LTally allT; int bad = 0; for (std::size_t c = 0; c < scope.size(); ++c) { PrintTally(per[c], scope[c]->name.c_str()); bad += PrintGate(per[c], scope[c]->name.c_str()); allT.Merge(per[c]); }
         PrintTally(allT, "ALL"); const int badAll = PrintGate(allT, "ALL");
+        // per seed, every gate row and the two hard counts: the driver's paired test of a kept table against the shipped one (loot review R2). `LOOTSEED <seed> <value> <row>`
+        for (std::size_t s = 0; s < seeds.size(); ++s) for (const auto& kv : GateValues(perSeed[s])) std::printf("LOOTSEED %llu %.6f %s\n", static_cast<unsigned long long>(seeds[s]), kv.second, kv.first.c_str());
         std::printf("LOOT-REPORT %d episodes, %zu places, %zu classes: value/ep with gold %.3f, without %.3f (fights %.3f + potions %.3f + gold %.3f + museum %.3f, crimes and guard-seen takes charged apart); gate rows failing: ALL %d, per class %d; wall %.2f s\n", jobs, places.size(), scope.size(),
             (allT.uFights + allT.dPotJ + allT.dGoldJ + allT.dMuseumJ) / std::max(1L, allT.episodes), (allT.uFights + allT.dPotJ) / std::max(1L, allT.episodes), allT.uFights / std::max(1L, allT.episodes), allT.dPotJ / std::max(1L, allT.episodes), allT.dGoldJ / std::max(1L, allT.episodes), allT.dMuseumJ / std::max(1L, allT.episodes), badAll, bad, wall);
         return 0;
@@ -82,9 +88,11 @@ namespace Sim::Loot {
         return 0;
     }
 
-    // ── THE FIELD CASES AS SCENARIOS (14.2). Each is played under today's rules and under a variant (the rule it was fixed from, or the same rules with
-    // one thing changed), and says what must hold. `finding`: the scenario shows a fault of TODAY's rules (a native finding): it is printed and pinned as what the
-    // mirror reproduces, never counted as a lab failure. To add one: a row of Scenarios(). ──
+    // ── THE FIELD CASES AS SCENARIOS (14.2). Each is played under the default rules (native since efd097dc) and under a variant (the rule it was fixed from, or
+    // the same rules with one thing changed), and says what must hold. `finding`: its first arm is an OLDER BUILD (Rules::native1124 = 0, dibsNear = 0) and shows that build's
+    // fault: printed and pinned as what the mirror reproduces, never counted as a lab failure. Every such row has a row of its own where the default rules must hold
+    // (locked-door-cycle: gate-no-idle; carry-full: carry-peek; coin-behind-player: ruling-near-is-enough; the 27 legs of freeze-1117g: stall-same-item).
+    // To add one: a row of Scenarios(). ──
     struct Ctx {
         const Data& D; const std::vector<SimClass>& all; const std::vector<SimClass>& t1; std::FILE* trace = nullptr;
         [[nodiscard]] const SimClass& C(const char* n) const { for (const SimClass& c : all) if (c.name == n) return c; return t1[0]; }
@@ -104,17 +112,17 @@ namespace Sim::Loot {
             [](const Ctx& c, bool tr) { EpSpec sp; Rules r, off; off.lotd = 0; const LT T; return std::pair{ c.Bare("loot-room", "ranged", { "melee" }, sp, r, T, tr), c.Bare("loot-room", "ranged", { "melee" }, sp, off, T) }; },
             [](const LTally& t, const LTally& o) -> std::string { if (t.leftRR != 0) return "a wanted, released, reachable stack was left"; if (t.taken < 5) return "fewer than 5 stacks taken"; if (EvN(t, "take junk") < 1) return "the museum piece was not taken";
                 if (EvN(o, "take junk") != 0) return "the museum piece was taken with the museum road off"; if (t.goldLeft != 0) return "coin left"; if (t.crimes || t.guardSeenTakes) return "a crime"; return ""; } });
-        v.push_back({ "coin-behind-player", "marth: coin left on bodies. The player stands among three bodies and never turns to them. Today's native dibs (near AND facing, --loot-rule dibsNear=0)", "the player walks on after 6 s", true,
+        v.push_back({ "coin-behind-player", "marth: coin left on bodies. The player stands among three bodies and never turns to them. The dibs of the builds before efd097dc (near AND facing, --loot-rule dibsNear=0)", "the player walks on after 6 s", true,
             [giveCoin](const Ctx& c, bool tr) { EpSpec sp; sp.plan = Plan::FaceAway; sp.setup = giveCoin; EpSpec w = sp; w.plan = Plan::WalkOn; Rules r; r.dibsNearEnough = 0; const LT T; return std::pair{ c.Bare("loot-backs", "melee", { "ranged" }, sp, r, T, tr), c.Bare("loot-backs", "melee", { "ranged" }, w, r, T) }; },
             [](const LTally& t, const LTally& o) -> std::string { if (t.goldLeft == 0) return "the coin WAS taken behind the standing player (the mirror no longer shows the fault)"; if (LeftN(t, "player dibs") + LeftN(t, "player dibs (never scanned)") == 0) return "the coin was left for another reason than the player's dibs"; (void)o; return ""; } });
-        v.push_back({ "ruling-near-is-enough", "marth's ruling of 11-24 for N1: coin dibs \"Near is enough\" (6 s near, no facing). The same three bodies behind a standing player", "today's native (near AND facing): --loot-rule dibsNear=0", false,
+        v.push_back({ "ruling-near-is-enough", "marth's ruling of 11-24 for N1: coin dibs \"Near is enough\" (6 s near, no facing). The same three bodies behind a standing player", "the builds before efd097dc (near AND facing): --loot-rule dibsNear=0", false,
             [giveCoin](const Ctx& c, bool tr) { EpSpec sp; sp.plan = Plan::FaceAway; sp.setup = giveCoin; Rules r, today; today.dibsNearEnough = 0; const LT T; return std::pair{ c.Bare("loot-backs", "melee", { "ranged" }, sp, r, T, tr), c.Bare("loot-backs", "melee", { "ranged" }, sp, today, T) }; },
-            [](const LTally& t, const LTally& o) -> std::string { if (t.goldLeft != 0) return "coin left under the ruling"; if (t.dibsNear != 0) return "a stack left under his dibs with him standing there, under the ruling"; if (o.goldLeft == 0) return "today's rule left no coin (nothing to fix)"; return ""; } });
-        v.push_back({ "ruling-gate-events-only", "marth's ruling of 11-24: a gate lifts on real events only for now (door, lever, cell, somebody else at the item). The locked door, the player opens it at 30 s", "today's native (--loot-rule gateEvents=0): the recorder walking 500 u off his block lifts his own record", false,
-            [](const Ctx& c, bool tr) { EpSpec sp; sp.lootSec = 120; sp.setup = [](Episode& e) { e.doorOpenAt = 30.0; }; Rules r, today; today.gateEventsOnly = 0; const LT T; LT Tt; Tt.gateReadmitMoveU = 500.0f;   /* pinned: "today's native" is the 500 u walk, whatever native's default becomes (fix/loot-native review F2 sets it to 0) */ return std::pair{ c.Bare("loot-gate", "melee", {}, sp, r, T, tr), c.Bare("loot-gate", "melee", {}, sp, today, Tt) }; },
+            [](const LTally& t, const LTally& o) -> std::string { if (t.goldLeft != 0) return "coin left under the ruling"; if (t.dibsNear != 0) return "a stack left under his dibs with him standing there, under the ruling"; if (o.goldLeft == 0) return "the old rule left no coin (nothing to fix)"; return ""; } });
+        v.push_back({ "ruling-gate-events-only", "marth's ruling of 11-24: a gate lifts on real events only for now (door, lever, cell, somebody else at the item). The locked door, the player opens it at 30 s", "the builds before efd097dc (--loot-rule native1124=0 --loot-rule gateEvents=0): the recorder walking 500 u off his block lifts his own record", false,
+            [](const Ctx& c, bool tr) { EpSpec sp; sp.lootSec = 120; sp.setup = [](Episode& e) { e.doorOpenAt = 30.0; }; Rules r, today; today.gateEventsOnly = 0; today.native1124 = 0; const LT T; LT Tt; Tt.gateReadmitMoveU = 500.0f;   /* pinned: the 500 u walk of the builds before efd097dc (native's default is 0 now) */ return std::pair{ c.Bare("loot-gate", "melee", {}, sp, r, T, tr), c.Bare("loot-gate", "melee", {}, sp, today, Tt) }; },
             [](const LTally& t, const LTally& o) -> std::string { if (EvN(t, "GATED re-admitted: its follower left the block") != 0) return "a record was lifted by its own follower walking off, under the ruling"; if (EvN(t, "GATED re-admitted: door / lever event near it") < 1) return "the door event did not lift the gate"; if (t.taken < 3 || t.leftRR) return "the loot behind the opened door was not taken under the ruling";
-                if (EvN(o, "GATED re-admitted: its follower left the block") < 1) return "today's rule never lifted a record by its follower walking off (the variant shows no difference)";
-                if (t.legs > o.legs) return "events-only made MORE legs to the locked door than today's rule"; return ""; } });
+                if (EvN(o, "GATED re-admitted: its follower left the block") < 1) return "the old rule never lifted a record by its follower walking off (the variant shows no difference)";
+                if (t.legs > o.legs) return "events-only made MORE legs to the locked door than the old rule"; return ""; } });
         v.push_back({ "freeze-1117g", "field 11-17g: a follower blocked at one point (no door, no lever) gated his target and a cone past it, and outdoor loot froze", "the rule before 9a16a278 (--loot-rule gate=old1117)", false,
             [](const Ctx& c, bool tr) { EpSpec sp; sp.lootSec = 120; Rules r, old; old.gateOld1117 = 1; LT T, To; To.gateReadmitMoveU = 0; To.gateNearU = 0; return std::pair{ c.Bare("loot-freeze", "melee", {}, sp, r, T, tr), c.Bare("loot-freeze", "melee", {}, sp, old, To) }; },
             [](const LTally& t, const LTally& o) -> std::string { if (t.leftRR != 0) return "today's rule left released, reachable loot"; if (EvN(t, "GATED") != 0) return "today's rule gated a block with no door or lever";
@@ -123,8 +131,8 @@ namespace Sim::Loot {
             [](const Ctx& c, bool tr) { EpSpec sp; sp.lootSec = 120; EpSpec open = sp; open.setup = [](Episode& e) { e.doorOpenAt = 30.0; }; Rules r; const LT T; return std::pair{ c.Bare("loot-gate", "melee", {}, open, r, T, tr), c.Bare("loot-gate", "melee", {}, sp, r, T) }; },
             [](const LTally& t, const LTally& o) -> std::string { if (EvN(t, "GATED") + EvN(t, "GATED (target only)") < 1) return "no GATED record at the locked door"; if (t.taken < 3) return "the loot behind the opened door was not taken"; if (t.leftRR != 0) return "released, reachable loot left after the door opened";
                 if (o.taken != 0) return "something was taken through a locked door"; return ""; } });
-        v.push_back({ "locked-door-cycle", "the same locked door, never opened: what he does for two minutes under today's native (--loot-rule gateEvents=0)", "with LootTuning::gateRepeatU 0 (no stuck evidence at a real gate)", true,
-            [](const Ctx& c, bool tr) { EpSpec sp; sp.lootSec = 120; Rules r; r.gateEventsOnly = 0; LT T; T.gateReadmitMoveU = 500.0f;   /* pinned, as in ruling-gate-events-only */ LT T0 = T; T0.gateRepeatU = 0; return std::pair{ c.Bare("loot-gate", "melee", {}, sp, r, T, tr), c.Bare("loot-gate", "melee", {}, sp, r, T0) }; },
+        v.push_back({ "locked-door-cycle", "the same locked door, never opened: what he did for two minutes in the builds before efd097dc (--loot-rule native1124=0 --loot-rule gateEvents=0)", "with LootTuning::gateRepeatU 0 (no stuck evidence at a real gate)", true,
+            [](const Ctx& c, bool tr) { EpSpec sp; sp.lootSec = 120; Rules r; r.gateEventsOnly = 0; r.native1124 = 0; LT T; T.gateReadmitMoveU = 500.0f;   /* pinned, as in ruling-gate-events-only */ LT T0 = T; T0.gateRepeatU = 0; return std::pair{ c.Bare("loot-gate", "melee", {}, sp, r, T, tr), c.Bare("loot-gate", "melee", {}, sp, r, T0) }; },
             [](const LTally& t, const LTally& o) -> std::string { (void)o; if (t.legs < 4) return "he no longer walks to the locked door again and again (the mirror no longer shows the fault)"; if (t.stuckEpisodes < 1) return "no 'stuck himself' episode at a real gate"; return ""; } });
         v.push_back({ "guard-bar-1117", "field 11-17 L1 (Raven Rock): bodies a guard can see, three followers cycling to them, 19 BARRED arrivals", "no party-wide bar (--loot-rule corpseBar=0)", false,
             [](const Ctx& c, bool tr) { EpSpec sp; sp.lootSec = 120; sp.setup = [](Episode& e) { e.W.hostileDeathKnown = true; }; Rules r, old; old.corpseBar = 0; const LT T; return std::pair{ c.Bare("loot-town", "melee", { "ranged", "mage" }, sp, r, T, tr), c.Bare("loot-town", "melee", { "ranged", "mage" }, sp, old, T) }; },
@@ -152,22 +160,57 @@ namespace Sim::Loot {
                         for (FState& f : e.W.fs) f.inv.s.erase(std::remove_if(f.inv.s.begin(), f.inv.s.end(), [](const Stack& s) { return Items()[Z(s.item)].kind == Kind::PotionH; }), f.inv.s.end()); };
                     a.Merge(c.Bare("loot-watch", "thief", {}, sp, r, T, tr && k == 0)); b.Merge(c.Bare("loot-watch", "thief", {}, sp, off, T)); } return std::pair{ a, b }; },
             [](const LTally& t, const LTally& o) -> std::string { if (t.crimes) return "a crime with the write re-check on"; if (EvN(t, "steal") < 1) return "the Thief never stole while the guard looked away"; if (o.crimes < 1) return "with the re-check off no crime was counted: the crimes row cannot fail"; return ""; } });
-        v.push_back({ "carry-full", "a follower at his carry limit and a body with potions he wants: only the equipment peek weighs (LootTake.cpp), so he walks, takes nothing, and comes back", "the same with room in the bag", true,
-            [](const Ctx& c, bool tr) { EpSpec full; full.lootSec = 100; full.setup = [](Episode& e) { for (Src& s : e.W.src) if (s.kind == SrcKind::Corpse) { s.items.clear(); s.items.push_back({ Logi::ItemIdx("RestoreHealth03"), 2 }); } for (FState& f : e.W.fs) f.inv.s.erase(std::remove_if(f.inv.s.begin(), f.inv.s.end(), [](const Stack& s) { return Items()[Z(s.item)].kind == Kind::PotionH; }), f.inv.s.end()); e.W.R.carryCap = e.W.fs[0].inv.Weight() + 0.4f; };
-                EpSpec room = full; room.setup = [](Episode& e) { for (Src& s : e.W.src) if (s.kind == SrcKind::Corpse) { s.items.clear(); s.items.push_back({ Logi::ItemIdx("RestoreHealth03"), 2 }); } }; Rules r; const LT T;
+        auto fullBag = [](Episode& e) { for (Src& s : e.W.src) if (s.kind == SrcKind::Corpse) { s.items.clear(); s.items.push_back({ Logi::ItemIdx("RestoreHealth03"), 2 }); } for (FState& f : e.W.fs) f.inv.s.erase(std::remove_if(f.inv.s.begin(), f.inv.s.end(), [](const Stack& s) { return Items()[Z(s.item)].kind == Kind::PotionH; }), f.inv.s.end()); e.W.R.carryCap = e.W.fs[0].inv.Weight() + 0.4f; };
+        v.push_back({ "carry-full", "a follower at his carry limit and a body with potions he wants: only the equipment peek weighed before efd097dc (--loot-rule native1124=0), so he walks, takes nothing, and comes back", "the same with room in the bag", true,
+            [fullBag](const Ctx& c, bool tr) { EpSpec full; full.lootSec = 100; full.setup = fullBag;
+                EpSpec room = full; room.setup = [](Episode& e) { for (Src& s : e.W.src) if (s.kind == SrcKind::Corpse) { s.items.clear(); s.items.push_back({ Logi::ItemIdx("RestoreHealth03"), 2 }); } }; Rules r; r.native1124 = 0; const LT T;
                 return std::pair{ c.Bare("loot-backs", "melee", {}, full, r, T, tr), c.Bare("loot-backs", "melee", {}, room, r, T) }; },
             [](const LTally& t, const LTally& o) -> std::string { if (o.taken < 2) return "with room he did not take the potions"; if (t.legs + EvN(t, "arrived -- nothing to take") < 2) return "the full follower no longer walks to loot he cannot carry (the mirror no longer shows the fault)"; return ""; } });
+        // ── the looting fixes of efd097dc under the default rules. The player's walk is a scenario-only script in the frame of the first gate record (Episode::playerScript) ──
+        auto oneItem = [](Episode& e) { bool first = true; for (Src& s : e.W.src) { if (!first) s.items.clear(); first = false; } };
+        struct Way { double t; float along, side; };   // seconds after the walk begins, and where he is then: along block -> target, and to its left. Straight lines between. A step of 0 s is a jump
+        auto walk = [oneItem](std::vector<Way> w) { EpSpec sp; sp.lootSec = 80; sp.setup = [oneItem, w](Episode& e) { oneItem(e);
+                e.playerScript = [w, has = false, b = EQ::Vec3{}, tp = EQ::Vec3{}](Episode& x, double t) mutable { if (t < 20.0) return; if (!has) { if (x.W.gates.empty()) return; has = true; b = x.W.gates[0].block; tp = x.W.gates[0].tpos; }
+                    const double u = t - 20.0; std::size_t k = 0; while (k + 1 < w.size() && w[k + 1].t <= u) ++k; Way at = w[k]; if (k + 1 < w.size()) { const float q = static_cast<float>((u - w[k].t) / std::max(1e-6, w[k + 1].t - w[k].t)); at.along += q * (w[k + 1].along - at.along); at.side += q * (w[k + 1].side - at.side); }
+                    const float dx = tp.x - b.x, dy = tp.y - b.y, l = std::max(1.0f, std::hypot(dx, dy)); x.PutPlayer({ b.x + (dx * at.along - dy * at.side) / l, b.y + (dy * at.along + dx * at.side) / l, b.z }); }; }; return sp; };
+        static const char* const kPass = "GATED re-admitted: the player walked through the block point"; static const char* const kNear = "GATED re-admitted: the player stands at it";
+        const std::vector<Way> through = { { 0, -250, 0 }, { 4, 140, 0 } };
+        auto passRow = [&](const char* name, const char* field, std::vector<Way> w, bool lifts) {
+            v.push_back({ name, field, lifts ? "with LootTuning::gatePassU 0 (no pass lift)" : "the straight walk through the block point (must lift)", false,
+                [walk, w, through, lifts](const Ctx& c, bool tr) { Rules r; const LT T; LT T0; T0.gatePassU = 0; return std::pair{ c.Bare("loot-gate", "melee", {}, walk(w), r, T, tr), lifts ? c.Bare("loot-gate", "melee", {}, walk(w), r, T0) : c.Bare("loot-gate", "melee", {}, walk(through), r, T) }; },
+                [lifts](const LTally& t, const LTally& o) -> std::string { if (EvN(t, "GATED") + EvN(t, "GATED (target only)") < 1) return "no GATED record";
+                    if (lifts) { if (EvN(t, kPass) < 1) return "walking through the block point did not lift the gate"; if (EvN(t, kNear)) return "the near rule fired first (the scenario tests nothing)"; if (EvN(o, kPass)) return "lifted with gatePassU 0"; return ""; }
+                    if (EvN(t, kPass)) return "lifted as 'walked through' by a move that is not one"; if (EvN(o, kPass) < 1) return "the straight walk does not lift either (the scenario tests nothing)"; return ""; } }); };
+        passRow("gate-pass-real", "marth 11-24, 'real events or the player moving through': the player walks through the block point to the far side", through, true);
+        passRow("gate-pass-jitter", "the player steps back and forth 32 units about the block point, never past the shifted plane", [] { std::vector<Way> w; for (int i = 0; i < 20; ++i) w.push_back({ static_cast<double>(i), i % 2 ? 32.0f : -32.0f, 0 }); return w; }(), false);
+        passRow("gate-pass-beside", "the player crosses the plane 260 units to the side (over gatePassU)", { { 0, -250, 260 }, { 4, 140, 260 } }, false);
+        passRow("gate-pass-teleport", "the player jumps across in one sample, farther than a run can take him", { { 0, -250, 0 }, { 3, -250, 0 }, { 3, 140, 0 }, { 6, 140, 0 } }, false);
+        passRow("gate-pass-other-route", "the player reaches the item by another way, 600 units off the block point: the near rule may lift, never the pass rule", { { 0, -250, 0 }, { 5, -250, 600 }, { 10, 450, 600 }, { 16, 400, 0 } }, false);
+        { Scn& last = v.back(); const auto base = last.check; last.check = [base](const LTally& t, const LTally& o) -> std::string { if (const std::string w = base(t, o); !w.empty()) return w; return EvN(t, kNear) < 1 ? "standing at the item did not lift it (the near rule)" : ""; }; }
+        v.push_back({ "gate-no-idle", "locked-door-cycle under the default rules: the locked door never opened, two minutes. No idle lift, no walk-off lift", "the builds before efd097dc (--loot-rule native1124=0 --loot-rule gateEvents=0): the cycle", false,
+            [](const Ctx& c, bool tr) { EpSpec sp; sp.lootSec = 120; Rules r, old; old.native1124 = 0; old.gateEventsOnly = 0; const LT T; LT To; To.gateReadmitMoveU = 500.0f; return std::pair{ c.Bare("loot-gate", "melee", {}, sp, r, T, tr), c.Bare("loot-gate", "melee", {}, sp, old, To) }; },
+            [](const LTally& t, const LTally& o) -> std::string { if (EvN(t, "GATED re-admitted: idle (his own record lifted)")) return "an idle lift under the default rules"; if (t.stuckEpisodes) return "'stuck himself' at a locked door"; if (t.maxSrcLegs > 2) return "more than two legs to one item behind a locked door";
+                if (EvN(o, "GATED re-admitted: idle (his own record lifted)") + EvN(o, "GATED re-admitted: its follower left the block") < 1 || o.legs < 4) return "the old build no longer shows the cycle"; return ""; } });
+        v.push_back({ "gate-second-item", "N3: several items behind one locked door. The second one is the same gate, not stuck evidence", "the builds before efd097dc (--loot-rule native1124=0): stuck himself", false,
+            [](const Ctx& c, bool tr) { EpSpec sp; sp.lootSec = 120; Rules r, old; old.native1124 = 0; const LT T; return std::pair{ c.Bare("loot-gate", "melee", {}, sp, r, T, tr), c.Bare("loot-gate", "melee", {}, sp, old, T) }; },
+            [](const LTally& t, const LTally& o) -> std::string { if (EvN(t, "GATED (target only)") < 1) return "no target-only record"; if (EvN(t, "stuck himself")) return "'stuck himself' at a real gate"; if (EvN(o, "stuck himself") < 1) return "the old build was not stuck himself either (nothing to fix)"; return ""; } });
+        v.push_back({ "stall-same-item", "N2: the freeze-1117g place under the default rules. The same item blocked twice with no ground closed is a stall strike, not a reorder of one", "the builds before efd097dc (--loot-rule native1124=0): the 27 legs for one potion", false,
+            [](const Ctx& c, bool tr) { EpSpec sp; sp.lootSec = 120; Rules r, old; old.native1124 = 0; const LT T; return std::pair{ c.Bare("loot-freeze", "melee", {}, sp, r, T, tr), c.Bare("loot-freeze", "melee", {}, sp, old, T) }; },
+            [](const LTally& t, const LTally& o) -> std::string { if (EvN(t, "stall strike (no ground closed on the same item)") < 1) return "no stall strike"; if (t.leftRR) return "released, reachable loot left"; if (t.taken < o.taken) return "fewer stacks taken than the old build"; if (o.maxSrcLegs < 20) return "the old build no longer makes the 27 legs"; if (t.maxSrcLegs > 2 * static_cast<long>(Rules().stallStrikes)) return "more legs to the unreachable potion than two blocks a strike, and the second strike is sticky"; return ""; } });
+        v.push_back({ "carry-peek", "N4: carry-full under the default rules: every category's peek weighs the planned stack, so he never walks to a stack that does not fit", "the builds before efd097dc (--loot-rule native1124=0)", false,
+            [fullBag](const Ctx& c, bool tr) { EpSpec full; full.lootSec = 100; full.setup = fullBag; Rules r, old; old.native1124 = 0; const LT T; return std::pair{ c.Bare("loot-backs", "melee", {}, full, r, T, tr), c.Bare("loot-backs", "melee", {}, full, old, T) }; },
+            [](const LTally& t, const LTally& o) -> std::string { if (t.legs + EvN(t, "arrived -- nothing to take")) return "a leg to a stack that does not fit"; if (o.legs + EvN(o, "arrived -- nothing to take") < 2) return "the old build made no such leg (nothing to fix)"; return ""; } });
         return v;
     }
     inline int RunScenarios(const Data& D, const std::vector<SimClass>& all, const std::vector<SimClass>& t1, const std::string& which, bool test, bool trace) {
         Ctx c{ D, all, t1, stdout }; int bad = 0, ran = 0, findings = 0; const auto sc = Scenarios();
         for (const Scn& s : sc) { if (which != "all" && which != s.name) continue; ++ran; const auto [today, var] = s.run(c, trace); const std::string why = s.check(today, var);
-            if (s.finding) { ++findings; std::printf("LOOT-SCENARIO %-20s %s  (a fault of TODAY's rules, reproduced)\n    case: %s\n    variant: %s\n", s.name, why.empty() ? "REPRODUCED" : "NOT REPRODUCED", s.field, s.variant); if (!why.empty()) { std::printf("    %s\n", why.c_str()); ++bad; } }
+            if (s.finding) { ++findings; std::printf("LOOT-SCENARIO %-20s %s  (a fault of an older build, reproduced)\n    case: %s\n    variant: %s\n", s.name, why.empty() ? "REPRODUCED" : "NOT REPRODUCED", s.field, s.variant); if (!why.empty()) { std::printf("    %s\n", why.c_str()); ++bad; } }
             else { std::printf("LOOT-SCENARIO %-20s %s\n    case: %s\n    variant: %s\n", s.name, why.empty() ? "PASS" : "FAIL", s.field, s.variant); if (!why.empty()) { std::printf("    %s\n", why.c_str()); ++bad; } }
             if (!test) { PrintTally(today, "today"); PrintGate(today, "today"); PrintTally(var, "variant"); PrintGate(var, "variant"); }
             else std::printf("    today: taken %ld of %ld, left-RR %ld, coin left %ld, legs %ld (restarted %ld), gate rows failing %d | variant: taken %ld, left-RR %ld, coin left %ld, legs %ld, gate rows failing %d\n", today.taken, today.stacks0, today.leftRR, today.goldLeft, today.legs, today.legsRestarted, PrintGate(today, "", false), var.taken, var.leftRR, var.goldLeft, var.legs, PrintGate(var, "", false)); }
         if (!ran) { std::fprintf(stderr, "unknown loot scenario '%s'. Known:", which.c_str()); for (const Scn& s : sc) std::fprintf(stderr, " %s", s.name); std::fprintf(stderr, "\n"); return 2; }
-        if (test) std::printf("LOOT-TESTS %s: %d scenarios, %d failed (%d of them reproduce a fault of today's rules)\n", bad ? "FAIL" : "PASS", ran, bad, findings);
+        if (test) std::printf("LOOT-TESTS %s: %d scenarios, %d failed (%d of them reproduce a fault of the builds before efd097dc)\n", bad ? "FAIL" : "PASS", ran, bad, findings);
         return bad ? 1 : 0;
     }
 

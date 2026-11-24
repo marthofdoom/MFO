@@ -85,11 +85,17 @@ def main():
         return eff
 
     # ── spells ──
+    # what a spell's effects spawn (extract_world.py): a hazard row with its spell compiled by this same function. The summoned actors are built at the end (summon_specs)
+    def hazard_of(e):
+        h = e.get('hazard')
+        return dict(h, spell=spell_row(h['spell'])) if h and h.get('spell') else None
+
     def spell_row(s):   # the list.json spell schema (one C++ classifier reads both sources)
         return dict(edid=s['edid'], cost=s['cost'], castType=CASTTYPE[min(s['castType'], 3)], delivery=DELIVERY[min(s['delivery'], 4)], chargeTime=s['chargeTime'],
                     castDuration=s['castDuration'], range=s['range'], autoCalc=not (s['flags'] & 1), taught=False, recovery=s.get('recovery', 0.0), shout=bool(s.get('shout')),
                     effects=[dict(mag=e['mag'], area=e['area'], dur=e['dur'], hostile=e['hostile'], detrimental=e['detrimental'], skill=SCHOOL.get(e['school'], 'None'), resist=e['resist'],
-                                  minSkill=e['minSkill'], archetype=e['archetype'], av=e['av'], delivery=0, baseCost=e['baseCost'], conds=e['conds'], kw=e['kw']) for e in s['effects']])
+                                  minSkill=e['minSkill'], archetype=e['archetype'], av=e['av'], delivery=0, baseCost=e['baseCost'], conds=e['conds'], kw=e['kw'],
+                                  **({'summon': e['summon']} if 'summon' in e else {}), **({'hazard': hazard_of(e)} if hazard_of(e) else {})) for e in s['effects']])
 
     def passive(spell_ids, acc):   # constant abilities: resists / armor (ValueModifier 0 / PeakValueModifier 34 on a resist AV, unconditioned)
         for si in spell_ids:
@@ -259,14 +265,14 @@ def main():
 
     # perk multipliers by skill threshold (MODEL: the follower holds every playable perk of his weapon / magic tree his skill qualifies
     # for; a ranked chain is "the best entry whose skill requirement he meets")
-    ptab = dict(attack={}, power={}, spellMag={}, spellCost={}, armor={})
+    ptab = dict(attack={}, power={}, spellMag={}, spellCost={}, armor={}, summonLimit={})
     for p in perks:
         if not p or not p['playable']: continue
         req = [(c[1], c[4]) for c in p['conds'] if c[0] == 277 and isinstance(c[1], int) and 6 <= c[1] <= 23 and c[3] in (2, 3)]
         if not req: continue
         av, thr = max(req, key=lambda r: r[1])
         for e in p['entries']:
-            if e['type'] != 2 or e.get('fn') != 3 or 'v' not in e: continue
+            if e['type'] != 2 or 'v' not in e or (e.get('fn') != 3 and e.get('ep') != 68): continue
             ep = e.get('ep'); v = e['v']
             kws = [c[1] for c in e['conds'] if c[0] in (693, 560, 596) and isinstance(c[1], str) and c[4] == 1.0 and c[3] == 0]
             if ep == 35 and av in (6, 7, 8) and v > 1: ptab['attack'].setdefault(str(av), []).append([thr, v])
@@ -275,6 +281,7 @@ def main():
                 el = next((k for k in kws if k.startswith('MagicDamage')), 'all')
                 ptab['spellMag'].setdefault(SCHOOL[av] + ':' + el, []).append([thr, v])
             elif ep == 38 and 18 <= av <= 22 and 0 < v < 1: ptab['spellCost'].setdefault(SCHOOL[av], []).append([thr, v])
+            elif ep == 68 and av == 19: ptab['summonLimit'].setdefault('Conjuration', []).append([thr, v, e.get('fn')])   # ModCommandedActorLimit (0x44)
             elif ep == 85 and av in (11, 12) and v > 1: ptab['armor'].setdefault(str(av), []).append([thr, v])
     for t in ptab.values():
         for k in t: t[k] = sorted(t[k])
@@ -341,6 +348,42 @@ def main():
                follower=dict(races=frace, classes=fclass, weapons=wl, armor=al, arrows=arrows, bolts=bolts, perks=ptab, potions=pots),
                spells=[s for s in L.get('spells', [])], scrolls=[s for s in L.get('scrolls', [])], foeSpells=fspells, potionsRaw=len(W.get('potions', [])), stats=stats)
     if named: out['named'] = named
+    # WHAT A SUMMON SPELL SUMMONS: effect 'summon' = one index into summonSpecs per bucket (the caster's level picks the bucket, a PC level mult actor levels with the CASTER). Their own table, so the
+    # foes' role picks read the specs they always did. Built last: no earlier draw moves. A taught spell's spawn comes from the world extract by the spell's key.
+    pool = out['spells']; fx = W.get('spellFx') or {}; nfx = 0
+    for s in pool:
+        for i, r in fx.get(s.get('key', ''), {}).items():
+            if int(i) >= len(s['effects']): continue
+            e = s['effects'][int(i)]; nfx += 1
+            if 'summon' in r: e['summon'] = r['summon']
+            if r.get('hazard') and hazard_of(r): e['hazard'] = hazard_of(r)
+    ss_ix = {}; sspecs = []; memo = {}
+
+    def summon_specs(ref):
+        k = tuple(ref)
+        if k not in memo:
+            memo[k] = []
+            row = []
+            for b in BUCKETS:
+                ni = pick_actor(ref, b); si = build_spec(ni, b) if ni is not None else -1
+                if si < 0: row = None; break
+                key = json.dumps(specs[si], sort_keys=True)
+                if key not in ss_ix: ss_ix[key] = len(sspecs); sspecs.append(specs[si])
+                row.append(ss_ix[key])
+            memo[k] = row
+        return memo[k]
+    nspec = len(specs); nsum = nsumok = 0; done = 0
+    def resolve(rows_):
+        nonlocal nsum, nsumok
+        for s in rows_:
+            for e in s['effects']:
+                if 'summon' in e: nsum += 1; e['summon'] = summon_specs(e['summon']); nsumok += bool(e['summon'])
+    resolve(pool)
+    while done < len(fspells):   # a summoned caster's own spells join fspells meanwhile
+        batch = fspells[done:]; done += len(batch); resolve(batch)
+    del specs[nspec:]
+    out['summonSpecs'] = sspecs
+    print('   summon effects %d, with a resolved actor %d, summonSpecs %d, taught effects that spawn something %d' % (nsum, nsumok, len(sspecs), nfx))
     path = cache + a.name + '.sim.json'
     with open(path, 'w') as f: json.dump(out, f, separators=(',', ':'))
     print(path, 'specs', len(specs), 'encounters', len(encounters), 'spells', len(out['spells']), 'MB %.1f' % (os.path.getsize(path) / 1e6))
