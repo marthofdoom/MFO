@@ -363,6 +363,14 @@ namespace MFO::APMFBridge {
     // on an older Harbinger such a claim never fires and the never-fired release has no direct fallback.
     bool CastSeatsSupported();
 
+    // ABI v46 CAST SEAT COVERAGE (adopt-seats): APMF_ServeInfo::castSeats, the CastSeatCoverage bits of what this Harbinger's
+    // cast seats cover (which engine caster rows a kIntent_Cast claim can drive). Read only when abiVersion >= 46 (an older
+    // APMF writes nothing there); below that, or with Harbinger absent, 0. It describes the INSTALL, not an actor or spell, and
+    // never changes after kDataLoaded, so it is asked once per session through a CanServe dry run that files nothing; a
+    // 0 answer (asked before the seats were written, or every seat off) is asked again after kSeatsRetryMs, a non-zero one is
+    // kept for the session (Acquire() clears it). Any thread.
+    std::uint32_t CastSeatCoverage();
+
     // CARD G7 (Harbinger ABI v42, kCastFlag_CorpseTarget). Does the resolved Harbinger aim a Reanimate claim at the
     // corpse the claim names (its Reanimate caster seats, core/ReanimateSeat.cpp)? abiVersion >= 42 AND
     // Config::g_apmfCast. True: ClaimOffenseCast of a Reanimate-effect spell at another actor is filed with
