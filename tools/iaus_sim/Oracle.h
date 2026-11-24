@@ -370,7 +370,7 @@ namespace Sim {
             if (ServiceRun(F, ci)) return;   // card G3: a hide run or its hold stands
             if (!Fight::Up(x)) return;
             const bool held = x.hitAt >= 0 || F.now < x.staggerUntil || F.now < x.ctrlUntil || (x.actIaus && F.now < x.actEnd) || F.now < c.moveUntil;
-            Served sv; MakeSnapshot(F, ci, sv.sn); sv.g = Generate(sv.sn, c.gate, *iaus.T);
+            Served sv; MakeSnapshot(F, ci, sv.sn); sv.g = SimGenerate(sv.sn, c.gate, *iaus.T);
             FillCooldowns(c, sv.g.actions, F.now, *iaus.T); FillCooldowns(c, sv.g.postures, F.now, *iaus.T);
             TickIn in; in.now = F.now; in.rapportRank = 5; in.seed = c.seed; in.commitWindowSec = c.window;
             sv.d = Decide(c.mind, sv.g.actions, c.profile, *iaus.T, in);

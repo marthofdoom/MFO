@@ -68,6 +68,41 @@ namespace Sim {
 
     // The tuning every IausPolicy starts from (Tune.h points it at a searched copy; the default is the game's own).
 
+    // THE SPELL ESTIMATES OF ONE BOOK ENTRY, as the game's reader fills them (native iaus/Fills.cpp MeasureSpell, mirrored after fix/spell-worth).
+    //   measured   every spell, except an OFFENSE spell with an indirect effect (SimSpell::indirect, from the record's archetypes) and NO direct health
+    //              damage: Estimate::DamageUnmeasurable, native's own rule. A bolt with a rider is measured by its direct damage (a lower bound).
+    //   damage     one cast's health total; a concentration spell is counted for ONE second (Fills.cpp Total), where the lab's SimSpell holds its 2 s stream.
+    //   levelCap   the level cap of a Calm / Demoralize / Frenzy / Turn Undead effect (the record's magnitude; the lab has no cap perk).
+    // NOT IN THE EXTRACT, so not mirrored: effect and MGEF conditions (native counts conditional damage effects once, by the largest; the lab sums every
+    // effect), SPIT spellType (poisonType stays false: every spell reads magic resist first), the hazard a spell spawns (its damage is nobody's here).
+    // `--spell-rules old` is the reader of the 11-23 field run: any indirect effect = unmeasured, no level cap read. `all` = every spell measured.
+    [[nodiscard]] inline bool SpellMeasured(const SimSpell& s) {
+        const bool off = s.e.nature == Prune::Nature::Offense; const float direct = s.dmg + s.dot * s.dotDur;
+        if (g_spellRules == 2 || s.e.source != SpellSource::Spell) return true;
+        if (g_spellRules == 1) return !(off && s.indirect);
+        return !Estimate::DamageUnmeasurable(off, s.indirect, direct);
+    }
+    inline void FillSpellEstimate(const SimSpell& s, SpellEntry& e) {
+        const float per = s.e.concentration ? 0.5f : 1.0f;   // Data.h Classify doubled a stream's per-second numbers for its 2 s
+        e.measured = SpellMeasured(s);
+        e.damage = e.measured ? (s.dmg + s.dot * s.dotDur) * per : 0.0f; e.heal = (s.heal + s.hot * s.hotDur) * per; e.controlSec = s.ctrl ? s.ctrlDur : 0.0f;
+        e.levelCap = (g_spellRules == 0 && s.ctrl && !s.ctrlPar && s.ctrlMaxLevel < 1e8f) ? (std::max)(1.0f, s.ctrlMaxLevel) : 0.0f;
+    }
+    // Generate, and under `--spell-rules old` the facts as the game of the 11-23 field run filled them: an unmeasured offense spell's damage did not apply
+    // (expDamage < 0: DamageValue and Overkill off, so every such spell TIED), and the exploit term read the foe's resist for every spell (a measured one's
+    // resist was counted in the damage too). The other parts of fix/spell-worth (immune pairs dropped, the per-second comparison) stay as native has them.
+    [[nodiscard]] inline Generated SimGenerate(const Snapshot& sn, const ClassGate& gate, const Tuning& t) {
+        Generated g = Generate(sn, gate, t);
+        if (g_spellRules != 1) return g;
+        for (Candidate& k : g.actions) { if (k.family != Family::CastOffense || !k.form) continue;
+            const SpellEntry* e = nullptr; for (const SpellEntry& x : sn.book.entries) if (x.form == k.form) { e = &x; break; }
+            if (!e || e->source != SpellSource::Spell) continue;
+            if (!e->measured) { k.f.expDamage = -1.0f; k.f.expRate = -1.0f; k.f.effectRate = 0.0f; }
+            if (e->resistAv >= 0) for (const Combatant& f : sn.foes) if (f.id == k.target) { const float r = f.Resist(e->resistAv); k.f.resist = std::isfinite(r) ? r : 0.0f; break; }
+        }
+        return g;
+    }
+
     // a_t: the tuning the gather reads (the game's gather reads DefaultTuning().bowWeaponRange, iaus/Candidates.cpp; the lab reads the searched copy so
     // `t.bowRange` moves the gather and the generator together).
     inline void MakeSnapshot(const Fight& F, int ci, Snapshot& sn, const Tuning& a_t = *ActiveTuning()) {
@@ -140,7 +175,7 @@ namespace Sim {
             SpellEntry& e = sn.book.entries[i]; e.activeOn.clear();
             for (const auto& pr : c.active[i]) if (pr.second > F.now) e.activeOn.push_back(pr.first);
             e.liveSummon = c.summonUntil[i] > F.now;
-            if (F.estimates) { const SimSpell& s = c.build->spells[i]; e.damage = s.dmg + s.dot * s.dotDur; e.heal = s.heal + s.hot * s.hotDur; e.controlSec = s.ctrl ? s.ctrlDur : 0.0f; e.measured = true; }
+            if (F.estimates) FillSpellEstimate(c.build->spells[i], e);
         }
         sn.book.kit.arrows = self.spec->ranged.anim == 7 ? self.arrows : 0; sn.book.kit.bolts = self.spec->ranged.anim == 9 ? self.arrows : 0;
         {   // batch 3 part C: what his perks multiply (Snapshot::PerkRead), from the lab's perk chain (Load.h: atkMult at the melee weapon's skill,
@@ -472,7 +507,7 @@ namespace Sim {
             if (!Fight::Up(x)) return;
             MakeSnapshot(F, ci, sv.sn, *T);
             const auto t0 = timeIt ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
-            sv.g = Generate(sv.sn, c.gate, *T);
+            sv.g = SimGenerate(sv.sn, c.gate, *T);
             c.spellsHold = sv.g.spellsHold;
             if (g_mirror) {   // 11-17b (iaus/Candidates.cpp Build): the refused pairs are stamped (refreshed each lap they stay blocked), the cast layer learns the threat on the healer
                 std::erase_if(c.fireRefused, [&](const Ctl::FireRefusal& r) { return F.now - r.at > static_cast<double>((std::max)(0.0f, T->fireLineKeepSec)); });
@@ -493,6 +528,7 @@ namespace Sim {
             if (timeIt && subj) { const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count(); t.dSum += us; t.dMax = std::max(t.dMax, us); ++t.dN; }
             const Decision& d = sv.d; const auto& acts = sv.g.actions;
             c.wants = TopSpellPairs(d, acts);
+            for (const SpellTarget& w : sv.g.capQueued) if (std::find(c.wants.begin(), c.wants.end(), w) == c.wants.end()) c.wants.push_back(w);   // fix/spell-worth F2 (Candidates::NoteDecision a_extra): the pairs the book's cap would bar are asked, so the next lap knows
             if (F.g10Sticky) for (const SpellTarget& w : c.wants) if (std::find(c.asked.begin(), c.asked.end(), w) == c.asked.end()) c.asked.push_back(w);
             if (subj) Account(F, c, x, sv);
             // posture layer

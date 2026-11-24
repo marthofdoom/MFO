@@ -43,6 +43,9 @@ namespace Sim {
         // the game's own (iaus/Catalogue.cpp SetTuningScalar), so a found value ships.
         { "t.dyingAllyHp", &Tuning::dyingAllyHp }, { "t.dyingHitsToDown", &Tuning::dyingHitsToDown }, { "t.urgencyHitsDiv", &Tuning::urgencyHitsDiv },
         { "t.grossWindowSec", &Tuning::grossWindowSec }, { "t.maxHitWindowSec", &Tuning::maxHitWindowSec }, { "t.burstWindowSec", &Tuning::burstWindowSec },
+        // sim v4 batch C (the fix/spell-worth mirror): what an offense spell with no measurable damage is worth, as a share of his best measured one. Live
+        // since the lab has an unmeasured population (Policy.h SpellMeasured). The game's name (iaus/Catalogue.cpp SetTuningScalar), so a found value ships.
+        { "t.unmeasuredDamage", &Tuning::unmeasuredDamage },
     };
 
     // tune 2.11.1: the worth-the-gold table (iaus/ConsumableWorth.h WorthTable, carried in Tuning::worth) and the loot table
