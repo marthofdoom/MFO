@@ -27,6 +27,9 @@ namespace Sim {
         Decision  d;
     };
 
+    // The tuning every IausPolicy starts from (Tune.h points it at a searched copy; the default is the game's own).
+    inline const Tuning*& ActiveTuning() { static const Tuning* t = &DefaultTuning(); return t; }
+
     // The estimate inputs of one actor, from what the GAME can read of him: his drawn weapon (or the spell in his hand) through the
     // engine's own damage and rate model (I8 research 2.1 / 2.4), his armor, his magic resistance, the damage he has been taking.
     inline void FillEstimate(const Fight& F, const Body& o, Combatant& k) {
@@ -45,6 +48,10 @@ namespace Sim {
             k.hitsPerSec = (w.Has() ? w.speed : 1.0f) * static_cast<float>(ranged ? F.D->G("fCombatDPSBowSpeedMult", 0.2) : F.D->G("fCombatDPSMeleeSpeedMult", 1.0));
         }
         k.armor = ArmorMitigation(r, F.ArmorOf(o), sp.pieces); k.magicResist = F.ResistOf(o, kAvResistMagic); k.lossPerSec = o.recentDmg / 2.0f;
+        // SIM V3 `burst` (iaus/Fills.cpp:560-587, written with lossPerSec): the gross rate and the largest burst over the LIVE tuning's windows.
+        if (g_v3.burst) { const Tuning& lt = *ActiveTuning();
+            const double gw = std::min(kBurstKeepSec, lt.grossWindowSec > 0.0f ? double(lt.grossWindowSec) : 4.0), mw = std::min(kBurstKeepSec, lt.maxHitWindowSec > 0.0f ? double(lt.maxHitWindowSec) : 8.0);
+            Estimate::BurstReads(o.burst, F.now, gw, mw, lt.burstWindowSec > 0.0f ? lt.burstWindowSec : 0.5, k.grossPerSec, k.maxHit); }
     }
 
     // Concealment::Prepare: true when a FRESH point is known (younger than 3 s, of the kind asked). At most one pick per 1.5 s;
@@ -67,7 +74,6 @@ namespace Sim {
     // can be downed by the next such hit, and a heal takes about 1.8 s from the pick to landing (the Opus heal-timing diagnosis of 11-17,
     // 1.0 to 2.9 s), so a heal that BEGINS under the line is late. Heal timing is judged by this, not by the mean health at the heal.
     inline constexpr float kOneHitLine = 0.30f;
-    inline const Tuning*& ActiveTuning() { static const Tuning* t = &DefaultTuning(); return t; }
 
     // a_t: the tuning the gather reads (the game's gather reads DefaultTuning().bowWeaponRange, iaus/Candidates.cpp; the lab reads the searched copy so
     // `t.bowRange` moves the gather and the generator together).

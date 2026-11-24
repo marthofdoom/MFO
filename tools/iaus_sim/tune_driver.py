@@ -1238,7 +1238,11 @@ GLOBALS = [("t.momentum", 1.25, [1.0, 1.05, 1.1, 1.15, 1.2]), ("t.powerCd", 10.0
            # NOT searched here (review F3 of 5749026a): t.waivedRangeX and t.bowRange. The lab knows both (Tune.h), but the game's tuning file has no entry
            # for them (iaus/Catalogue.cpp SetTuningScalar), so a found value could not be shipped. They stay fixed placeholders until native adds the names.
            # fix/field-1117b-choice placeholders: the cast time a fire-and-forget spell's effect is divided by, the health under which his own heal gets the dying boost
-           ("t.spellCastSec", 1.5, [1.0, 2.0, 2.5]), ("t.dyingSelfHp", 0.25, [0.2, 0.3, 0.35])]
+           ("t.spellCastSec", 1.5, [1.0, 2.0, 2.5]), ("t.dyingSelfHp", 0.25, [0.2, 0.3, 0.35]),
+           # heal timing (native 11-17g, mirrored by the sim's `burst` switch since sim v4 slice 1): the ally's dying line, how many of his largest recent
+           # burst count as dying, the urgency divisor. The three sampling windows (t.grossWindowSec, t.maxHitWindowSec, t.burstWindowSec) are sized from
+           # the game's lap cadence (Core.h, principle 9) and are NOT searched: the lab samples every 133 ms whatever the party size.
+           ("t.dyingAllyHp", 0.25, [0.2, 0.3, 0.35]), ("t.dyingHitsToDown", 1.2, [1.0, 1.5, 2.0]), ("t.urgencyHitsDiv", 3.0, [2.0, 4.0, 5.0])]
 
 
 # ── the gap stage ────────────────────────────────────────────────────────────────────────────────────────────────────────────

@@ -39,6 +39,10 @@ namespace Sim {
         // first two by these names), the waived foe's range edge (fix/chase-waiver-veto), the bow's range past the chase cap (field 11-17 A3).
         { "t.concChannelSec", &Tuning::concChannelSec }, { "t.handRedrawSec", &Tuning::handRedrawSec }, { "t.waivedRangeX", &Tuning::waivedRangeX }, { "t.bowRange", &Tuning::bowWeaponRange },
         { "t.spellCastSec", &Tuning::spellCastSec }, { "t.dyingSelfHp", &Tuning::dyingSelfHp }, { "t.fireLineKeepSec", &Tuning::fireLineKeepSec },   // fix/field-1117b-choice placeholders
+        // heal timing (native 2de581de..ad4578a8, mirrored by the v3 switch `burst`): live only while Combatant::grossPerSec / maxHit are filled. The names are
+        // the game's own (iaus/Catalogue.cpp SetTuningScalar), so a found value ships.
+        { "t.dyingAllyHp", &Tuning::dyingAllyHp }, { "t.dyingHitsToDown", &Tuning::dyingHitsToDown }, { "t.urgencyHitsDiv", &Tuning::urgencyHitsDiv },
+        { "t.grossWindowSec", &Tuning::grossWindowSec }, { "t.maxHitWindowSec", &Tuning::maxHitWindowSec }, { "t.burstWindowSec", &Tuning::burstWindowSec },
     };
 
     // tune 2.11.1: the worth-the-gold table (iaus/ConsumableWorth.h WorthTable, carried in Tuning::worth) and the loot table

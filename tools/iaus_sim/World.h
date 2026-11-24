@@ -15,6 +15,7 @@
 #include "iaus_sim/Detect.h"
 
 #include "iaus/Reach.h"
+#include "iaus/Estimate.h"    // SIM V3 `burst`: LapGross / BurstReads, the game's own pure lap maths
 #include "iaus/Reposition.h"   // batch I: the spell range, the back-off need, the hidden step (the game's own pure functions)
 #include <unordered_map>
 #include "iaus_sim/Playstyles.h"
@@ -114,6 +115,12 @@ namespace Sim {
         std::vector<Effect> fx;
         std::vector<double> spellReady;  // per spec spell (foes) / per book entry (follower engine casts)
         float recentDmg = 0;             // decaying incoming damage per second (2 s window)
+        // SIM V3 `burst` (native iaus/Fills.cpp Track, 11-17g): his GROSS damage per sampled lap. One sample every TM::pump (each follower's lap samples every
+        // actor, Fills kLossMinDtSec 0.10 s, and a lap is served every 133 ms), the maths is the game's own Estimate::LapGross / BurstReads.
+        std::vector<MFO::Iaus::Estimate::BurstSample> burst;   // newest last, pruned past the longer window
+        float    burstHp = -1.0f;        // his health at the last sample (< 0 = never sampled)
+        unsigned burstN = 0;             // hit events on him since the last sample (the sink's g_taken; a hit the party caused is not one, review F1 of b98052f0)
+        float    burstFloor = 0.0f;      // the least those hits did: each attacker's own hit estimate after HIS armor / resistance estimate
         float dmgDealt = 0;
         int   arrows = 60, potions = 0;
         bool  rangedMode = false, casterMode = false;
@@ -337,6 +344,9 @@ namespace Sim {
     };
 
     struct Policy;   // decides for one follower when he is served (Policy.h)
+    struct Fight; struct Body;
+    inline void FillEstimate(const Fight& F, const Body& o, Combatant& k);   // Policy.h: the estimate inputs of one actor, as the game's gather reads them
+    inline constexpr double kBurstKeepSec = 30.0;   // Body::burst keeps its samples this long: past the longer of Tuning::grossWindowSec / maxHitWindowSec at any searched value (4 and 8 s shipped)
 
     struct Fight {
         const Data* D = nullptr;
@@ -369,6 +379,7 @@ namespace Sim {
         std::vector<Spawn> late;
         float foeHpTotal = 0;                      // every foe's full health, late ones included (Utility)
         double now = 0, nextPump = 0, maxSec = 150;
+        double burstAt = 0;                        // SIM V3 `burst`: the next gross-damage sample of every actor (Body::burst)
         double decCrossAt[10] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 }; bool decDowned = false;   // the decline record's per-fight state (Tally::decCross)
         int rr = 0;
         bool tauntVisible = true, engineCasts = true, g10Sticky = false, over = false;
@@ -686,6 +697,25 @@ namespace Sim {
             }
             (void)by;
         }
+        // SIM V3 `burst`: the game's hit sink (iaus/Fills.cpp, TESHitEvent on a follower or the player that no party member caused) and the per-lap sample.
+        // Called where the lab lands a HIT (a weapon blow, a spell's impact, a bash); a tick of a lasting effect raises no event and shows as the net drop.
+        void NoteHit(Body& x, const Body& by) {
+            if (!g_v3.burst || !estimates || by.Party() || !x.Party() || x.role == Role::Summon) return;
+            Combatant ae, xe; FillEstimate(*this, by, ae); FillEstimate(*this, x, xe);
+            const float est = ae.hitIsMagic ? ae.hit * (std::max)(0.0f, 1.0f - xe.magicResist / 100.0f) : ae.hit * (1.0f - xe.armor);
+            ++x.burstN; if (std::isfinite(est) && est > 0.0f) x.burstFloor += est;
+        }
+        void SampleBursts() {
+            for (Body& x : b) {
+                if (!x.alive) continue;
+                if (x.burstHp >= 0.0f) {
+                    const float gross = MFO::Iaus::Estimate::LapGross(x.burstHp - x.c.hp, x.burstN, x.burstFloor);
+                    if (std::isfinite(gross) && gross > 0.0f) x.burst.push_back({ now, gross });
+                }
+                x.burstN = 0; x.burstFloor = 0.0f; x.burstHp = x.c.hp;
+                std::erase_if(x.burst, [&](const MFO::Iaus::Estimate::BurstSample& s) { return now - s.t > kBurstKeepSec; });
+            }
+        }
         // returns the health actually removed
         float Hurt(Body& x, float dmg, Body* by, bool fromIaus = false) {
             if (g_calmBreaks && x.calmed && by && by->Party() && dmg > 0.0f && now < x.ctrlUntil) { x.ctrlUntil = now; x.calmed = false; }
@@ -805,6 +835,7 @@ namespace Sim {
             if (a.role == Role::Player) dmg *= r.diffByPC;
             if (a.ctl == 0) { if (Controlled(d)) { ++t.hitsOnControlled; if (power) ++t.powOnControlled; }
                 for (const Body& o : b) if (o.role == Role::Foe && Up(o) && now < o.ctrlUntil) { ++t.hitsWhileCtl; break; } }
+            NoteHit(d, a);
             const float dealt = Hurt(d, dmg, &a, fromIaus);
             // --draw-spoil P (MODEL, no engine source: whether a plain hit interrupts an NPC's draw is not decoded; a stagger already does):
             // a melee hit that lands on a body mid-draw spoils the draw with chance P (the arrow is not fired, he starts again).
@@ -823,7 +854,7 @@ namespace Sim {
             float k = mag * a.dmgScale * (1.0f - el) * (1.0f - mr);
             if (d.role == Role::Player) k *= r.diffToPC;
             if (a.role == Role::Player) k *= r.diffByPC;
-            if (s.dmg > 0) Hurt(d, s.dmg * k, &a, fromIaus);
+            if (s.dmg > 0) { NoteHit(d, a); Hurt(d, s.dmg * k, &a, fromIaus); }
             if (a.stealthy && d.role == Role::Foe && (s.dmg > 0 || s.ctrl)) { if (a.cloakUntil > now) a.cloakUntil = now; ForceDetect(a, d); }
             if (s.dmg > 0 && D->poise.on && D->poise.magicHealth > 0.0f) PoiseHit(a, d, s.dmg * k * D->poise.magicHealth);   // ActiveEffectHandler: health damage x the JSON's factor
             if (trace) std::fprintf(trace, "%7.2f  spell %s: %s -> %s (%u) dmg %.0f (x%.2f)%s  hp %.0f/%.0f\n", now, s.e.name.c_str(), a.c.name.c_str(), d.c.name.c_str(), d.c.id, s.dmg * k, k, s.ctrl ? " control" : "", d.c.hp, d.c.hpMax);
@@ -993,7 +1024,7 @@ namespace Sim {
                 if (tg && Up(*tg) && x.ctl >= 0 && kind != Act::Bash && g_learnReach) ctl[static_cast<std::size_t>(x.ctl)].reach.Observe(x.c.id, kReachWeapon, kReachSeedEdge, 1u, std::max(0.0f, x.swingDist - (tg->c.bodyRadius > 0.0f ? tg->c.bodyRadius : MFO::Iaus::ReachBook::kRefRadius)), !whiff);   // Fills.cpp LearnReach: one outcome, a chain of one swing, the EDGE distance at its start
                 if (whiff && x.ctl == 0 && kind == Act::Power && x.actIaus) ++t.powerWhiffs;
                 if (!tg || !Up(*tg) || whiff) return;   // whiff
-                if (kind == Act::Bash) { Hurt(*tg, 3.0f, &x); if (D->poise.on) PoiseHit(x, *tg, PoiseDamage(x, *tg, 0.0f, false, false, true, 0.0f)); else Stagger(*tg, TM::bashStagger, &x); return; }
+                if (kind == Act::Bash) { NoteHit(*tg, x); Hurt(*tg, 3.0f, &x); if (D->poise.on) PoiseHit(x, *tg, PoiseDamage(x, *tg, 0.0f, false, false, true, 0.0f)); else Stagger(*tg, TM::bashStagger, &x); return; }
                 Physical(x, *tg, WeaponDamage(D->rules, *x.spec, x.spec->melee, kind == Act::Power) * FortifyDmg(x), kind == Act::Power, false, x.actIaus);
             } else if (kind == Act::Shoot) {
                 if (!tg) return;
@@ -1541,6 +1572,7 @@ namespace Sim {
         void IntoRoom(Body& o, float r) { if (!(arenaR > 0.0f)) return; const float ox = o.c.x - arenaX, oy = o.c.y - arenaY, od = std::hypot(ox, oy); if (od > r) { o.c.x = arenaX + ox * r / od; o.c.y = arenaY + oy * r / od; } }
         void StepWorld() {
             SetArena();
+            if (g_v3.burst && estimates && now >= burstAt) { burstAt += TM::pump; SampleBursts(); }
             for (std::size_t i = 0; i < b.size(); ++i) {
                 Body& x = b[i]; if (!x.alive) continue;
                 if (x.c.downed) { if (now >= x.downUntil) { x.c.downed = false; x.c.hp = std::max(x.c.hp, D->rules.bleedoutDefault * x.c.hpMax); } continue; }
