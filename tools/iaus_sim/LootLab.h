@@ -184,10 +184,12 @@ namespace Sim::Loot {
                 if (sl.phase == Phase::Walking) { ++walking; for (std::size_t o = f + 1; o < W.fs.size(); ++o) if (W.fs[o].slot.active && W.fs[o].slot.phase == Phase::Walking && W.fs[o].slot.target == sl.target) t.twoOnOneSec += TM::dt; } }
             (void)walking;
         }
-        // "Walking past wanted loot": once a loot tick, per follower on a leg or following: a source within reach that holds what his own plan would take
-        // now (released, not barred, not blocklisted) is noted, and counted when he has left it behind with that still true.
+        // "Walking past wanted loot": once a loot tick, per follower on a leg or following: a source within reach that holds what the SHIPPED table's plan
+        // would take now with his bag (released, not barred, not blocklisted) is noted, and counted when he has left it behind with that still true.
+        // The shipped table and not the one under search, as in Finish (review S3): a table that wants nothing walks past nothing.
         void PastCheck(int fi) {
             FState& f = W.fs[Z(fi)]; if (f.near.size() < W.src.size()) f.near.resize(W.src.size(), 0); const EQ::Vec3 fp = World::P(W.BodyOf(fi)); if (f.stuck || W.combat) return; std::vector<Cat> plan;
+            static const MFO::Iaus::LootTuning kShipped; struct Swap { World& w; const MFO::Iaus::LootTuning* t; bool wide; ~Swap() { w.T = t; w.oracleWide = wide; } } swap{ W, W.T, W.oracleWide }; W.T = &kShipped; W.oracleWide = false;
             for (std::size_t i = 0; i < W.src.size(); ++i) { const Src& s = W.src[i]; const float d = World::D3(fp, s.p); if (!f.near[i] && d > W.R.grab) continue; if (f.near[i] && d <= W.R.grab + 150.0f && d > W.R.grab) continue;
                 bool want = false; if (!s.owned && !s.locked && !s.barred && s.kind != SrcKind::Flora && !(W.town && s.kind == SrcKind::Container) && !W.FailedPeek(s, static_cast<int>(i))) { if (plan.empty()) plan = W.Plan(f, 1);
                     for (Cat c : plan) if (c != Cat::Steal && W.TierReleasedPeek(c, s) && !W.Picks(f, s.items, c, true).empty()) { want = true; break; } }
@@ -252,7 +254,8 @@ namespace Sim::Loot {
                     else if (s.island >= 2) { why = "island verdict"; rr = true; }
                     else if (F.now - s.capAt < 5.0) { why = "candidate cap (48, in ref order before the sort)"; rr = true; }
                     else { bool inScan = false; for (std::size_t f = 0; f < W.fs.size(); ++f) inScan = inScan || World::D3(World::P(W.BodyOf(static_cast<int>(f))), s.p) <= W.R.lootRadius; why = inScan ? "ignored" : "beyond every follower's scan radius"; rr = true; }
-                    ++t.left[why]; if (rr) ++t.leftRR; if (!rr && !std::strncmp(why, "player dibs", 11) && reach && World::D3(World::P(pl), s.p) <= W.R.departRadius) { ++t.dibsNear; if (gold) ++t.goldDibsNear; } if (gold) { ++t.goldLeft; if (rr) ++t.goldLeftRR; } if (museum) { ++t.museumLeft; if (rr) ++t.museumLeftRR; }
+                    ++t.left[why]; if (rr) { ++t.leftRR; (FreeTier(via) ? t.waits : t.waitsDibs).push_back(static_cast<float>(F.now - std::max(s.born, W.lastCombatEnd))); }   // a CENSORED wait: left released and reachable, it has waited at least until now. Without it the wait rows read only what was taken, and a table that takes less waits less
+                    if (!rr && !std::strncmp(why, "player dibs", 11) && reach && World::D3(World::P(pl), s.p) <= W.R.departRadius) { ++t.dibsNear; if (gold) ++t.goldDibsNear; } if (gold) { ++t.goldLeft; if (rr) ++t.goldLeftRR; } if (museum) { ++t.museumLeft; if (rr) ++t.museumLeftRR; }
                     W.Log("[left] %s x%d in %s %u: %s (via %s; follower 0 at %.0f u, player at %.0f u, navDist %.0f, dispatches %d, arrivals %d)", d.edid, st.count, SrcName(s.kind), s.id, why, via == Cat::kCount ? "-" : CatName(via), World::D3(World::P(W.BodyOf(0)), s.p), World::D3(World::P(pl), s.p), s.navDist, s.dispatches, s.arrivals); } }
             W.T = liveT; W.oracleWide = liveWide;
             Values();
