@@ -1,0 +1,15 @@
+# The mesh says the two rooms join at a/b. The truth is a wall there. The real way round is the long corridor. (trust-ignored-wall)
+nopool
+class fixture_trust
+map
+#######################
+#P........#...........#
+#........ab.......F...#
+#.........#...........#
+#.........#...........#
+#.........#...........#
+#.....................#
+#######################
+end
+defect a b
+defect b a

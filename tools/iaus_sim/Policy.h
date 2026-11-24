@@ -204,7 +204,7 @@ namespace Sim {
             if (n != sn.willWork.end()) n->answer = Tri::No; else sn.willWork.push_back({ r.spell, r.foe, Tri::No }); }
         for (const SpellTarget& w : (F.g10Sticky ? c.asked : c.wants)) {   // G10: only the pairs the last decision ranked on top have an answer (main); sticky = experiment
             const Body* d = F.Find(w.target); if (!d) continue;
-            for (std::size_t i = 0; i < c.book.entries.size(); ++i) if (c.book.entries[i].form == w.spell) sn.willWork.push_back({ w.spell, w.target, F.WillWork(c.build->spells[i], *d) });
+            for (std::size_t i = 0; i < c.book.entries.size(); ++i) if (c.book.entries[i].form == w.spell) sn.willWork.push_back({ w.spell, w.target, F.WillWorkFor(c, c.build->spells[i], *d) });
             if (std::find(c.wwMirror.begin(), c.wwMirror.end(), w) == c.wwMirror.end()) const_cast<Ctl&>(c).wwMirror.push_back(w);   // the ask is the prefetch
         }
     }
@@ -418,10 +418,14 @@ namespace Sim {
                 thrashed = true;
             }
             const std::uint32_t target = hostile ? tg->c.id : (k.target ? k.target : x.c.id);
+            // cast/CastOn.cpp:744: past Tuning::occludedClaimReleaseSec of his OWN ray reading the foe occluded the pair is held off while it still reads so, "so the next lap picks another foe, a buff or a reposition"
+            if (g_v4.caststart && hostile) { const auto oi = c.occSince.find(tg->c.id); const float lim = ActiveTuning()->occludedClaimReleaseSec;
+                if (lim > 0.0f && oi != c.occSince.end() && F.now - oi->second >= static_cast<double>(lim)) { if (subj) ++t.castOccRelease; return Fired::Declined; } }
+            if (g_v4.caststart && hostile && c.CastHeld(k.form, tg->c.id)) { if (subj) ++t.castHeldTurns; return Fired::Declined; }   // SIM V4: held off this fight (cast/CastOn.cpp:470 "offense claim never started this fight: held off"). The picker still ranks it and the refusal COSTS THE TURN, as in the game (review F4)
             if (hostile) {   // cast/Fire.cpp:430: a spell that can never affect this target is passed over, transparently, once the mirror has a verdict
                 const SpellTarget pr{ k.form, tg->c.id }; const bool known = std::find(c.wwMirror.begin(), c.wwMirror.end(), pr) != c.wwMirror.end();
                 if (!known) c.wwMirror.push_back(pr);
-                else if (F.WillWork(s, *tg) == Tri::No) { if (subj) ++t.wwDeclined; return Fired::Declined; }
+                else if (F.WillWorkFor(c, s, *tg) == Tri::No) { if (subj) ++t.wwDeclined; return Fired::Declined; }
             }
             if (subj) {
                 if ((fam == Family::CastOffense || (fam == Family::Scroll && hostile)) && e.resistAv >= 0) { ++t.elemCasts; const float r = F.ResistOf(*tg, e.resistAv); if (r >= 50.0f) ++t.resistedCasts; if (r < 0.0f) ++t.weakCasts; if (r >= 100.0f) ++t.immuneCasts; }

@@ -116,7 +116,9 @@ namespace Sim {
         SimSpell s; s.e.name = n; s.e.nature = na; s.e.resistAv = resistAv; s.e.role = Prune::RoleOf(na, resistAv); s.e.cost = cost; s.cost0 = cost; s.school = school; s.skillReq = tier;
         s.e.selfDelivery = na == Prune::Nature::Buff || na == Prune::Nature::Summon; s.e.reach = s.e.selfDelivery ? 0.0f : 4096.0f; s.dmg = dmg; s.heal = heal; s.castSec = cast;
         s.e.areaUnits = Prune::BlastUnits(areaFt, 0.0f, false); s.element = resistAv == kAvResistFire ? "fire" : resistAv == kAvResistFrost ? "frost" : resistAv == kAvResistShock ? "shock" : "";
-        s.summon = na == Prune::Nature::Summon; s.ctrl = na == Prune::Nature::Control; return s;
+        s.summon = na == Prune::Nature::Summon; s.ctrl = na == Prune::Nature::Control;
+        s.row = na == Prune::Nature::Control ? kRowNone : kRowSeated;   // SIM V4: the built-in spells' engine rows (Data.h SimRow). A fear keys no row; Paralyze is set where it is made
+        return s;
     }
 
     // SIM V3 fixtures (hand-written, the SHAPE of Skyrim.esm's Flame Cloak and Circle of Protection, and of the concentration self buff of the
@@ -164,7 +166,7 @@ namespace Sim {
         SimSpell hh = Fx("HealOther", N::Heal, kAvRestoration, -1, 80, 0, 75, 0, 0.5f, 50); hh.healOther = true;
         SimSpell oak = Fx("Oakflesh", N::Buff, kAvAlteration, -1, 103, 0, 0, 0); oak.armor = 40; oak.buffDur = 60; oak.e.meleeBuff = true;
         SimSpell fear = Fx("Fear", N::Control, kAvIllusion, -1, 156, 0, 0, 0, 0.5f, 25); fear.ctrlFlee = true; fear.ctrlDur = 30; fear.ctrlMaxLevel = 9;
-        SimSpell para = Fx("Paralyze", N::Control, kAvAlteration, -1, 450, 0, 0, 0, 0.5f, 75); para.ctrlPar = true; para.ctrlDur = 10;
+        SimSpell para = Fx("Paralyze", N::Control, kAvAlteration, -1, 450, 0, 0, 0, 0.5f, 75); para.ctrlPar = true; para.row = kRowParalyze; para.ctrlDur = 10;
         SimSpell atro = Fx("ConjureFlameAtronach", N::Summon, kAvConjuration, -1, 150, 0, 0, 0, 0.5f, 25);
         for (SimSpell* s : { &flames, &fb, &is, &lb, &fball, &heal, &fheal, &hh, &oak, &fear, &para, &atro }) { ++b.rawSpells; ++b.taughtSpells; AddPoolSpell(b, SimSpell(*s)); }
         // card G7 fixtures (hand-written, the SHAPE of Skyrim.esm's Raise Zombie .. Dead Thrall ladder: a level cap that grows with the tier, 60 s; the numbers are fixtures, not read from the game)

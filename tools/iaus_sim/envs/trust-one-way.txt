@@ -1,0 +1,14 @@
+# The edge a/b is walkable from the west only. Coming back is the long way. (trust-one-way)
+nopool
+class fixture_trust
+map
+#######################
+#P........#...........#
+#........ab.......F...#
+#.........#...........#
+#.........#...........#
+#.........#...........#
+#.....................#
+#######################
+end
+defect b a

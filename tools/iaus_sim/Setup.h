@@ -140,6 +140,9 @@ namespace Sim {
         bool  engageOnSight = false;   // the fight models Harbinger's ch.21 entry (Fight::entryRoad): his first engine target is his Standing entry foe
         int   onSubjectN = 0;      // the first N foes start on the subject and stay on him 8 s (the others follow foesOnPlayer): a fight on two fronts
         bool  perchPath = false;   // the ledge has a way up (a tower's stair): a blade that files the 128 approach on it paths there (World.h Brain, the climb MODEL)
+        // SIM V4 (V4::env): the place. null = drawn from the run's pool by the fight's seed. envExact = the party stands at the place's first entry and the
+        // foes at its first actor spawn point, whatever foeDist says (the hand-made scenario fixtures). envFoesAt >= 0: that spawn point instead.
+        const SimEnv* env = nullptr; bool envExact = false; int envFoesAt = -1;
     };
 
     // TODAY'S PACKAGE: MFO's own three stance styles (MFO_GenerateESP.py make_csty, CSGD verbatim; CSCR from the vanilla style it
@@ -263,6 +266,38 @@ namespace Sim {
         food(0, 0xFC000001u, 15.0f, 10.0f, "FoodCheeseWheel01A");
         food(1, 0xFC000002u, 15.0f, 8.0f, "FoodVenisonStew");
     }
+    // SIM V4: put a fight that was laid out on the plane into a place (iaus-sim-v4.md 1.4). The party stands at an entry (a load door) of the
+    // largest walk component, else at a drawn triangle of it. The foes' centre is an actor spawn point at about foeDist of PATH from there when
+    // the place has one, else a triangle at that path distance (the farthest when the place is smaller). BOTH SIDES ARE IN ONE WALK COMPONENT.
+    // Each body keeps its offset from its group's centre, turned so the plane's party-to-foes line lies along the place's, and walks that
+    // offset from the centre in a straight line that stops at a wall (so nobody starts in the next room). Every draw is a hash of the
+    // fight's seed: the fight's own random stream is not touched, and its builds and foes are the plane's for the same seed.
+    inline void EnvPlace(Fight& F, const FightSpec& fs, float cx, float cy, float ang) {
+        const SimEnv* E = fs.env; if (!E) { const std::vector<const SimEnv*>& pool = tl_envDraw ? *tl_envDraw : g_envPool.draw; if (pool.empty()) return; E = pool[SimEnv::Mix(fs.seed ^ 0x7F4A7C15D1B54A32ULL) % pool.size()]; }
+        std::uint64_t hs = fs.seed * 0xC2B2AE3D27D4EB4FULL + 0x165667B19E3779F9ULL; auto next = [&]() { hs = SimEnv::Mix(hs); return hs; };
+        F.env = E; F.doors = E->doors0; F.doorStamp = 0; F.occ.clear(); F.interior = E->interior;
+        const EQ::View v = E->View(F.doors, 0); const std::size_t nt = E->tris.size();
+        EnvPoint anchor; { std::vector<const EnvPoint*> c; for (const EnvPoint& p : E->entries) if (E->walk[static_cast<std::size_t>(p.tri)] == 0) c.push_back(&p);
+            if (!c.empty()) anchor = fs.envExact ? *c[0] : *c[next() % c.size()];
+            else { std::size_t i = next() % nt; while (E->walk[i] != 0) i = (i + 1) % nt; anchor.tri = static_cast<std::int32_t>(i); anchor.p = EQ::Centroid(v, anchor.tri); } }
+        const auto field = E->Field(anchor.tri); const std::vector<float>& fd = *field;
+        EnvPoint foe; bool have = false; const float D0 = std::max(300.0f, fs.foeDist);
+        if (fs.envFoesAt >= 0 && static_cast<std::size_t>(fs.envFoesAt) < E->spawns.size()) { foe = E->spawns[static_cast<std::size_t>(fs.envFoesAt)]; have = true; }
+        else if (fs.envExact && !E->spawns.empty()) { foe = E->spawns[0]; have = true; }
+        if (!have) { std::vector<const EnvPoint*> c; for (const EnvPoint& p : E->spawns) { const float d = fd[static_cast<std::size_t>(p.tri)]; if (d >= 0.6f * D0 && d <= 1.4f * D0) c.push_back(&p); }
+            if (!c.empty()) { foe = *c[next() % c.size()]; have = true; } }
+        if (!have) { std::size_t cnt = 0; for (std::size_t i = 0; i < nt; ++i) if (fd[i] >= 0.9f * D0 && fd[i] <= 1.1f * D0) ++cnt;
+            if (cnt) { std::size_t k = next() % cnt; for (std::size_t i = 0; i < nt; ++i) if (fd[i] >= 0.9f * D0 && fd[i] <= 1.1f * D0 && k-- == 0) { foe.tri = static_cast<std::int32_t>(i); foe.p = EQ::Centroid(v, foe.tri); have = true; break; } } }
+        if (!have) { float best = -1.0f; for (std::size_t i = 0; i < nt; ++i) if (fd[i] < 1e29f && fd[i] > best && fd[i] <= 1.1f * D0) { best = fd[i]; foe.tri = static_cast<std::int32_t>(i); } if (foe.tri < 0) foe = anchor; else foe.p = EQ::Centroid(v, foe.tri); }
+        float ux = foe.p.x - anchor.p.x, uy = foe.p.y - anchor.p.y; const float ul = std::hypot(ux, uy); if (ul > 1.0f) { ux /= ul; uy /= ul; } else { ux = 1.0f; uy = 0.0f; }
+        const float th = std::atan2(uy, ux) - ang, ct = std::cos(th), st = std::sin(th); const EQ::Walker anyone;
+        auto put = [&](float px, float py, bool withFoes, EQ::Vec3& out) { const EnvPoint& base = withFoes ? foe : anchor; const float ox = withFoes ? px - cx : px, oy = withFoes ? py - cy : py;
+            const EQ::Walk w = EQ::WalkLine(v, base.tri, base.p, { base.p.x + ox * ct - oy * st, base.p.y + ox * st + oy * ct, base.p.z }, anyone); out = w.end; return w.tri; };
+        for (Body& x : F.b) { EQ::Vec3 p; const std::int32_t t = put(x.c.x, x.c.y, x.role == Role::Foe && !(fs.ring > 0.0f), p); x.c.x = p.x; x.c.y = p.y; x.c.z = p.z; x.nav = Nav{}; x.nav.tri = t; x.perch = false; x.rec.lx = p.x; x.rec.ly = p.y; }
+        for (Body& x : F.b) if (x.role == Role::Foe) { const Body* ft = F.Find(x.c.targetId); Fight::Face(x, ft ? ft->c.x : F.b[0].c.x, ft ? ft->c.y : F.b[0].c.y); }
+        for (Spawn& s : F.late) { EQ::Vec3 p; put(s.x, s.y, true, p); s.x = p.x; s.y = p.y; }
+    }
+
     inline Fight BuildFight(const Data& D, const FightSpec& fs, const std::vector<SimClass>& t1) {
         Fight F; F.D = &D; F.dg = Detect::Load(D); F.R.g.seed(fs.seed); F.V.g.seed(fs.seed * 0xA24BAED4963EE407ULL + 0x9FB21C651E98DF25ULL); Rng& R = F.R; F.avSeed = fs.seed * 0xD6E8FEB86659FD93ULL + 0x2545F4914F6CDD1DULL;
         // the player model: a T1 kit of his own, run by the same engine-AI model (no IAUS)
@@ -322,6 +357,7 @@ namespace Sim {
         const int no = fs.occluders >= 0 ? fs.occluders : fs.interior ? G.I(1, 3) : G.I(0, 1);
         for (int i = 0; i < no; ++i) { const float tt = G.U(0.3f, 0.75f); const float ox = G.U(-350, 350), oy = G.U(-350, 350), orad = G.U(60, 140); F.occ.push_back({ cx * tt + ox, cy * tt + oy, orad }); }
         { const float ca = std::cos(ang), sa = std::sin(ang); for (const FightSpec::Cover& k : fs.cover) F.occ.push_back({ k.u * ca - k.v * sa, k.u * sa + k.v * ca, k.r }); }
+        if (g_v4.env) EnvPlace(F, fs, cx, cy, ang);   // SIM V4: the same fight, in a place
         if (fs.geoSeed) F.R.g.seed(fs.geoSeed * 0x9E3779B97F4A7C15ULL + 0x5851F42D4C957F2DULL);   // the fight opens on the same random state whatever the subject's build drew
         return F;
     }

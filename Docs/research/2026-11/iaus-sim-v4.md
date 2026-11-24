@@ -882,3 +882,153 @@ Reported, not made.
 - **Native, heal timing**: the three windows are sized for a party of ten sampling every 1.3 s, while each follower's snapshot samples every ally every lap (0.133 s). The comment in `Core.h` says both. A window per party size is not a tunable the lab can find (9.1).
 - **Field probe**: the hit lines would support per-event sizes directly with two more fields that the sink already has in hand: the event's own damage is not available to it, but the health AT the event is (`at-event`, main thread only) and it is NaN on 90 percent of lines. A main-thread read posted for every probed hit would turn windows into events.
 - **`_evidence`**: `deck-run-1117c`, `1117d` and `1117e` hold the same session's log. `calib_damage.py` counts it once and says so.
+
+## 13. Batch W as built (branch `feat/sim-v4-world`, 2026-11-23)
+
+Slices S2 to S6 in one batch. The flat world is untouched: `--world v3` (still the default) and `--world v2` compare with 0 metrics changed against their baselines. The new world is `--world v4`, with its own baseline `tools/iaus_sim/baseline_v4_builtin.txt` on the hand-made fixtures.
+
+### 13.1 Where things are
+
+| What | Where | To change it |
+|---|---|---|
+| The pure geometry the game will share: `View`, `FindPath`, `WalkLine`, `CastRay`, `BuildGrid`, `BuildWalls`, `LabelComponents` | `native/iaus/EnvQuery.h`, `EnvQuery.cpp`, `PathSearch.cpp`. In `native/CMakeLists.txt` so MSVC compiles them. NO caller in the DLL | a link kind: `kLinkKinds`. A path cost: `PathTuning`. A sight rule: `SightTuning`. One table each |
+| The loader, the route cache, the pool of places | `tools/iaus_sim/Env.h` | body and following numbers: `EnvTuning`. The v4 switches: `V4` |
+| Bodies on the mesh: movement, doors, body circles, leg ends, sight, the six tallies | `tools/iaus_sim/EnvWorld.h` | |
+| Placement of a fight in a place | `tools/iaus_sim/Setup.h EnvPlace` | |
+| Hand-made fixtures | `tools/iaus_sim/envs/<name>.txt` and the `.mfoenv` each becomes (`make_fixtures.py`, `--check` in the CLI suite) | draw a map, run the script, add the name to `Env.h kFixtureNames` |
+| Known-answer checks (81 after the review rounds) | `tools/iaus_sim/EnvTest.h`, `sim --env-test`. The solo walk is `sim --solo-walk N [--env-set all]` | |
+| Environment scenarios | `Scenarios.h` `envScen(...)`, `--scenario env` or by name | |
+| The pathing gate | `sim.cpp PathReport`, `kPathBounds`, `--path-report N [--path-oracle K] [--path-gate]` | a bound: `kPathBounds` |
+| Cast starts | `Data.h SimRow`, `SimRowSeated` (native's own `cast/SeatRows.h RowSeated`), `World.h StartCast`, `WillWorkFor`, `NoteZeroEffect`, `Policy.h` | a row: a value in `SimRow` and its key in `SimRowOf`. A row Harbinger seats: `native/cast/SeatRows.h kRows` (the lab includes that file) |
+| Field rates for the gate's numbers | `tools/iaus_sim/calib_path.py <run-dir>` | a log line: one row of `ROWS` |
+
+CLI: `--world v4`, `--v4 env|path|bodies|los|caststart|interrupt|drops|foedrops=on|off`, `--env <file>`, `--env-set <set>|all [--env-class <class>]`, `--env-list`, `--env-test`, `--sight walls=off|terrain=off|gap=<u>`, `--seats today|old`, `--seat-immunity seen|unseen`, `--solo-walk N`, `--path-report`, `--path-oracle`, `--path-gate`. Diagnostics by environment variable: `SIM_PATHTRACE=<job> [SIM_PATHTRACE_ENV=<class>]` traces one fight of a path report, `SIM_ENVBAD=1` prints every off-mesh body.
+
+### 13.2 What differs from the design above, and why
+
+- **A route is asked centroid to centroid.** The cache of 2.7 is keyed by (triangle, triangle, door stamp, walker). A value that depended on the exact start point would depend on which thread asked first. So the cached route runs between the two triangles' centres, the mover swaps the last corner for his own goal, and a straight walk is tried first with the exact points. Runs are the same at 1 and at 16 threads (checked on the baseline).
+- **The corridor A* picks need not hold the straight line**, so `FindPath` drops every corner a straight walk makes needless, after the funnel.
+- **In-cell doors have no DOOR row.** Measured on the 11-23 library: 165 DOOR rows, all load doors. The 132 plain doors (30 locked) are REFS rows only. The loader joins each to the triangles its leaf crosses (the long side of its box, turned by the ref's rotation). MODEL: a plain door starts closed. This belongs in the extractor.
+- **Walls have a height range.** A boundary edge is a wall, the face under a ledge, the foot of a cliff, or nothing (a balcony over more floor), found by probing for the next floor past the edge. A ledge can be seen over. A closed door blocks sight at its leaf.
+- **The leash.** The plane's rule (walk back when past the radius, walk out again when inside) steps in and out of the radius three times a second. On the plane nobody could see it. Here it was 14 to 20 reversals a minute for a Knight. In the v4 world he stands within 150 units past the radius (`World.h kLeashStandU`, MODEL: the engine does not pursue past it). v3 is unchanged.
+- **No blow through a wall or a closed door** (`EnvMeleeClear`): on the plane reach was distance alone.
+- **Water** is a cost (the extractor's README), not closed as 2.2 first said.
+- **The environment scenarios measure today's behaviour.** The pass rules of 8.5 need the movement decision (M1). Until then each scenario prints its numbers and three of them are pinned in the CLI suite as what the lab reproduces: the tower is climbed by its ramp, a blade under a floor nothing joins stands pinned the whole fight, and a blade pushes at a wall the mesh does not know.
+
+### 13.3 Not built, or built smaller than the section says
+
+- The gate's bounds are PLACEHOLDERS (`kPathBounds`). `--path-oracle K` measures oracle-relative bounds on the same fights and prints `ORCPATH` lines. It was not run at size: that is the pre-tune measurement of 10.3 item 3.
+- `t.sharedRadiusMargin` and `t.preemptSettle` are still not mirrored. `t.occClaimRelease`, `t.offApproachBackoff` and `t.offApproachDropCap` are.
+- A plain hit does not interrupt a charge (the assumption of 5.3, off). A stagger, a paralysis and a calm already did. A fear now does, and all are counted (`cs.intr/f`, `cs.foeIntr/f`).
+- The engine row of a spell is the lab's reading of `cast/Archetype.cpp kRows` from the fields the extract has (`Data.h SimRowOf`). The shared pure classifier of 5.3 is still a native refactor nobody made.
+- `calib_cast_delay.py` did not get its per-row read.
+- Trust scenarios: `trust-ignored-wall` and `trust-one-way` only. `trust-buried-patch` and `trust-missing-link` (a link removed mid fight) need a mesh that changes during a fight.
+- Terrain is the navmesh's own triangles. LAND heights are not in the file yet, so a hill with no navmesh on its crest does not block.
+- Drops: built and tested, OFF (`--v4 drops=on`, `foedrops=on`). Parkour abilities are batch M2.
+- The v3 perch (a foe on a ledge by flag) does not exist in a place. A foe is high only where the mesh is.
+
+### 13.4 The review round (Opus review of `37a705e6`, fixed 2026-11-23 and 11-24)
+
+The review's headline: 217 of 11266 solo walks ended over or under their goal with no stuck tally (F1), blasts and areas burned through walls and floors (F2), and the backpedal was 65 percent of the Evoker's stuck time (F3). Every finding is fixed on the branch. The table says what was built and how it is checked.
+
+| Finding | What was built | Check |
+|---|---|---|
+| F1 the straight-line shortcut had no height test | `EQ::Walk::zMiss` and `At()`. A straight walk counts only when it ends at the goal's height. Arrival and every corner test the height (`EnvTuning::levelU`). `Fight::Move` takes who or what he walks to | `--solo-walk`: fixtures 657 trips, 0 wrong. Library copy of 11-23 (66 places), at the branch head: 10615 walked, 2 wrong (0.019 percent), 0 over or under the goal, 0 off the mesh (3 of 10620 before the re-check round). The stacked fixture in `EnvTest.h MakeStacked` |
+| F2 blasts and areas were 2D | `EnvInBlast`: the radius in 3D and a clear ray from the centre | env-test "stacked: a blast on the floor below does not burn through the floor" |
+| F3 the backpedal walked into walls | `EnvAwayPick`: nine straight walks over the half circle that leads away, the farthest wins. No gain = CORNERED, counted apart (`away%`, `cornered%`) | the gate table below: stuck% fell for every caster |
+| F4 a held-off spell cost nothing | the picker still ranks it and the refusal costs the decision (`cs.heldTurns/f`) | CLI check "a held-off spell costs the turn" |
+| F5 seats were the game before ABI 46 | default = every row seated. `--seats old` is the older game. A Script row takes the short window | env-test, CLI check |
+| F6 the goal was guessed from who stood near the x, y | `EnvGoal` takes the body, an explicit mesh point, or neither (his own storey) | the stacked checks |
+| F7 away legs were not legs | a backpedal and a flight count in the reversals (`osc/min`) | the count then showed the lab's own dither at corners, fixed in 13.9 |
+| F8 the stuck tally had holes | see 13.5 | env-test "stuck: ..." (four checks) and "hold: ..." |
+| F9 the oracle gate compared different fights | `PathReport` keeps a third tally per cell: IAUS on the fights the oracle also played | CLI check: the `ORCPATH` lines of (N 3, K 1) and (N 1, K 1) are the same 56 lines |
+| F10 oracle move points could be off the floor | `EnvStandable` | |
+| F11 sight-driven weights could be searched | `tune_driver.py SIGHT_GATED_CONS` and `SIGHT_GATED_SCALARS`, read by `sight_gated()` at the two places a knob enters a search (`all_knobs`, `stage_globals`). `--sight-knobs` lifts it. `summary.json sight_skipped` and a section of `summary.md` say what was kept out | `test_tune_driver.py SightGate` (the names are checked against `iaus/Catalogue.cpp`) |
+| F12 the route cache grew without bound | a cap | |
+| F13 two libraries compared silently | the pool's hash is in the world tag, so `--compare` refuses | CLI check "a compare across two sets of places is refused" |
+| native API items | `EQ::Invalid(view)`, `PathTuning::maxExpand` 20000, `View.walk`, `CastRay` end margin (a look up through a floor read clear), leaf doors gate at the leaf in `WalkLine` and in the search | env-test |
+
+### 13.5 F8: stuck, hold and repeat
+
+Before the round a body was stuck when it moved under `stuckU` in `stuckSec` of clock time, and any gap of three steps in the asking cleared the window. A caster who asked, failed, cast and asked again was never stuck. Four changes, all in `EnvWorld.h EnvMove` and `EnvLegEnd`, all numbers in `EnvTuning`.
+
+- **The window counts wanted seconds.** A gap in the asking is taken out of the window and does not clear it. Only a gap longer than `wantGapSec` (3 s, ASSUMPTION) is standing by choice.
+- **A stuck leg ends STUCK again every `stuckSec`.** Each end asks for a route from where he stands. One end per stuck spell had left him on the shared centre-to-centre route for good (a Mage stood 80 s at a door behind a friend on the doorway fixture).
+- **Hold time is its own tally.** Waiting out the retry after a BLOCKED or UNREACHABLE end, the offense approach's backoff, and a foe past the drop cap all feed `hold%`. Before, the backoff fed `stuck%` and the same wait past the cap fed nothing. `hold%` is a gate row.
+- **Repeats of every kind count.** An UNREACHABLE or STUCK end within `reblockU` of his last end of that kind is `repeat/f`, a gate row. BLOCKED repeats stay `reblock/f`.
+
+The detour sample changed too. It is what he walked over the route he was given, measured from where he stood, plus how far his goal ended from where it began (the net displacement, at most `legGoalU` by the leg's own rule). The cached length ran centre to centre, and a route of 100 units to a foe who then walked 150 read 2.5. A cell with no arrived leg over 200 units (a bow that stands and shoots) prints `no legs`, and the report says in how many cells the detour bound was not tested.
+
+### 13.6 The gate, before and after, by class
+
+`--world v4 --path-report 24` on the library copy of 11-23 (`MFO_ENV_CACHE=~/.cache/mfo-env-batchw`, `--env-set all`, 14 classes of place, 5040 fights). Each number is the mean of the class's 14 cells, `37a705e6` then the branch head after both review rounds. The bounds are still the placeholders of `kPathBounds`.
+
+| Class | stuck% | osc/min | detour p90 | hold% | repeat/f | U | cells failing |
+|---|---|---|---|---|---|---|---|
+| melee | 0.70 to 0.23 | 1.17 to 0.86 | 1.59 to 1.27 | 0.14 | 0.02 | 79.96 to 80.51 | 2 to 0 |
+| ranged | 0.01 to 0.08 | 0.04 to 0.13 | 1.55 to 1.79 | 0.47 | 0.01 | 80.02 to 78.99 | 1 to 2 |
+| mage | 1.80 to 0.02 | 2.20 to 1.18 | 2.11 to 1.54 | 0.04 | 0.00 | 70.70 to 70.69 | 4 to 0 |
+| knight | 0.05 to 0.06 | 0.61 to 0.61 | 1.50 to 1.27 | 0.10 | 0.00 | 92.62 to 92.76 | 1 to 0 |
+| warrior | 0.53 to 0.15 | 0.51 to 0.53 | 1.71 to 1.50 | 0.11 | 0.01 | 80.74 to 81.03 | 1 to 1 |
+| mercenary | 0.49 to 0.17 | 1.68 to 1.14 | 1.38 to 1.29 | 0.15 | 0.02 | 88.17 to 89.58 | 0 to 0 |
+| archer | 0.02 to 0.01 | 0.01 to 0.23 | 1.29 to 1.25 | 0.02 | 0.00 | 74.88 to 73.32 | 0 to 0 |
+| thief | 0.19 to 0.02 | 0.44 to 0.32 | 1.29 to 1.28 | 0.03 | 0.00 | 86.80 to 87.62 | 1 to 0 |
+| evoker | 1.67 to 0.16 | 2.71 to 1.27 | 1.62 to 1.46 | 0.73 | 0.03 | 79.44 to 77.51 | 2 to 1 |
+| conjurer | 1.01 to 0.09 | 3.90 to 1.47 | 1.62 to 1.43 | 0.14 | 0.00 | 73.22 to 74.00 | 1 to 0 |
+| healer | 1.01 to 0.09 | 4.08 to 1.30 | 1.66 to 1.48 | 0.08 | 0.01 | 70.76 to 69.71 | 3 to 0 |
+| warlock | 1.16 to 0.02 | 2.99 to 1.57 | 1.77 to 1.41 | 0.05 | 0.00 | 81.87 to 80.01 | 2 to 0 |
+| melee-off | 1.00 to 0.21 | 1.22 to 0.77 | 1.68 to 1.27 | 0.10 | 0.03 | 76.55 to 78.19 | 3 to 0 |
+| ranged-off | 0.20 to 0.05 | 0.33 to 0.26 | 1.64 to 1.52 | 0.05 | 0.01 | 76.63 to 78.34 | 1 to 1 |
+| mage-off | 1.29 to 0.06 | 3.07 to 1.40 | 1.59 to 1.46 | 0.02 | 0.00 | 84.45 to 83.08 | 2 to 0 |
+
+Whole table: 24 failing cells of 210 before (stuck% 15, detour 10, one follower stuck for good), 5 after. No follower is stuck for good, no body left the mesh. On the fixtures (105 cells): 3 failing before, 0 after. The detour mean of a class leaves out its `no legs` cells (28 of 210 on the library, 26 of 105 on the fixtures).
+
+The five that fail, all on two classes of place:
+- `exterior_many_doors`, ranged (reblock/f 0.54, unreach% 11.1, holdUnreach 1.23 s, hold% 6.5) and evoker (reblock/f 0.38, holdUnreach 2.38 s, hold% 9.0): a foe behind a door the follower cannot open. It is counted as what it is.
+- detour p90 over 3: ranged on `exterior_actors_containers` (5.00), warrior (4.00) and ranged-off (3.25) on `interior_small_multilevel`.
+
+Between the two rounds the table read 34 failing cells, 32 of them `osc/min` at about 12 reversals a minute for every caster. That was the lab's own dither and not a caster's footwork (13.9).
+
+### 13.7 The adopt-seats mirror (MFO main `5b17b58e`, Harbinger ABI 46)
+
+The lab includes native's own pure file `native/cast/SeatRows.h`, as the harness does.
+
+- **Is a row served.** `Data.h SimRowSeated` is `SeatRows::RowSeated` on what Harbinger reports: ABI 46 with the four hostile rows and the equip admission covered (today), or an ABI under 46 (`--seats old`).
+- **The keyed will-work** (`cast/WillWork.cpp` (c)). `World.h Fight::WillWorkFor` is what the game's reader answers a follower: the level cap first, then the keyed effect, and a No only when the spell carries no other hostile damage effect. The oracle keeps `WillWork`, the truth.
+- **The two-zero-fires hold** (`cast/NoEffect.cpp`). `Fight::NoteZeroEffect` reads every fire of a hostile-row spell through `SeatRows::Judge` and `Tally`. Two zero readings in a row hold the pair for the fight and will-work then answers No. Counted as `cs.zeroFire/f` and `cs.zeroHeld/f`.
+- **Paralysis immunity is the open spot.** Native says the engine exposes no bit for it, so will-work says Yes and the hold catches it after two wasted casts. The lab mirrors that by default (`--seat-immunity unseen`). The lab's foes carry the `ImmuneParalysis` keyword (`immunePar`, from `tools/list_balance/compile_world.py`), and whether a list's paralysis effects test that keyword in their conditions is not in the extract. `--seat-immunity seen` is the lab with the conditions present. Measured on the fixtures (`--classes beta1`, 90 class and bracket rows): 4 rows with a zero fire and 1 with a held pair unseen, 2 and 0 seen.
+- **Not mirrored**, because the lab has no such effect or record: Disarm's right-hand weapon, Command's summoned target, effect and magic effect conditions as such, the approximate-row exemption. MODEL: every fire is read, at the start of the settle window. In the game a reading needs a refresh lap or a will-work ask inside 2 to 6 s.
+
+### 13.8 Checks and cost of the round
+
+- After the first round: `sim --env-test` 74 checks, CLI-CHECKS PASS (189 s with the library solo walk. The field-log check was skipped, no `_evidence` in the worktree). After the re-check round: 13.9.
+- `baseline_v4_builtin.txt` rewritten once in each round. It compares with 0 metrics changed at 1 and at 16 threads. `--world v3` and `--world v2` compare with 0 metrics changed against their baselines.
+- Cost, measured on a busy machine (the local MSVC build ran beside it), so read the ratios: `--classes beta1 --seeds 1,2` at 8 threads took 1.1 to 1.5 s in `--world v3`, 2.0 to 2.7 s in v4 on the fixtures (about 1.5 times) and 3.1 to 4.1 s on the library copy (about 2.5 times, the load of 66 places included). The path report's own figure was 2.5 ms of CPU per IAUS fight on the fixtures and 3.5 on the library on a quieter machine. The round did not make a fight dearer: under one load the reviewed build read 5.1 ms and the head 4.7. The oracle's cost per rollout was not measured again.
+- Open after the round: `Docs/REVIEW-BACKLOG.md` "feat/sim-v4-world".
+
+### 13.9 The re-check round (Opus re-check of `91946263`, 2026-11-24)
+
+F1 to F13 were confirmed. Two findings were left, and a list of small ones.
+
+**R1 (SEV-2): the casters' 12 reversals a minute were the lab's dither.** The caster and bow lines of `World.h Brain` and `Feet` read sight every step: no sight, walk in. Sight and nearer than 320, back off, which at a corner is back behind the corner. The reviewer counted 71 percent of the reversals inside half a second of the last leg. Native has a dwell on both edges (`apmf/OffenseApproach.cpp kSightDwellMs` 1500) and no step-back of its own. Built:
+- `Fight::SightWalk`: the walk-in for sight begins only after the foe has read occluded for the dwell and ends only after he has read visible for it. One opposite sample starts the clock again. Per follower and foe. The one constant is `EnvTuning::sightDwellSec` (1.5 s, native's), read by all four sites (caster and bow, `Brain` and `Feet`).
+- `Fight::BackOff`: the step back begins inside its distance with sight, goes on until he is `backOutU` (100, ASSUMPTION) past it, and only a body whose combat style falls back does it, the bow line's own gate.
+- `EnvAwayPick` takes the foe he backs off from and prefers a point that still sees him. Any point with sight beats every point without. The pick stands for `awayCommitSec` (2 s) or until he is there. A flight is as before.
+- `legMinU` 150 to 200. The held caster's side step is 160 units and is footwork, not a leg.
+- On the plane (`--world v3`, v2) all four are the old rule, draw for draw.
+
+Result on the library: `osc/min` of the six caster cells from about 12 to between 1.2 and 1.6, the failing cells from 34 to 5 (13.6).
+
+**R2 (SEV-3): a closed door ended the approach for the fight, for everybody.** Native bounds only the ch.24 approach claim, which a follower walking in for sight holds. It has no ending called "a door", a path it cannot make is a backoff, and a block lapses. Built in `EnvWorld.h`:
+- `EnvClaimWalker`: a caster or a bow in his hands. The backoff, the cap and the block apply to him only. A blade's pursuit is never bound: he asks again every `retrySec`, counted as hold time and re-blocks.
+- A route that ends at a door he cannot open takes the ENGINE DROPPED road: a backoff, `offenseApproachDropCap` times, then a block.
+- `EnvApprBlocked`: a block is scoped to where and when it was made. It lapses when he stands `blockLapseU` (300, native `kBlockMoveUnits`) from that spot or a door has changed since.
+
+**Smaller items.**
+- Detour: the goal's net displacement is added to the route, not its whole travel.
+- The path report prints `no legs` for a cell with no detour sample and counts those cells.
+- `PathSearch.cpp FindPath`: a goal across a shut leaf inside one triangle (start and goal in the leaf's triangle, or the last piece into it) is BLOCKED for a walker who cannot open it, and the path names the door.
+- `EnvQuery.cpp Invalid()` refuses a wall or a door leaf that is not finite, and a wall kind out of range.
+
+**Checks.** `sim --env-test`: 81 checks pass (sight dwell, back-off, leaf, snapshot, three door-block checks). `baseline_v4_builtin.txt` rewritten once more. It compares with 0 metrics changed at 1 and at 16 threads. `--world v3` and `--world v2`: 0 metrics changed. Solo walk: fixtures 657 trips and 0 wrong, library copy 10615 walked and 2 wrong, none over or under the goal. `run.sh` with `SIM_CLITEST=1`: CLI-CHECKS PASS (the field-log check skipped again). Local MSVC build of the two changed native files and the link: exit 0.
+

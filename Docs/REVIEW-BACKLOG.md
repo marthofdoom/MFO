@@ -3713,3 +3713,35 @@ Author's notes, open after the slice (none above SEV-3 known to the author):
 ### feat/tune-app-priority (author note 2026-11-24, b179c001)
 - SEV-4, tools/iaus_sim/live/run_round.py: driver_args is written once and compared on every resume even after --new-args was accepted (driver_args_now is kept apart), so every later resume needs --new-args again.
 - SEV-5: a real Stop of a wrapper-led round from the app was not re-run end to end after the fix round.
+## feat/sim-v4-world (Fable author, 2026-11-23 and 11-24, tools/iaus_sim + the pure native/iaus EnvQuery / PathSearch files + docs; record: Docs/research/2026-11/iaus-sim-v4.md section 13)
+
+### Opus review 2026-11-23, against 37a705e6
+The review file on disk (`_agentlogs/mfo/review-sim-world.md`), verbatim:
+> Review 37a705e6: FIX LIST. v2/v3/v4 compares 0 changed; env-test 52 pass; threads 1=8.
+> F1 SEV-2 EnvWorld.h:174 straight-line shortcut has no z check: 217/11266 solo walks end under/over the goal, 216 with zero stuck tally; adding a 16u z check -> 1.
+> F2 SEV-2 blasts/areas 2D through walls/floors World.h:1322,1222. F3 SEV-2 backpedal = 65% of evoker stuck% (2.53 -> 0.88). Rest in hand-back. Test: scratchpad rsw/t.cpp
+
+F4 to F13 and the native API items reached the authors as the coordinator's fix list, by number and a one-line title. Their verbatim review text is in the reviewer's hand-back, which is not on disk. The coordinator should paste it here. All of F1 to F13 are FIXED on the branch (what was built and its check, per finding: iaus-sim-v4.md 13.4 and 13.5). The fix list's wording of the two that were finished last:
+- F11: "sight-driven weights are not tunable until the engine-ray parity probe: enforced by a skip list in tune_driver, not only text". FIXED (`tune_driver.py sight_gated`).
+- F8 leftovers: "want gaps reset the stuck window, approach backoff counted as stuck while a capped foe counts zero, UNREACHABLE / STUCK repeats at one spot free, detour over FindPath length". FIXED (`EnvWorld.h EnvMove` / `EnvLegEnd`).
+
+### Opus re-check 2026-11-24, against 91946263
+The review file's re-check block, verbatim:
+> Verified: env-test 74 PASS; v2/v3/v4 compares 0 changed; solo walk fixtures 657/0 wrong, library 10620/2 wrong (doc says 3)/0 over-under; tune driver tests 39 OK. F1-F13 + native API fixed in code except as below. SeatRows.h standard-only, unwired native.
+> R1 SEV-2 World.h:1539-1540 / 1623-1624 (Brain + Feet): caster osc is LAB DITHER. No dwell on sight: LoS lost -> walk in; next step LoS back and d<320 -> back off behind the same corner. 9219 reversals (6 caster classes, 2016 library fights): 71% within 0.5 s of the last leg, trace alternates every 0.03-0.10 s. Native: OffenseApproach.cpp:71 kSightDwellMs 1500 on claim AND release. Scratch experiment (1.5 s dwell on los at both sites, env only): osc/min mean 11.85 -> 4.47, failing cells 32 -> 5, stuck% 0.34 -> 0.24, U 76.61 -> 76.29 (84 cells). Residual 3447: 2022 side-step related.
+> R2 SEV-3 EnvWorld.h:98-99 door BLOCKED = permanent per-foe no-walk for every class; native floor-give-up is not "a door"; native blocks lapse (BlockStands), an undone path = backoff, and only bound the ch.24 claim, not melee pursuit. EnvWorld.h:248.
+
+R1 and R2 are FIXED on the branch, with the coordinator's small items (net goal displacement in the detour, `no legs` detour cells said so, `FindPath` and a shut leaf inside one triangle, `Invalid()` on wall and leaf floats, the solo-walk count, 13.6). What was built and its checks: iaus-sim-v4.md 13.9.
+
+### Author's notes, open after both rounds (none above SEV-3 known to the author)
+- **OPEN (SEV-3, gate):** 5 of 210 library cells fail the placeholder bounds: ranged and evoker on `exterior_many_doors` (a foe behind a door the follower cannot open: reblock/f, hold%, holdUnreach), and detour p90 for ranged on `exterior_actors_containers` (5.00), warrior (4.00) and ranged-off (3.25) on `interior_small_multilevel`. Not chased: whether they are odd pathing is for the oracle pass (`--path-oracle`, iaus-sim-v4.md 10.3 item 3).
+- **OPEN (SEV-4, assumption):** `EnvTuning::backOutU` 100 and `awayCommitSec` 2 s (the back-off's hysteresis and how long its point stands) have no field number behind them. `sightDwellSec` and `blockLapseU` are native's own values, copied by hand: a change to `apmf/OffenseApproach.cpp kSightDwellMs` or `kBlockMoveUnits` needs the same change in `Env.h EnvTuning`.
+- **OPEN (SEV-4, mirror):** the sight dwell is applied to every body's walk-in in a place, foes included, and to a walk-in that is the engine's own combat movement and not the ch.24 claim. Native's `kOffenseRegularMoveMs`, the tightening radius and the ch.23 leash side of a block (`kBlockLeashGrow`) are not mirrored. A door block in the lab also lapses when any door changes, which native has no word for.
+- **OPEN (SEV-4, measure):** the detour bound is not tested in the `no legs` cells (28 of 210 on the library, mostly bows). The report says so.
+- **OPEN (SEV-3, assumption):** `--seat-immunity unseen` is the default: the game's will-work cannot read paralysis immunity and the two-zero-fires hold catches it (native `cast/WillWork.cpp` (c) says so). The lab's foes carry the `ImmuneParalysis` keyword and the extract holds no effect conditions, so whether a list's paralysis effects test it is not known in the lab. NATIVE NOTE (not this branch's files): the keyword is a plain record keyword, readable with `HasKeyword`, and `WillWork.cpp` does not read it.
+- **OPEN (SEV-4, model):** a follower behind a friend who stands in front of a closed door sidesteps round him and back instead of waiting. The author's reading of one trace, not proven further: `EnvTryStep`'s tangent step succeeds, so the yield timer never starts. Measured: the doorway fixture, mage-off, 25 s before he opens the door, counted as stuck% 2.79 and repeat/f 0.38 in that cell. The engine's soft avoidance is not modelled (`yieldSec` is an ASSUMPTION). Counted, not hidden.
+- **OPEN (SEV-4, assumption):** `EnvTuning::wantGapSec` 3 s (not asked to move for longer = standing by choice) and the zero-effect reading's timing (every fire read at the start of the settle window) are labelled assumptions with no field number behind them.
+- **OPEN (SEV-4, bounds):** the two new gate rows (`hold%` 5, `repeat/f` 1) are placeholders like the other six.
+- **OPEN (SEV-5):** the solo walk's 3 wrong trips of 10620 on the library copy (2 still walking at the time limit, 1 stuck, places x_Skyrim-050015_-1_2, x_Skyrim-02EE41_5_-9, x_Dawnguard-001408_-8_-1) are under the tenth of a percent the check allows and were not chased.
+- **OPEN (SEV-5):** the adopt-seats mirror leaves out Disarm's weapon need, Command's summoned need, effect conditions and the approximate-row exemption (the lab has no such effect or record).
+

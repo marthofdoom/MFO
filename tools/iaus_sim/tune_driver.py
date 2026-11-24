@@ -376,6 +376,7 @@ def emit_run(classes, label, curves=(), sets=None):
 
 
 def save_summary():
+    SUMMARY["sight_skipped"] = [] if ALLOW_SIGHT_KNOBS else sorted(set(SIGHT_SKIPPED))   # review F11: what the skip list kept out of this run's search
     json.dump(SUMMARY, open(os.path.join(A.out, "summary.json"), "w"), indent=1)
     open(os.path.join(A.out, "summary.md"), "w").write(render_md())
 
@@ -599,6 +600,27 @@ def logi_mid(b, mults, steps):
     return [max(0.02, b + s) for s in steps]
 
 
+# NOT TUNABLE UNTIL THE ENGINE-RAY PARITY PROBE (review F11 of 37a705e6, iaus-sim-v4.md 8.5 and 13). In the game the engine's rays are the authority
+# for sight. In the lab sight is geometry (walls raised on navmesh edges, the mesh's own triangles as terrain), and its error against those rays is
+# NOT MEASURED. A weight searched on that sight would be fitted to the lab's walls. So the knobs that read sight are a SKIP LIST the driver
+# enforces, not a note: a consideration named here is never offered to a stage, and a scalar named here is never searched. `--sight-knobs` lifts it
+# (for the day the dev-build dump has given the confusion matrix). To add one: its name here.
+SIGHT_GATED_CONS = ("los",)
+SIGHT_GATED_SCALARS = ("t.occHold", "t.occClaimRelease", "t.fireLineKeepSec")
+ALLOW_SIGHT_KNOBS = False
+SIGHT_SKIPPED = []
+
+
+def sight_gated(name):
+    """Is this knob (a scalar's name, or family.consideration[suffix]) on the skip list?"""
+    if ALLOW_SIGHT_KNOBS:
+        return False
+    if name.split("=")[0] in SIGHT_GATED_SCALARS:
+        return True
+    parts = name.split(".")
+    return len(parts) >= 2 and not name.startswith("t.") and parts[1] in SIGHT_GATED_CONS
+
+
 def all_knobs():
     """Every knob a class row can carry, each with its candidate values INSIDE its valid range. From the simulator's --list-uses."""
     txt = text_run("list-uses", [A.bin, "--list-uses"])
@@ -617,6 +639,9 @@ def all_knobs():
                 continue
             seen.add((f, c))
             name, pre = "%s.%s" % (fn, cn), "{c}:%d.%d." % (f, c)
+            if sight_gated(name):
+                SIGHT_SKIPPED.append(name)
+                continue
             def add(suffix, param, shared, vals, meta):
                 if uniq(vals, shared):
                     knobs.append((name + suffix, pre + param + "={v}", shared, uniq(vals, shared)))
@@ -1824,6 +1849,9 @@ def stage_globals():
     seeds = range(5001, 5001 + CFG["global_seeds"])
     rows = []
     for name, shipped, vals in (GLOBALS[:1] if CFG["force"] else GLOBALS):
+        if sight_gated(name):
+            SIGHT_SKIPPED.append(name)
+            continue
         for v in (vals[:1] if CFG["force"] else vals):
             st = "%s=%s" % (name, v)
             res = jmany([req("builtin", c, g, curves, seeds, s) for c in CELLS for g in CONFIGS for s in (None, st)])
@@ -2095,6 +2123,8 @@ def render_md():
             L += ["| %s | %+.2f (%.2f) | %d | %+.2f | %+.0f g | %d / %d | %d | %s |" % (c, v["gap"], v["se"], v["episodes"], v["potionJ_gap"], v["gold_equivalent_gap"], v["baseline_takes"], v["oracle_takes"], v["sell_runs"],
                   "; ".join("(%s) %s %.2f" % (r["class"], r["cluster"], r["dU_per_episode"]) for r in g["clusters"][c][:3])) for c, v in g["cells"].items()] + [""]
     ad = SUMMARY.get("auto_decisions", [])
+    if SUMMARY.get("sight_skipped"):
+        L += ["## Not searched: knobs that read sight", "", "The lab's sight is geometry whose error against the engine's rays is not measured (no parity probe yet), so these were kept out of every stage (`--sight-knobs` lifts it): " + ", ".join("`%s`" % k for k in SUMMARY["sight_skipped"]), ""]
     L += ["## AUTOMATIC DECISIONS (--decisions %s; the rule and the numbers are in summary.json auto_decisions)" % A.decisions, "", "| Kind | Verdict | What | Evidence |", "|---|---|---|---|"]
     L += ["| %s | %s | %s | %s |" % (d["kind"], d["verdict"], d["what"], d["evidence"].replace("|", "/")[:400]) for d in ad if d["verdict"] != "note"] or ["| - | - | none | |"]
     L += ["", "Report-only notes (never blockers): %d" % sum(1 for d in ad if d["verdict"] == "note"), ""]
@@ -2216,6 +2246,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--bin", required=True, help="the built simulator (SIM_OUT of tools/iaus_sim/run.sh)")
     ap.add_argument("--out", required=True, help="the run's directory: cache.jsonl, progress.log, summary.json, summary.md")
+    ap.add_argument("--sight-knobs", action="store_true", help="search the knobs that read sight too (SIGHT_GATED_*). OFF: the lab's sight is geometry whose error against the engine's rays is not measured")
     ap.add_argument("--smoke", action="store_true", help="a few seeds and knobs, every stage exercised; its numbers are NOT results")
     ap.add_argument("--for-class", help="THE NEW-CLASS WORKFLOW (iaus-sim-v2.md 34.4): one class (a new or changed row), on an --out that holds the earlier run: sets --classes to it and --stages to prep,classes,joint,edge,gap,floor,summary")
     ap.add_argument("--cells", choices=("15", "all"), default="15", help="15 (default): the Beta 1 cells. all: + the 23 parked T3 / T4 / T5 classes (38 cells; adds the sim's --parked to every run; the pooled stages, rating and logistics cover all 38)")
@@ -2234,6 +2265,8 @@ def main():
     ap.add_argument("--replay", help="replay the open_decisions of an earlier summary.json through the automatic rules, offline (no simulator), and print the table")
     ap.add_argument("--no-emit-runs", dest="emit_runs", action="store_false", help="do not write one dashboard results file per finished sweep")
     A = ap.parse_args()
+    global ALLOW_SIGHT_KNOBS
+    ALLOW_SIGHT_KNOBS = bool(A.sight_knobs)
     if A.replay:
         return replay(A.replay)
     if A.for_class:
