@@ -70,7 +70,9 @@ namespace Sim::Loot {
         // THE RULES OF OLDER BUILDS, for the scenarios that must fail on them:
         float museumGold = 250.0f;     // ASSUMPTION (review S5): what a museum piece taken is worth, in gold, whatever it sells for (a display has no price; the errand never sells it). One knob, reported apart (dMuseumJ)
         float stealRecheck = 1.0f;     // Steal.cpp: the witness check is run AGAIN at the write (Service.cpp:1019). 0 = the cached verdict alone (scenario thief-no-recheck: must commit a crime)
-        float dibsNearEnough = 0.0f;   // marth's ruling of 11-24, NOT in native yet: coin dibs "Near is enough". 1 = the fair chance accrues while the player is within chanceRadius, facing or not (6 s near releases). 0 = today's native (near AND facing)
+        // MARTH'S RULINGS OF 11-24, NOT IN NATIVE YET. The default is what native WILL become; 0 = today's shipped rule (--loot-rule dibsNear=0 / gateEvents=0):
+        float dibsNearEnough = 1.0f;   // coin dibs "Near is enough": the fair chance accrues while the player is within chanceRadius, facing or not (6 s near releases). 0 = today's native (near AND facing, finding N1)
+        float gateEventsOnly = 1.0f;   // a gate lifts on REAL EVENTS only: door, lever, cell, somebody else reaching the item (gateNearU). The blocked follower's own walk of gateReadmitMoveU (500) off his block no longer lifts his record (finding N6). 0 = today's native. A route-based lift comes later with native's active navmesh
         float corpseBar = 1.0f;        // 0 = before the party-wide guard bar on a corpse (field 11-17 L1)
         float gateOld1117 = 0.0f;      // 1 = before 9a16a278 (11-17): every static block gates the target and its cone, no repeat / short test, no move / near / idle re-admit, stuck needs 3 distinct targets
     };
@@ -82,7 +84,7 @@ namespace Sim::Loot {
             { "departRadius", &Rules::departRadius }, { "lotd", &Rules::lotd }, { "releaseMul", &Rules::releaseMul }, { "departRelease", &Rules::departRelease }, { "grab", &Rules::grab }, { "arriveRadius", &Rules::arriveRadius },
             { "noProgressSec", &Rules::noProgressSec }, { "blockedGateSec", &Rules::blockedGateSec }, { "transientSec", &Rules::transientSec }, { "stickySec", &Rules::stickySec }, { "deadlineMax", &Rules::deadlineMax },
             { "deadlineSpeed", &Rules::deadlineSpeed }, { "stuckWindowSec", &Rules::stuckWindowSec }, { "stuckHits", &Rules::stuckHits }, { "guardRangeU", &Rules::guardRangeU }, { "maxSlots", &Rules::maxSlots },
-            { "candCap", &Rules::candCap }, { "followU", &Rules::followU }, { "carryCap", &Rules::carryCap }, { "idleTicks", &Rules::idleTicks }, { "gate", &Rules::gateOld1117 }, { "corpseBar", &Rules::corpseBar }, { "dibsNear", &Rules::dibsNearEnough }, { "stealRecheck", &Rules::stealRecheck }, { "museumGold", &Rules::museumGold }, { "driftShare", &Rules::driftShare }, { "guardWarmSec", &Rules::guardWarmSec } };
+            { "candCap", &Rules::candCap }, { "followU", &Rules::followU }, { "carryCap", &Rules::carryCap }, { "idleTicks", &Rules::idleTicks }, { "gate", &Rules::gateOld1117 }, { "corpseBar", &Rules::corpseBar }, { "dibsNear", &Rules::dibsNearEnough }, { "gateEvents", &Rules::gateEventsOnly }, { "stealRecheck", &Rules::stealRecheck }, { "museumGold", &Rules::museumGold }, { "driftShare", &Rules::driftShare }, { "guardWarmSec", &Rules::guardWarmSec } };
         for (const F& f : k) if (name == f.n) { r.*(f.m) = v; return true; }
         return false;
     }
@@ -385,7 +387,7 @@ namespace Sim::Loot {
                 if (T->gateReadmitSec > 0.0f && Now() - G.since >= T->gateReadmitSec) { lift = true; why = "timer"; }
                 if (!lift && T->gateNearU > 0.0f) { if (D3(P(Fp->b[0]), G.tpos) <= T->gateNearU) { lift = true; why = "the player stands at it"; }
                     for (std::size_t f = 0; f < fs.size() && !lift; ++f) if (static_cast<int>(f) != G.fi && fs[f].slot.active && D3(P(BodyOf(static_cast<int>(f))), G.tpos) <= T->gateNearU) { lift = true; why = "a follower stands at it"; } }
-                if (!lift && T->gateReadmitMoveU > 0.0f && D3(P(BodyOf(G.fi)), G.block) > T->gateReadmitMoveU) { lift = true; why = "its follower left the block"; }
+                if (!lift && R.gateEventsOnly <= 0.0f && T->gateReadmitMoveU > 0.0f && D3(P(BodyOf(G.fi)), G.block) > T->gateReadmitMoveU) { lift = true; why = "its follower left the block"; }
                 if (lift) Readmit(g, why); else ++g; }
         }
         // A door was unlocked or opened, or a lever pulled, by the player (Sinks.cpp): every record with its block or target within 2048 is lifted. Both rule sets.
