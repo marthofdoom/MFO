@@ -49,18 +49,22 @@
 namespace Sim::Logi {
 
     enum class Kind : std::uint8_t { Gold, PotionH, PotionM, PotionS, Ammo, Weapon1H, Weapon2H, Bow, ArmorBody, ArmorHead, Gem, Jewelry, Ingredient, Junk,
-        Buff, Food, Poison, SoulGem, Bolt, kCount };   // tune 2.11.1 (--logi-consumables): buff potions, food, poisons, soul gems, bolts
+        Buff, Food, Poison, SoulGem, Bolt,   // tune 2.11.1 (--logi-consumables): buff potions, food, poisons, soul gems, bolts
+        Lockpick, OffGear, Book, kCount };   // sim v4 batch L (Loot.h, a list's items only): lockpicks; gear no keep rule of the lab judges (shield, gauntlets, boots, clothing, staff, crossbow); books, keys, scrolls (no road)
     inline const char* Name(Kind k) {
         static const char* n[] = { "gold", "potion_h", "potion_m", "potion_s", "ammo", "weapon_1h", "weapon_2h", "bow", "armor_body", "armor_head", "gem", "jewelry", "ingredient", "junk",
-                                    "buff", "food", "poison", "soulgem", "bolt" };
+                                    "buff", "food", "poison", "soulgem", "bolt", "lockpick", "offgear", "book" };
         return n[static_cast<std::size_t>(k)];
     }
     struct ItemDef { const char* edid; Kind kind; int value; float weight; float power; bool weightModel;
-        int bk = -1; int av = -1; float dur = 0; int rfam = -1; };   // tune 2.11.1: a buff potion's BuffKind, its skill / resist av, its duration; a food's restore family (0 health, 1 stamina, 2 magicka)   // power: weapon damage, armor rating, potion magnitude, arrow damage
+        int bk = -1; int av = -1; float dur = 0; int rfam = -1;
+        bool museum = false; int cons = -1; };   // sim v4 batch L: a museum-needed item (a FLAG on the item, never a list of names); cons: index into Loot.h's consumable rows (a list's ALCH)   // tune 2.11.1: a buff potion's BuffKind, its skill / resist av, its duration; a food's restore family (0 health, 1 stamina, 2 magicka)   // power: weapon damage, armor rating, potion magnitude, arrow damage
     // THE FIXTURE ITEMS. value / power: Vanilla extract (Skyrim.esm, exe 1.6.1170) unless weightModel / the comment says MODEL.
     // Weights: weapons from the extract; armor, potions, gems, jewelry, ingredients and junk are NOT in any extract (MODEL, marked).
-    inline const std::vector<ItemDef>& Items() {
-        static const std::vector<ItemDef> v = {
+    // sim v4 batch L: the table is the fixture rows below, then whatever a list's loot extract appended (Loot.h LoadLootList, once, before any thread).
+    // Without --loot-list it is the fixture table, row for row.
+    inline std::vector<ItemDef>& ItemsStore() {
+        static std::vector<ItemDef> v = {
             { "Gold001", Kind::Gold, 1, 0.0f, 0, false },
             { "RestoreHealth01", Kind::PotionH, 17, 0.5f, 25, true }, { "RestoreHealth02", Kind::PotionH, 73, 0.5f, 50, true }, { "RestoreHealth03", Kind::PotionH, 57, 0.5f, 75, true },
             { "RestoreMagicka01", Kind::PotionM, 20, 0.5f, 25, true }, { "RestoreMagicka02", Kind::PotionM, 73, 0.5f, 50, true },
@@ -83,9 +87,12 @@ namespace Sim::Logi {
             { "FoodCheeseWheel01A", Kind::Food, 10, 2.0f, 15, true, -1, 24, 0, 0 }, { "FoodVenisonStew", Kind::Food, 8, 1.0f, 15, true, -1, 26, 0, 1 },
             { "DamageHealthPoison (MODEL)", Kind::Poison, 40, 0.5f, 15, true },   // power = magnitude x duration summed (15 x 1 s)
             { "SoulGemPetty (MODEL)", Kind::SoulGem, 10, 0.1f, 0, true }, { "SteelBolt", Kind::Bolt, 2, 0.0f, 10, true },
+            // sim v4 batch L (Loot.h), never drawn by a stop of this lab: a piece a museum wants (MODEL: the flag is the point, the record is made up) and a lockpick (Skyrim.esm 0xA: value 2, weight 0).
+            { "DwemerCog", Kind::Junk, 5, 2.0f, 0, true, -1, -1, 0, -1, true }, { "Lockpick", Kind::Lockpick, 2, 0.0f, 0, false },
         };
         return v;
     }
+    inline const std::vector<ItemDef>& Items() { return ItemsStore(); }
     inline int ItemIdx(const char* edid) { const auto& v = Items(); for (std::size_t i = 0; i < v.size(); ++i) if (!std::strcmp(v[i].edid, edid)) return static_cast<int>(i); return -1; }
 
     // PRICES (Pricing.cpp, Pricing.h:6-19): Skyrim.esm GMSTs (gmst_defaults.json, exe 1.6.1170). No perks in the fixture follower.
@@ -172,7 +179,10 @@ namespace Sim::Logi {
     }
 
     // ── today's rules ──────────────────────────────────────────────────────────────────────────────────────────────────────────
-    inline float PotionFloor() {   // Upkeep.cpp ComputeWeakPotionFloor over every restore potion of the load order (here: the fixture's)
+    inline float g_potionFloor = -1.0f;   // sim v4 batch L: the floor is asked per scored item, so it is computed once (Loot.h resets it to -1 after it appends a list's items)
+    inline float PotionFloorCalc();
+    inline float PotionFloor() { if (g_potionFloor < 0.0f) g_potionFloor = PotionFloorCalc(); return g_potionFloor; }
+    inline float PotionFloorCalc() {   // Upkeep.cpp ComputeWeakPotionFloor over every restore potion of the load order (here: the fixture's)
         std::vector<float> m; for (const ItemDef& d : Items()) if (d.kind == Kind::PotionH || d.kind == Kind::PotionM || d.kind == Kind::PotionS) m.push_back(d.power);
         std::sort(m.begin(), m.end()); for (float x : m) if (x > m.front() * 1.25f) return x; return m.front();
     }
@@ -374,8 +384,10 @@ namespace Sim::Logi {
         return inv;
     }
     [[nodiscard]] inline bool IsAlch(Kind k) { return k == Kind::PotionH || k == Kind::PotionM || k == Kind::PotionS || k == Kind::Buff || k == Kind::Food || k == Kind::Poison; }
+    inline std::vector<MFO::Iaus::Consumable>& ConsRows() { static std::vector<MFO::Iaus::Consumable> v; return v; }   // sim v4 batch L: a list's ALCH records as native's reader would fill them (Loot.h)
     inline MFO::Iaus::Consumable ConsOf(const ItemDef& d) {   // logistics/LootNeed.cpp ReadConsumableImpl + ApplyLootFloor, from the fixture record
         MFO::Iaus::Consumable c; using namespace MFO::Iaus; c.value = float(d.value); c.weight = d.weight;
+        if (d.cons >= 0) { c = ConsRows()[static_cast<std::size_t>(d.cons)]; if (!c.food) for (float& m : c.restoreMag) if (m > 1.0f && m < PotionFloor()) m = 0.0f; return c; }   // ApplyLootFloor (LootNeed.cpp:37: food and a magnitude <= 1 are exempt)
         if (d.kind == Kind::Poison) { c.poison = true; c.hostile = true; c.poisonPower = d.power; return c; }
         if (d.kind == Kind::Food) { c.food = true; c.foodRestoreMag[static_cast<std::size_t>(d.rfam)] = d.power; return c; }   // the loot side's restoreMag stays 0 for food (review F1)
         const int f = d.kind == Kind::PotionH ? kRestoreHealth : d.kind == Kind::PotionS ? kRestoreStamina : d.kind == Kind::PotionM ? kRestoreMagicka : -1;

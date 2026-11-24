@@ -12,6 +12,7 @@
 #include "iaus_sim/PotionWorth.h"
 #include "iaus_sim/Logistics.h"
 #include "iaus_sim/EnvTest.h"     // SIM V4: --env-test
+#include "iaus_sim/LootCli.h"     // SIM V4 batch L: looting in the fight world (--loot-*)
 #include "iaus/Iaus_internal.h"   // detail::SetFor: which considerations a family reads (--list-uses, for the per-class curve search)
 
 #include <atomic>
@@ -798,6 +799,7 @@ int main(int argc, char** argv) {
 }
 static int RealMain(int argc, char** argv) {
     int disengageReport = 0, stealLab = 0;
+    Loot::Opts lootOpts; std::string lootList;   // SIM V4 batch L
     std::string envFile, envSet, envClass; bool envTest = false, envList = false, pathGate = false; int pathReport = 0, pathOracle = 0, soloWalk = 0;   // SIM V4
     std::vector<std::string> curveSpecs;
     int potCalibN = 0; std::string potWorthPath;
@@ -821,6 +823,22 @@ static int RealMain(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--env-set") && i + 1 < argc) envSet = argv[++i];
         else if (!std::strcmp(argv[i], "--env-class") && i + 1 < argc) envClass = argv[++i];
         else if (!std::strcmp(argv[i], "--env-test")) envTest = true;
+        // SIM V4 BATCH L (iaus-sim-v4.md 14.7): looting in the fight world. Any of these turns the v4 world on.
+        else if (!std::strcmp(argv[i], "--loot-report") && i + 1 < argc) lootOpts.report = std::max(1, std::atoi(argv[++i]));
+        else if (!std::strcmp(argv[i], "--loot-oracle") && i + 1 < argc) lootOpts.oracle = std::max(1, std::atoi(argv[++i]));
+        else if (!std::strcmp(argv[i], "--loot-cost") && i + 1 < argc) lootOpts.cost = std::max(1, std::atoi(argv[++i]));
+        else if (!std::strcmp(argv[i], "--loot-scenario") && i + 1 < argc) lootOpts.scenario = argv[++i];
+        else if (!std::strcmp(argv[i], "--loot-test")) lootOpts.test = true;
+        else if (!std::strcmp(argv[i], "--loot-score")) lootOpts.score = true;
+        else if (!std::strcmp(argv[i], "--loot-trace") && i + 1 < argc) lootOpts.trace = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--loot-plan") && i + 1 < argc) { const std::string v = argv[++i]; lootOpts.plan = -2; for (int q = 0; q < static_cast<int>(Loot::Plan::kCount); ++q) if (v == Loot::PlanName(static_cast<Loot::Plan>(q))) lootOpts.plan = q; if (v == "mixed") lootOpts.plan = -1; if (lootOpts.plan == -2) { std::fprintf(stderr, "--loot-plan mixed|stands|walks-on|opens-chest|loots-too|faces-away\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--loot-wave") && i + 1 < argc) { const std::string v = argv[++i]; lootOpts.wave = v == "mixed" ? -2.0 : v == "off" ? -1.0 : std::atof(v.c_str()); }
+        else if (!std::strcmp(argv[i], "--loot-sec") && i + 1 < argc) lootOpts.lootSec = std::atof(argv[++i]);
+        else if (!std::strcmp(argv[i], "--loot-guards") && i + 1 < argc) lootOpts.guards = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--loot-museum") && i + 1 < argc) Loot::g_museumShare = static_cast<float>(std::atof(argv[++i]));
+        else if (!std::strcmp(argv[i], "--loot-list") && i + 1 < argc) lootList = argv[++i];
+        else if (!std::strcmp(argv[i], "--loot-rule") && i + 1 < argc) { const std::string kv = argv[++i]; const auto eq = kv.find('='); const std::string k = kv.substr(0, eq), v = eq == std::string::npos ? "" : kv.substr(eq + 1);
+            if (eq == std::string::npos || !Loot::SetRule(Loot::g_rules, k, v == "old1117" ? 1.0f : v == "today" ? 0.0f : static_cast<float>(std::atof(v.c_str())))) { std::fprintf(stderr, "--loot-rule %s: unknown rule (Loot.h Rules; gate=old1117|today)\n", kv.c_str()); return 2; } }
         else if (!std::strcmp(argv[i], "--env-list")) envList = true;
         else if (!std::strcmp(argv[i], "--solo-walk") && i + 1 < argc) soloWalk = std::max(1, std::atoi(argv[++i]));
         else if (!std::strcmp(argv[i], "--path-report") && i + 1 < argc) pathReport = std::max(1, std::atoi(argv[++i]));
@@ -1005,6 +1023,9 @@ static int RealMain(int argc, char** argv) {
     const std::vector<SimClass> t1(allClasses.begin(), allClasses.begin() + 3);
     if (printClasses) { PrintClassTable(allClasses); return 0; }
     // SIM V4: the places of this run. The fixtures are always loaded (the scenarios name them). --env / --env-set replace what an ordinary fight draws from.
+    const bool lootRun = lootOpts.report || lootOpts.oracle || lootOpts.cost || lootOpts.test || !lootOpts.scenario.empty();
+    if (lootRun && !g_v4.env) g_v4.Defaults();
+    if (!lootList.empty()) { std::string err; if (!Loot::LoadLootList(lootList, &err)) { std::fprintf(stderr, "--loot-list: %s\n", err.c_str()); return 2; } }
     if (g_v4.env || envTest || envList || pathReport || soloWalk) {
         if (!LoadFixtures(g_envPool)) { std::fprintf(stderr, "cannot load the fixture environments from %s:", g_envDir.c_str()); for (const EnvSkip& k : g_envPool.skipped) std::fprintf(stderr, " %s (%s)", k.file.c_str(), k.why.c_str()); std::fprintf(stderr, "\n(python3 tools/iaus_sim/envs/make_fixtures.py writes them; SIM_ENV_DIR points elsewhere)\n"); return 2; }
         if (!envFile.empty() || !envSet.empty()) { g_envPool.draw.clear(); const std::size_t sk0 = g_envPool.skipped.size();
@@ -1025,6 +1046,12 @@ static int RealMain(int argc, char** argv) {
         if (!bad.empty()) { std::fprintf(stderr, "unknown class slug(s):"); for (const std::string& b : bad) std::fprintf(stderr, " %s", b.c_str()); std::fprintf(stderr, "  (see --print-classes)\n"); return 2; } }
     g_objEstimates = estimates; g_objScrollRoad = scrollRoad;
     if (stealLab > 0) return RunStealLab(D, allClasses, stealLab, seed);
+    if (lootRun) { const std::vector<std::uint64_t> sd = g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds;
+        if (lootOpts.test) return Loot::RunScenarios(D, allClasses, t1, "all", true, false);
+        if (!lootOpts.scenario.empty()) return Loot::RunScenarios(D, allClasses, t1, lootOpts.scenario, false, lootOpts.trace >= 0);
+        if (lootOpts.cost) return Loot::RunCost(D, allClasses, t1, only, seed, lootOpts);
+        if (lootOpts.oracle) return Loot::RunOracleReport(D, allClasses, t1, only, sd, threads, lootOpts);
+        return Loot::RunReport(D, allClasses, t1, only, sd, threads, lootOpts); }
     if (logiN > 0) return Logi::Run(allClasses, only, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, logiN, logiK, true, logiPolicy, logiScore);
     if (disengageReport > 0) return DisengageReport(D, allClasses, only, g_seeds.empty() ? std::vector<std::uint64_t>{ seed } : g_seeds, disengageReport, threads, estimates, scrollRoad);
     if (optRows) return OptimiseRows(D, allClasses, seed, optFights > 0 ? optFights : fights, threads, rowCap, rowEvals);

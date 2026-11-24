@@ -1,0 +1,15 @@
+# Batch L: owned potions on a counter, a wall between them and where a witness may stand. (thief: steal by need, unseen only)
+nopool
+class fixture_loot
+map
+###############
+#P.....#......#
+#......#......#
+#..a...#...w..#
+#.............#
+#..b..........#
+###############
+end
+loot a item RestoreHealth02 1 owned
+loot b item RestoreHealth03 1 owned
+bystander w

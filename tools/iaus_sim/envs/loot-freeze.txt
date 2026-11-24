@@ -1,0 +1,23 @@
+# Batch L, field 11-17g: the mesh says the pocket opens from a into b. The truth is a wall. The potion at q lies over 300 units from any floor he can
+# stand on. More loot stands past the pocket, reachable round it.
+nopool
+exterior
+class fixture_loot
+map
+###########################
+#P........................#
+#.......#########.........#
+#.......#########.........#
+#......ab.....q##...h..i..#
+#.......#########.........#
+#.......#########.........#
+#................j..k.....#
+###########################
+end
+defect a b
+defect b a
+loot q item RestoreHealth03 1
+loot h item RestoreHealth02 1
+loot i item RestoreHealth02 1
+loot j item RestoreMagicka02 1
+loot k item RestoreStamina02 1
