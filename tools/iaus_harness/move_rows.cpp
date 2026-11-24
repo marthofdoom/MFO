@@ -1,5 +1,5 @@
 // tools/iaus_harness/move_rows.cpp -- the movement pass's rows (S1, movement-plan.md "Acceptance" of S1) and its golden vectors.
-// Linked into the harness by run.sh. MOVE_STANDALONE builds it alone, which is how MSVC replays the same golden file (README line in run.sh).
+// Linked into the harness by run.sh. MOVE_STANDALONE builds it alone, which is how another compiler replays the same golden file (the line in run.sh).
 #include "iaus/MoveDump.h"
 
 #include <algorithm>
@@ -385,20 +385,22 @@ namespace {
         }
         {   // F2: the target runs 185 u a window behind a wall while the shooter is on his way
             const auto m = Build({ "##############################", "#............................#", "#............................#", "######....##########.........#", "#............................#", "#............................#", "#............................#", "##############################" });
+            Env::Scratch s; const auto v = m.Get();
+            for (const bool prompt : { true, false }) {   // prompt: the freed window's own questions are answered too
             PartyPicture p; p.party = { Who(0x11, At(15, 6), { Act(Family::CastOffense, 0x91, 0.8f, 2600.0f, Sight::Occluded) }) };
             p.foes = { Bad(0x91, At(22, 1), 0) };
-            Env::Scratch s; const auto v = m.Get();
             const auto r = Window(m, p, t); const SpotKey key = Of(r, 0x11)->key; const auto spot = Of(r, 0x11)->p;
             int firstNo = -1, marked = -1; SpotKey then = key;
             for (int w = 1; w <= 12 && marked < 0; ++w) {
                 p.foes[0].p.x -= 185.0f;
                 if (firstNo < 0 && !GeomSees(v, p.foes[0].p, spot, t, s)) firstNo = w;
-                const auto x = Window(m, p, t);
+                const auto x = Window(m, p, t, 1.0e9f, prompt || firstNo < 0 || w <= firstNo);
                 if (!Of(x, 0x11)->kept || Of(x, 0x11)->score > 0.0f) { marked = w; then = Of(x, 0x11)->key; }
             }
             char b[160]; std::snprintf(b, sizeof b, "F2 a foe that runs out of the kept spot's sight marks him on time (blind in window %d, freed in %d)", firstNo, marked);
             Row(Of(r, 0x11)->spot >= 0 && firstNo > 0 && marked > 0 && marked <= firstNo + 2, b);
-            Row(then != key, "F2 ... and the blind spot is not taken again");
+            Row(then != key, prompt ? "F2 ... and the blind spot is not taken again" : "F2 ... nor when that window's rays are not back (the No that freed him still counts)");
+            }
             // a still foe, and a door that closes: the kept spot's answer is asked again before it is five seconds old
             PartyPicture q; q.party = { Who(0x11, At(15, 6), { Act(Family::CastOffense, 0x91, 0.8f, 2600.0f, Sight::Occluded) }) }; q.foes = { Bad(0x91, At(22, 1), 0) };
             const auto r1 = Window(m, q, t); const SpotKey k1 = Of(r1, 0x11)->key; int freed = -1;

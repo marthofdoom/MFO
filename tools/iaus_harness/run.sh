@@ -2,7 +2,7 @@
 # Build and run the IAUS core harness with the host compiler (no CommonLib, no engine). Card I2.
 # Usage: tools/iaus_harness/run.sh            (from the repo root, or anywhere)
 #        CXX=clang++ tools/iaus_harness/run.sh
-# The movement rows alone (MSVC replays the same golden file; --write rewrites it after a deliberate change of a t.spot* / spot curve / generator):
+# The movement rows alone (the same golden file on any compiler; --write rewrites it after a deliberate change of a t.spot* / spot curve / generator):
 #        g++ -std=c++23 -O2 -DMOVE_STANDALONE -I native native/iaus/{Curves,Catalogue,ClassCurves,Score,Decide,EnvQuery,PathSearch,Spots,MovePass}.cpp \
 #            tools/iaus_harness/move_rows.cpp -o move_rows && ./move_rows tools/iaus_harness/golden_move.txt [--write]
 set -euo pipefail

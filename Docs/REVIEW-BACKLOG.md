@@ -3863,3 +3863,10 @@ Answers
 ## fix/impact-hazard-shape (MFO-B865), Opus review @753b93e5
 SEV-4 FF Aimed/Touch spells with a kDropToGround impact hazard are kept (LoreRim 6 Aimed + 6 Touch, Tuxborn 29 + 9; mostly enemy spells; REQ_Destruction2_Arcane_AimedHazard, _BL_OppressiveBarrier). Many EFIT area 0, so splash_safe has no radius for the ground hazard they leave at the foe: a melee ally beside the foe may stand in it. BlastUnits could include the dropped hazard's radius. Ordinary bolt hazards (flag clear: FireLg/FireSm 4, IceHazard 0) are the engine's normal impact effects, same as a gambit cast or an enemy's. Not shown to hurt allies (not verified in engine).
 SEV-5 harness rows for MFO-B865 test the pure rule and the drop only; nothing tests the record reader (impactHazardDrops in cast/Archetype.cpp).
+
+## feat/move-s1 (Opus review @1dc002fe, verbatim; F1 to F7, B1, B4, B5, B6, B8 and the comment half of B7 are fixed on the branch)
+- B2 SEV-4 no distance-to-foe consideration at all (unless intended for S5): a firing spot may lie at a foe's feet.
+- B3 SEV-4 sort / dead triples, paths: 80 paths with 154-225 skipped a window for ten: each member gets about 8. Budget number, S5.
+- B7 SEV-5 Catalogue.cpp: the F7 review comment moved from heal_rate's line to the spot_cover line. Plan contract's TrustTable / Light::Field are not in the picture (S3 / S4 append; light keyed by SpotKey, known only after UnitPool, so a sampler must fill it after Phase1: document).
+(B7: the light half is documented at `PartyPicture.h LightAt`: keyed by the pool, filled after Phase1. TrustTable / Light::Field stay S3 / S4.)
+- SEV-5 (author of the fix round) `tools/tune_app/selftest.py` was not run to the end: it hangs headless (pre-existing, the reviewer met it too). The validator was called directly.
