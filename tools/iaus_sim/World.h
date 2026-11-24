@@ -790,17 +790,25 @@ namespace Sim {
             return D->dfs.mode == 2 ? 1.0f / static_cast<float>(n) : std::pow(std::max(0.0f, 1.0f - D->dfs.reduction), static_cast<float>(n - 1));
         }
         // one physical hit that has connected in time and space
-        // THE FIELD'S HIT-SIZE SPREAD (SIM V3 `hittail`; CALIBRATED, iaus-sim-v3.md 15.5). A foe's physical hit on the party is multiplied by one
-        // of these, drawn evenly. They are the 16 hit windows with damage that foes landed on followers in _evidence/deck-run-1117f/MFO.log
-        // ([iaus-fill] hit, 19:44:45 to 19:45:51, one fight), each as the health it took before armor (took / (1 - the target's armor share,
-        // both printed on the line)) over the MEDIAN of its own attacker kind (eleven arrows of the Conqueror and Ravager Archers, median 53; five
-        // blows of one Conqueror Berserker, median 54), then divided by their mean (1.729) so the mean is 1. Arrows: 1.32 3.13 0.91 1.74 1 3.55
-        // 1 1 1 2.08 1. Blows: 0.67 6.76 1 1 0.5. MEAN 1 ON PURPOSE: at matched pressure the lab's damage per second already agrees with the
-        // field (15.4), what differed is how it arrives. So a usual hit is 0.58 of the lab's old one and one hit in four is 1.2 to 3.9 times it.
-        // n = 16, one fight, three followers: re-derive with calib_damage.py when more sessions carry the probe (bIausFillProbe).
-        static constexpr float kFieldHit[16] = { 0.76f, 1.81f, 0.53f, 1.01f, 0.58f, 2.05f, 0.58f, 0.58f, 0.58f, 1.20f, 0.58f, 0.39f, 3.91f, 0.58f, 0.58f, 0.29f };
+        // THE FIELD'S HIT-SIZE SPREAD (SIM V3 `hittail`; CALIBRATED on a small sample, iaus-sim-v4.md 9.2; it replaces the table of iaus-sim-v3.md 15.5).
+        // A foe's physical hit on the party is multiplied by one of these, drawn evenly. PER EVENT since sim v4 slice 1 (Opus review F-A of 610e2952:
+        // the first table was 16 health-loss WINDOWS of one fight, several of them holding two to five events, a power attack and enchantment
+        // riders, stacked on the lab's own power attacks and per-arrow hits). Now: `calib_damage.py <run dirs>` (its HITS section; the last line it
+        // prints is this row) over the five sessions that carry the fill probe's hit lines (_evidence/deck-run-1117c, 1117f, 1117g,
+        // 1118-adelinda, 1119-jesper): 139 windows with a loss, of which 27 hold ONE plain blow of ONE foe (the attacker's weapon sampled, every
+        // source of the blow that weapon, no power attack, sneak attack, bash, block or rider), of which 10 belong to an attacker kind with three
+        // or more such blows (4 arrows of the Ravager Archers, 6 blows of Silver Hand with one weapon). Each is the health it took before armor
+        // over the median of its kind, divided by the mean of the ten (1.260) so the mean is 1. MEAN 1 ON PURPOSE (15.4: at matched pressure the
+        // lab's damage per second agrees with the field; what differs is how it arrives).
+        // HONEST SIZE: ten blows, two kinds. The logs do not support more: lines are rate limited, most windows hold a rider or a second
+        // event, and a blow can land one sample late (calib_damage.py MIN_SHARE, an ASSUMPTION). What this table no longer carries, and the lab
+        // does not model yet: the damage of enchantment / poison riders on a foe's blow and the large foe spells (the field's biggest windows:
+        // a Bandit Chief's spell took 292 and 302). Those are the bursts of the field (window p90 34.5 % of the target's health, n = 139) and are
+        // listed in the design doc as a world gap, not folded into a multiplier.
+        static constexpr float kFieldHit[] = { 0.56f, 0.56f, 0.75f, 0.79f, 0.79f, 0.79f, 0.84f, 1.31f, 1.64f, 1.97f };
+        static constexpr int kFieldHitN = static_cast<int>(sizeof(kFieldHit) / sizeof(kFieldHit[0]));
         float Physical(Body& a, Body& d, float dmg, bool power, bool ranged, bool fromIaus) {
-            if (g_v3.hittail && a.role == Role::Foe && d.Party()) dmg *= kFieldHit[std::min(15, static_cast<int>(VU(a, 37, 0.0f, 16.0f)))];
+            if (g_v3.hittail && a.role == Role::Foe && d.Party()) dmg *= kFieldHit[std::min(kFieldHitN - 1, static_cast<int>(VU(a, 37, 0.0f, static_cast<float>(kFieldHitN))))];
             const Rules& r = D->rules; bool blocked = false; float blockedFrac = 0.0f; const float rawDmg = dmg;
             if (a.role == Role::Follower) dmg *= FollowerScale();
             bool sneakAtk = false, flankAtk = false;

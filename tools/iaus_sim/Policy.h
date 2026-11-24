@@ -69,11 +69,15 @@ namespace Sim {
     inline bool PreparePick(const Fight& F, const Ctl& c, const Body& self, bool flee) { return PreparePickKind(F, c, self, flee ? 1 : 0); }
 
     // The tuning every IausPolicy starts from (Tune.h points it at a searched copy; the default is the game's own).
-    // ONE HARD HIT FROM DOWN (CALIBRATED, iaus-sim-v3.md 15.5): the 90th percentile of the field's hit windows on followers took 30.1 % of the
-    // target's health (_evidence/deck-run-1117f, 16 windows with damage; the largest 96.7 %). A recipient under this share of his health
-    // can be downed by the next such hit, and a heal takes about 1.8 s from the pick to landing (the Opus heal-timing diagnosis of 11-17,
-    // 1.0 to 2.9 s), so a heal that BEGINS under the line is late. Heal timing is judged by this, not by the mean health at the heal.
-    inline constexpr float kOneHitLine = 0.30f;
+    // ONE HARD BURST FROM DOWN (CALIBRATED, iaus-sim-v4.md 9.2; was 0.30 from the 16 windows of one fight, iaus-sim-v3.md 15.5). The 90th
+    // percentile of the field's health-loss WINDOWS on followers (a window = the drop between two worker samples around a foe's hit, 0.12 to
+    // 0.55 s: one burst, whatever it holds: several events, riders, a power attack, a spell) is 34.5 % of the target's health: 139 windows of
+    // five sessions, `calib_damage.py` FIELD HIT WINDOWS, the largest 100 %. It is a WINDOW statistic on purpose: the game's own read
+    // (Estimate::HitsToDown) is the largest burst inside Tuning::burstWindowSec, not one event. A recipient under this share of his health can
+    // be downed by the next such burst, and a heal takes about 1.8 s from the pick to landing (the Opus heal-timing diagnosis of 11-17, 1.0 to
+    // 2.9 s), so a heal that BEGINS under the line is late. Heal timing is judged by this (healLate%), not by the mean health at the heal.
+    // ASSUMPTION inside it: the target's maximum health is the largest health the session's hit lines show for him (no line prints it).
+    inline constexpr float kOneHitLine = 0.35f;
 
     // a_t: the tuning the gather reads (the game's gather reads DefaultTuning().bowWeaponRange, iaus/Candidates.cpp; the lab reads the searched copy so
     // `t.bowRange` moves the gather and the generator together).

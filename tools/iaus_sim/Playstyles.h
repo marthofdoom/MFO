@@ -32,6 +32,10 @@
 //              healAt% <= 60 on those two rows: the oracle heals at a mean 70 to 75 % of the recipient's health, so that band asked for later
 //              heals than the best play. Oracle: healer 2.9 %, priest 1.2 %.
 //   dwh/f      (evoker) <= the oracle's allies down a fight while he held a heal he could cast, + 0.05. Oracle: 0.069.
+// STALE SINCE SIM V4 SLICE 1 (iaus-sim-v4.md 9.6, a listed PRE-TUNE STEP): the bounds above were measured with the hit-size table of 15.5, the
+// 30 % line and no heal-timing mirror. The world now has the per-event table, the line is 35 % (Policy.h kOneHitLine) and the heal knobs are
+// live, so every ORCSURV / ORCHEAL number moves. The re-measure costs about 7 CPU-hours per class (139 minutes on 16 cores for five classes),
+// past the 3 CPU-hour limit of the slice, so it was NOT run: run the command above (plus priest) before the next tune and rewrite the rows.
 // Re-measure and rewrite the bounds whenever the world or the oracle changes (they are the oracle's play, not a card value). No oracle-relative band
 // existed before this one; the pattern is: measure with ORCSURV, write oracle + margin into the row, name both in the band's reason.
 // Before this batch no band of a caster measured whether he lived, so a tuning that traded his life for cast time scored as "in class".
