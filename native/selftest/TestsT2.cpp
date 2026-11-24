@@ -340,6 +340,7 @@ namespace MFO::SelfTest {
                 Iaus::LootTuning lt; std::string why;
                 const bool knob = Iaus::SetLootKnob(lt, "guardBarFloorSec", 20.0f) && !Iaus::SetLootKnob(lt, "guardBarFloorSec", -1.0f, &why)
                     && Iaus::SetLootKnob(lt, "batchHoldMinSec", 3.0f) && Iaus::SetLootKnob(lt, "guardFreshSec", 2.0f) && !Iaus::SetLootKnob(lt, "guardFreshSec", 0.0f, &why)
+                    && Iaus::LootTuning{}.gateReadmitMoveU == 0.0f   // N6: a gate lifts on real events only by default
                     && Iaus::SetLootKnob(lt, "gateReadmitMoveU", 1024.0f) && !Iaus::SetLootKnob(lt, "gateConeDeg", 120.0f, &why);
                 r.text += std::format("; e: bar held={} lifted={} unseenNotHostile={} knob={}", held, lifted, unseen, knob);
                 if (!(held && lifted && unseen && knob)) r.fail = true;
