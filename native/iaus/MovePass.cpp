@@ -37,15 +37,12 @@ namespace MFO::Iaus::MovePass {
         }
         bool Scores(const Member& m) { return m.decides && !m.fixed && m.nTop > 0 && m.tri >= 0; }
         std::uint32_t KindsOf(const PartyPicture& pic, const Member& m, const Tuning& t) { return AllowedKinds(pic.caps, t) & m.kinds; }
-        // The kinds of this spot that this action may use, as a mask.
-        std::uint32_t Pairing(std::uint32_t spotKinds, std::uint32_t allowed, const RankedAction& a) {
-            std::uint32_t out = 0;
-            for (std::size_t k = 1; k < kSpotKindCount; ++k)
-                if ((spotKinds & allowed & (1u << k)) && Pairs(static_cast<SpotKind>(k), a)) out |= 1u << k;
-            return out;
-        }
-        bool PairsAny(std::uint32_t spotKinds, std::uint32_t allowed, const Member& m) {
-            for (std::size_t i = 0; i < m.nTop; ++i) if (Pairing(spotKinds, allowed, m.top[i])) return true;
+        // A fact whose end moved, or that is too old, is never used as fresh.
+        bool Stale(const PartyPicture& pic, const PairKey& k, const PairFact& f, double now, const Tuning& t) {
+            Env::Vec3 p; std::int32_t tri = -1;
+            if (!ActorAt(pic, k.second, p, tri) || tri < 0 || (f.actorTri != kAnyTri && tri != f.actorTri) || !(Dist(p, f.actorAt) <= t.spotFactMoveU)) return true;
+            if (!(now - f.t >= 0.0 && now - f.t <= static_cast<double>(t.spotFactMaxAgeSec))) return true;
+            if (k.first & kStayBit) { const Member* m = ById(pic.party, static_cast<FormID>(k.first & 0xFFFFFFFFu)); return !m || !(Dist(m->p, f.spotAt) <= t.spotFactMoveU); }
             return false;
         }
 
@@ -66,7 +63,7 @@ namespace MFO::Iaus::MovePass {
         }
 
         // THE ONE FILLER of SpotFacts. Static: what no other member's choice changes. a_pair / a_spot null = stay here.
-        SpotFacts FillStatic(const PartyPicture& pic, const Member& m, const RankedAction& a, const Spot* spot, const Work::Pair* pair) {
+        SpotFacts FillStatic(const PartyPicture& pic, const Member& m, const RankedAction& a, const Spot* spot, const Work::Pair* pair, const Tuning& t) {
             SpotFacts f;
             const Env::Vec3 at = spot ? spot->p : m.p;
             const SpotKey key = spot ? spot->key : KeyOfStay(m.id);
@@ -78,7 +75,11 @@ namespace MFO::Iaus::MovePass {
             const bool hasTarget = a.target != 0 && a.target != m.id && ActorAt(pic, a.target, tp, tt);
             const bool foe = hasTarget && ById(pic.foes, a.target) != nullptr;
             if (hasTarget && Sighted(a)) {
-                if (spot) f.sees = Sees(pic, key, a.target);
+                if (spot) {
+                    f.sees = Sees(pic, key, a.target);
+                    // the answer that marked him may be older than a fact lives (the foe ran on): the spot he is freed FROM is not "unknown" again
+                    if (f.sees == Iaus::Tri::Unknown && (m.seen & kMarkSightLost) && m.commit.on && m.commit.key == key && m.commit.act.target == a.target) f.sees = Iaus::Tri::No;
+                }
                 else f.sees = a.sight == Sight::Visible ? Iaus::Tri::Yes : a.sight == Sight::Occluded ? Iaus::Tri::No : Iaus::Tri::Unknown;   // the action facet's own ray
             }
             if (hasTarget && a.reach > 0.0f) {
@@ -86,13 +87,13 @@ namespace MFO::Iaus::MovePass {
                 f.rangeX = a.melee ? (d <= a.reach ? 0.5f : 1.0f + (d - a.reach) / 3000.0f) : d / a.reach;   // melee closes by itself: a shade, not a band
             }
             if (foe && a.melee) if (const auto it = pic.work.reach.find({ m.id, a.target }); it != pic.work.reach.end()) f.foeReachable = it->second;
-            int known = 0, seen = 0, threats = 0;
+            int threats = 0; float seen = 0.0f;
             for (const std::int32_t i : m.threats) if (i >= 0) {
                 ++threats;
                 const auto s = Sees(pic, key, pic.foes[static_cast<std::size_t>(i)].id);
-                if (s != Iaus::Tri::Unknown) { ++known; if (s == Iaus::Tri::Yes) ++seen; }
+                seen += s == Iaus::Tri::Yes ? 1.0f : s == Iaus::Tri::No ? 0.0f : t.spotUnknownExposure;
             }
-            if (known) f.exposure = static_cast<float>(seen) / static_cast<float>(known);
+            if (threats) f.exposure = seen / static_cast<float>(threats);
             if (threats) { f.pathExposedSec = pair ? pair->exposedSec : 0.0f; f.exits = static_cast<float>(spot ? spot->exits : m.exits); }
             if (!pic.areas.empty()) {
                 f.inHostileArea = Iaus::Tri::No;
@@ -147,7 +148,7 @@ namespace MFO::Iaus::MovePass {
             return w;
         }
 
-        struct Triple { std::uint32_t member; std::uint8_t action; std::int32_t spot; const Work::Pair* pair; float scale; SpotFacts f; float score = 0.0f; std::int64_t q = 0; bool dead = false, incumbent = false; };
+        struct Triple { std::uint32_t member; std::uint8_t action; std::int32_t spot; std::uint32_t kinds; const Work::Pair* pair; float scale; SpotFacts f; float score = 0.0f; std::int64_t q = 0; bool dead = false, incumbent = false; };
 
         float ScoreTriple(const PartyPicture& pic, Triple& x, const ClassProfiles& profiles, const Tuning& t) {
             const Member& m = pic.party[x.member];
@@ -158,7 +159,7 @@ namespace MFO::Iaus::MovePass {
         Triple MakeTriple(const PartyPicture& pic, std::uint32_t mi, std::uint8_t ai, std::int32_t si, const Work::Pair* pair, std::uint32_t mask, const ClassProfiles& profiles, const Tuning& t) {
             const Member& m = pic.party[mi];
             const Spot* s = si >= 0 ? &pic.pool[static_cast<std::size_t>(si)] : nullptr;
-            Triple x{ mi, ai, si, pair, 1.0f, FillStatic(pic, m, m.top[ai], s, pair) };
+            Triple x{ mi, ai, si, mask, pair, 1.0f, FillStatic(pic, m, m.top[ai], s, pair, t) };
             x.incumbent = s && m.commit.on && m.commit.key == s->key;
             x.scale = KindWeight(mask, profiles(m.classId)) * (x.incumbent ? t.spotMomentum : 1.0f);
             return x;
@@ -216,6 +217,7 @@ namespace MFO::Iaus::MovePass {
                 if (!Scores(m)) return true;
                 w.memberFlood[i].who = m.id;
                 Flood(v, m.p, m.tri, m.who, t.spotRadius, B.gatherTris, w.memberFlood[i]);
+                if (w.memberFlood[i].cut) ++pic.counts.floodsShort;
                 for (std::size_t k = 0; k < m.nTop; ++k) {
                     const Foe* f = ById(pic.foes, m.top[k].target);
                     if (!f || f->tri < 0 || w.reach.count({ m.id, f->id })) continue;   // a foe off the mesh: unknown, never "unreachable"
@@ -227,22 +229,36 @@ namespace MFO::Iaus::MovePass {
             }
             const std::size_t j = i - pic.party.size();
             if (j >= w.foeFlood.size()) return false;
-            if (const Foe* f = ById(pic.foes, w.foeFlood[j].who)) Flood(v, f->p, f->tri, Env::Walker{}, t.spotRadius, B.gatherTris, w.foeFlood[j]);
+            if (const Foe* f = ById(pic.foes, w.foeFlood[j].who)) {
+                Flood(v, f->p, f->tri, Env::Walker{}, t.spotRadius, B.gatherTris, w.foeFlood[j]);
+                if (w.foeFlood[j].cut) ++pic.counts.floodsShort;
+            }
             return true;
+        }
+
+        GenIn MakeGen(const PartyPicture& pic, const Env::View& v, const Tuning& t, std::uint32_t mi, std::uint32_t ai) {
+            const Member& m = pic.party[mi];
+            const RankedAction& a = m.top[ai];
+            GenIn g{ pic, v, t, m, a, pic.work.memberFlood[mi], {} };
+            std::int32_t tt = -1;
+            g.hasTarget = a.target != 0 && a.target != m.id && ActorAt(pic, a.target, g.target, tt);
+            g.foe = g.hasTarget ? ById(pic.foes, a.target) : nullptr;
+            g.targetIsAlly = g.hasTarget && !g.foe;
+            if (const auto it = pic.work.reach.find({ m.id, a.target }); it != pic.work.reach.end()) g.targetUnreachable = it->second == Iaus::Tri::No;
+            return g;
+        }
+        float WalkTo(const Env::View& v, const Member& m, const Work::Flood& fl, const Env::Vec3& p, std::int32_t tri) {   // < 0: beyond his gather
+            if (tri == m.tri) return Dist(m.p, p);
+            const float d = fl.At(tri);
+            return d < 0.0f ? -1.0f : d + Dist(Env::Centroid(v, tri), p);
         }
 
         void UnitGenerate(PartyPicture& pic, const Env::View& v, Env::Scratch& s, const Tuning& t) {
             Work& w = pic.work;
             const Work::GenUnit u = w.gen[w.cursor++];
             const Member& m = pic.party[u.member];
-            const RankedAction& a = m.top[u.action];
             const SpotKindRow& row = kSpotKinds[u.kind];
-            GenIn g{ pic, v, t, m, a, w.memberFlood[u.member], {} };
-            std::int32_t tt = -1;
-            g.hasTarget = a.target != 0 && a.target != m.id && ActorAt(pic, a.target, g.target, tt);
-            g.foe = g.hasTarget ? ById(pic.foes, a.target) : nullptr;
-            g.targetIsAlly = g.hasTarget && !g.foe;
-            if (const auto it = w.reach.find({ m.id, a.target }); it != w.reach.end()) g.targetUnreachable = it->second == Iaus::Tri::No;
+            const GenIn g = MakeGen(pic, v, t, u.member, u.action);
             struct R { std::int32_t q; Cand c; };
             std::vector<R> found; std::vector<Cand> pts;
             for (const auto& [tri, d] : g.own.d) {
@@ -260,12 +276,13 @@ namespace MFO::Iaus::MovePass {
                 if (kept >= B.perGen) break;
                 if (row.check) { if (tested++ >= B.geomPerGen) break; if (!row.check(g, x.c, s)) continue; }
                 Spot sp; sp.key = x.c.key; sp.p = x.c.p; sp.tri = x.c.tri; sp.kinds = KindBit(row.kind);
-                w.hits.push_back({ sp, static_cast<std::int32_t>(u.member), kept * 100000 + (std::min)(99999, QDist(x.c.walk)) });   // the first of every kind before the second of any, nearest first
+                w.hits.push_back({ sp, kept * 100000 + (std::min)(99999, QDist(x.c.walk)) });   // the first of every kind before the second of any, nearest first
                 ++kept;
             }
         }
 
-        void UnitPool(PartyPicture& pic, const Env::View& v, const Tuning& t) {
+        // The pool, in units: one per spot where the cost is per spot (the exits flood, the offers), one for the sorts.
+        void UnitMerge(PartyPicture& pic) {
             Work& w = pic.work;
             std::map<SpotKey, Work::Hit> all;
             for (const Work::Hit& h : w.hits) {
@@ -273,13 +290,20 @@ namespace MFO::Iaus::MovePass {
                 if (!fresh) { it->second.s.kinds |= h.s.kinds; it->second.rank = (std::min)(it->second.rank, h.rank); }
             }
             pic.counts.generated = static_cast<std::uint32_t>(all.size());
+            w.hits.clear();
+            for (const auto& [key, h] : all) w.hits.push_back(h);
+        }
+        void UnitPlace(PartyPicture& pic, const Env::View& v, const Tuning& t) {
+            Spot& s = pic.work.hits[pic.work.cursor++].s;
+            s.portals = PortalsAt(v, pic.wallVert, s.tri, s.p, t);
+            s.exits = ExitsAt(v, s.tri, s.p, pic.foes, Env::Walker{}, t);
+            if (s.exits == 0) s.kinds &= ~KindBit(SpotKind::RetreatExit);   // a dead end is not offered
+        }
+        void UnitSelect(PartyPicture& pic) {
             std::vector<Work::Hit> list;
-            for (auto& [key, h] : all) {
-                h.s.portals = PortalsAt(v, pic.wallVert, h.s.tri, h.s.p, t);
-                h.s.exits = ExitsAt(v, h.s.tri, h.s.p, pic.foes, Env::Walker{}, t);
-                if (h.s.exits == 0) h.s.kinds &= ~KindBit(SpotKind::RetreatExit);   // a dead end is not offered
+            for (const Work::Hit& h : pic.work.hits) {
                 bool in = false;   // a committed spot is in the pool already (Freeze): it gains the kinds found this window
-                for (Spot& p : pic.pool) if (p.key == key) { p.kinds |= h.s.kinds; in = true; }
+                for (Spot& p : pic.pool) if (p.key == h.s.key) { p.kinds |= h.s.kinds; in = true; }
                 if (!in && h.s.kinds) list.push_back(h);
             }
             std::sort(list.begin(), list.end(), [](const Work::Hit& a, const Work::Hit& b) { return a.rank != b.rank ? a.rank < b.rank : a.s.key < b.s.key; });
@@ -287,22 +311,59 @@ namespace MFO::Iaus::MovePass {
             if (list.size() > room) { pic.counts.spotsDropped += static_cast<std::uint32_t>(list.size() - room); list.resize(room); }
             for (const auto& h : list) pic.pool.push_back(h.s);
             std::sort(pic.pool.begin(), pic.pool.end(), [](const Spot& a, const Spot& b) { return a.key < b.key; });
+        }
+        // One pooled spot: what is it for each member and action that could use it, by the row's own rule (Work::Offer)?
+        void UnitOffer(PartyPicture& pic, const Env::View& v, Env::Scratch& s, const Tuning& t) {
+            Work& w = pic.work;
+            const auto si = static_cast<std::int32_t>(w.cursor++);
+            const Spot& sp = pic.pool[static_cast<std::size_t>(si)];
+            std::map<FormID, bool> sight;   // CheckSight reads the target and the spot only
+            for (std::uint32_t i = 0; i < pic.party.size(); ++i) {
+                const Member& m = pic.party[i];
+                if (!Scores(m)) continue;
+                const bool own = m.commit.on && m.commit.key == sp.key;
+                Cand c{ sp.key, sp.p, sp.tri, WalkTo(v, m, w.memberFlood[i], sp.p, sp.tri) };
+                if (c.walk < 0.0f) { if (!own) continue; c.walk = Dist(m.p, sp.p); }   // beyond his own gather: another member's spot
+                const std::uint32_t allowed = KindsOf(pic, m, t);
+                for (std::uint8_t ai = 0; ai < m.nTop; ++ai) {
+                    const RankedAction& a = m.top[ai];
+                    const GenIn g = MakeGen(pic, v, t, i, ai);
+                    const bool same = own && a.family == m.commit.act.family && a.target == m.commit.act.target;
+                    std::uint32_t mask = 0;
+                    for (std::size_t k = 1; k < kSpotKindCount; ++k) {
+                        const SpotKindRow& row = kSpotKinds[k];
+                        if (!(sp.kinds & allowed & (1u << k)) || !row.gen || !Pairs(row.kind, a)) continue;
+                        if (same && (m.commit.kinds & (1u << k))) { if (KeptHolds(row.kind, g, c)) mask |= 1u << k; continue; }
+                        float r = 0.0f;
+                        if (!row.gen(g, c, r) || !std::isfinite(r)) continue;
+                        if (row.check == &CheckSight) {
+                            const auto [it, fresh] = sight.try_emplace(a.target, false);
+                            if (fresh) it->second = CheckSight(g, c, s);
+                            if (!it->second) continue;
+                        } else if (row.check && !row.check(g, c, s)) continue;
+                        mask |= 1u << k;
+                    }
+                    if (mask) w.offers.push_back({ si, i, ai, mask });
+                }
+            }
+        }
 
+        void UnitQueue(PartyPicture& pic, const Env::View& v) {
+            Work& w = pic.work;
             // who may walk where, each member's nearest first, one round at a time
             struct U { std::int32_t round; Work::PathUnit u; };
             std::vector<U> us;
             for (std::uint32_t i = 0; i < pic.party.size(); ++i) {
                 const Member& m = pic.party[i];
                 if (!Scores(m)) continue;
-                const std::uint32_t allowed = KindsOf(pic, m, t);
                 std::vector<Work::PathUnit> mine;
                 for (std::size_t k = 0; k < pic.pool.size(); ++k) {
                     const Spot& sp = pic.pool[k];
                     const bool own = m.commit.on && m.commit.key == sp.key;
-                    if (!PairsAny(sp.kinds, allowed, m)) continue;
-                    const float fl = w.memberFlood[i].At(sp.tri);
-                    if (fl < 0.0f && !own) continue;   // beyond his own gather: another member's spot
-                    mine.push_back({ i, static_cast<std::int32_t>(k), 0, own ? -1 : QDist(fl + Dist(Env::Centroid(v, sp.tri), sp.p)) });
+                    std::uint32_t any = 0;
+                    for (std::uint8_t ai = 0; ai < m.nTop; ++ai) any |= w.Offered(static_cast<std::int32_t>(k), i, ai);
+                    if (!any) continue;
+                    mine.push_back({ i, static_cast<std::int32_t>(k), 0, own ? -1 : QDist(WalkTo(v, m, w.memberFlood[i], sp.p, sp.tri)) });
                 }
                 std::sort(mine.begin(), mine.end(), [](const auto& a, const auto& b) { return a.near != b.near ? a.near < b.near : a.spot < b.spot; });
                 for (std::size_t k = 0; k < mine.size(); ++k) us.push_back({ static_cast<std::int32_t>(k), mine[k] });
@@ -335,25 +396,26 @@ namespace MFO::Iaus::MovePass {
             Work& w = pic.work;
             std::sort(w.pairs.begin(), w.pairs.end(), [](const auto& a, const auto& b) { return a.member != b.member ? a.member < b.member : a.spot < b.spot; });
             std::vector<RayAsk> want;
-            const auto ask = [&](SpotKey key, const Env::Vec3& p, FormID who) {
-                if (pic.facts.count({ key, who })) return;   // still fresh (Freeze dropped the stale ones)
-                const RayAsk a{ key, p, who };
+            const auto ask = [&](SpotKey key, const Env::Vec3& p, FormID who, float maxAge) {
+                if (const auto it = pic.facts.find({ key, who }); it != pic.facts.end() && pic.t - it->second.t < static_cast<double>(maxAge)) return;   // still fresh (Freeze dropped the stale ones)
+                RayAsk a{ key, p, who, pic.t, {}, -1 };
+                if (!ActorAt(pic, who, a.viewerAt, a.viewerTri)) return;
                 if (std::find(want.begin(), want.end(), a) == want.end()) want.push_back(a);
             };
             for (const Member& m : pic.party)   // is a kept spot still good for its action: the sight-lost event
-                if (m.fixed && Sighted(m.commit.act)) ask(m.commit.key, m.commit.p, m.commit.act.target);
+                if (m.fixed && Sighted(m.commit.act)) ask(m.commit.key, m.commit.p, m.commit.act.target, t.spotKeptAgeSec);
+            const auto kept = static_cast<std::ptrdiff_t>(want.size());
             struct R { std::int32_t round; std::int64_t q; std::uint32_t member; std::int32_t spot; std::uint8_t action; };
             std::vector<R> rs;
             for (std::uint32_t i = 0; i < pic.party.size(); ++i) {
                 const Member& m = pic.party[i];
                 if (!Scores(m)) continue;
-                const std::uint32_t allowed = KindsOf(pic, m, t);
                 std::vector<R> mine;
                 for (const auto& p : w.pairs) {
                     if (p.member != i) continue;
                     R best{ 0, -1, i, p.spot, 0 };
                     for (std::uint8_t a = 0; a < m.nTop; ++a)
-                        if (const auto mask = Pairing(pic.pool[static_cast<std::size_t>(p.spot)].kinds, allowed, m.top[a])) {
+                        if (const auto mask = w.Offered(p.spot, i, a)) {
                             Triple x = MakeTriple(pic, i, a, p.spot, &p, mask, profiles, t);
                             if (const auto q = Quant(ScoreTriple(pic, x, profiles, t)); q > best.q) { best.q = q; best.action = a; }
                         }
@@ -369,15 +431,15 @@ namespace MFO::Iaus::MovePass {
                 asked.insert(r.spot);
                 const Member& m = pic.party[r.member];
                 const Spot& sp = pic.pool[static_cast<std::size_t>(r.spot)];
-                if (Sighted(m.top[r.action])) ask(sp.key, sp.p, m.top[r.action].target);
-                for (const std::int32_t f : m.threats) if (f >= 0) ask(sp.key, sp.p, pic.foes[static_cast<std::size_t>(f)].id);
-                // a spot that hides him is only worth something against what sees him where he stands
-                if ((sp.kinds & (KindBit(SpotKind::Cover) | KindBit(SpotKind::RetreatExit))) && stays.insert(r.member).second)
-                    for (const std::int32_t f : m.threats) if (f >= 0) ask(KeyOfStay(m.id), m.p, pic.foes[static_cast<std::size_t>(f)].id);
+                if (Sighted(m.top[r.action])) ask(sp.key, sp.p, m.top[r.action].target, kInf);
+                for (const std::int32_t f : m.threats) if (f >= 0) ask(sp.key, sp.p, pic.foes[static_cast<std::size_t>(f)].id, kInf);
+                // a spot is only worth something against what sees him where he stands
+                if (stays.insert(r.member).second)
+                    for (const std::int32_t f : m.threats) if (f >= 0) ask(KeyOfStay(m.id), m.p, pic.foes[static_cast<std::size_t>(f)].id, kInf);
             }
-            // what the last window could not serve goes first, if it is still wanted
-            const auto mid = std::stable_partition(want.begin(), want.end(), [&](const RayAsk& a) { return std::find(pic.carried.begin(), pic.carried.end(), a) != pic.carried.end(); });
-            pic.counts.asksCarried = static_cast<std::uint32_t>(mid - want.begin());
+            // the kept spots' questions first (at most one a member), then what the last window could not serve, if it is still wanted
+            const auto mid = std::stable_partition(want.begin() + kept, want.end(), [&](const RayAsk& a) { return std::find(pic.carried.begin(), pic.carried.end(), a) != pic.carried.end(); });
+            pic.counts.asksCarried = static_cast<std::uint32_t>(mid - want.begin() - kept);
             const std::size_t cap = static_cast<std::size_t>(B.factsPerWindow);
             pic.carried.clear();
             if (want.size() > cap) { pic.counts.asksShort += static_cast<std::uint32_t>(want.size() - cap); pic.carried.assign(want.begin() + static_cast<std::ptrdiff_t>(cap), want.end()); want.resize(cap); }
@@ -385,10 +447,18 @@ namespace MFO::Iaus::MovePass {
         }
     }
 
+    void File(PartyPicture& pic) {
+        for (const RayAsk& a : pic.work.asked) {   // filed, never answered
+            pic.carried.push_back(a);
+            if (std::find(pic.late.begin(), pic.late.end(), a) == pic.late.end()) pic.late.push_back(a);   // the first filing is the one that counts
+        }
+        pic.work.asked.clear();
+    }
+
     void Freeze(PartyPicture& pic, const Env::View& v, const Tuning& t) {
         ++pic.window;
         pic.counts = {};
-        pic.carried.insert(pic.carried.end(), pic.work.asked.begin(), pic.work.asked.end());   // filed, never answered
+        File(pic);
         pic.work = Work{};
         pic.pool.clear();
         const auto tidy = [](auto& list) {
@@ -398,24 +468,30 @@ namespace MFO::Iaus::MovePass {
         tidy(pic.party); tidy(pic.foes);
         std::erase_if(pic.foes, [](const Foe& f) { return !Finite(f.p); });
         const bool moved = pic.envStamp != v.stamp || pic.wallVert.size() != v.verts.size();
-        if (moved) { pic.envStamp = v.stamp; pic.facts.clear(); pic.paths.clear(); pic.carried.clear(); WallVerts(v, pic.wallVert); }
+        if (moved) { pic.envStamp = v.stamp; pic.facts.clear(); pic.paths.clear(); pic.carried.clear(); pic.late.clear(); WallVerts(v, pic.wallVert); }
         for (Foe& f : pic.foes) f.tri = Locate(v, f.p);
         for (Member& m : pic.party) {
             m.tri = Locate(v, m.p);
             m.nTop = (std::min)(m.nTop, static_cast<std::uint8_t>(m.top.size()));
             for (std::size_t i = 0; i < m.nTop; ++i) if (!std::isfinite(m.top[i].score) || !std::isfinite(m.top[i].reach)) m.top[i].score = m.top[i].reach = 0.0f;
         }
+        const auto given = pic.late.size();
+        std::erase_if(pic.late, [&](const RayAsk& a) { return !(pic.t - a.t >= 0.0 && pic.t - a.t <= static_cast<double>(t.spotFactMaxAgeSec)); });
+        if (pic.late.size() > static_cast<std::size_t>(B.lateAsks)) pic.late.erase(pic.late.begin(), pic.late.end() - B.lateAsks);
+        pic.counts.lateDropped = static_cast<std::uint32_t>(given - pic.late.size());
+        // the holder's inbox, and what this freeze finds. A window that was never adopted keeps its marks. Sight first: a runner's fact dies in the next lines
+        for (Member& m : pic.party) {
+            m.seen |= m.marks; m.marks = 0;
+            if (m.commit.on && Sighted(m.commit.act) && Sees(pic, m.commit.key, m.commit.act.target) == Iaus::Tri::No) m.seen |= kMarkSightLost;
+        }
         // facts and paths whose ends moved, or that are too old, are gone (never used as fresh)
-        std::erase_if(pic.facts, [&](const auto& e) {
-            const auto& [k, f] = e;
-            Env::Vec3 p; std::int32_t tri = -1;
-            if (!ActorAt(pic, k.second, p, tri) || tri < 0 || tri != f.actorTri || Dist(p, f.actorAt) > t.spotFactMoveU) return true;
-            if (!(pic.t - f.t >= 0.0 && pic.t - f.t <= static_cast<double>(t.spotFactMaxAgeSec))) return true;
-            if (k.first & kStayBit) { const Member* m = ById(pic.party, static_cast<FormID>(k.first & 0xFFFFFFFFu)); return !m || Dist(m->p, f.spotAt) > t.spotFactMoveU; }
-            return false; });
+        std::erase_if(pic.facts, [&](const auto& e) { return Stale(pic, e.first, e.second, pic.t, t); });
         std::erase_if(pic.paths, [&](const auto& e) {
             const Member* m = ById(pic.party, e.first.who);
-            return !m || m->tri != e.first.fromTri || Dist(m->p, e.second.from) > t.spotFactMoveU; });
+            if (!m || m->tri != e.first.fromTri || Dist(m->p, e.second.from) > t.spotFactMoveU) return true;
+            if (!e.first.actor) return false;
+            const Foe* f = ById(pic.foes, static_cast<FormID>(e.first.to));   // a walk to where a foe no longer stands
+            return !f || f->tri != e.first.toTri; });
 
         for (Member& m : pic.party) {
             m.threats = { -1, -1 };
@@ -427,16 +503,15 @@ namespace MFO::Iaus::MovePass {
             m.exits = m.threats[0] >= 0 ? ExitsAt(v, m.tri, m.p, pic.foes, m.who, t) : std::uint8_t{ 0 };
             Commit& c = m.commit;
             if (c.on) {
-                if (moved && (c.tri < 0 || static_cast<std::size_t>(c.tri) >= v.tris.size() || Locate(v, c.p) != c.tri)) { c.on = false; m.marks |= kMarkPathBlocked; }   // the mesh under it is another one
+                if (moved && (c.tri < 0 || static_cast<std::size_t>(c.tri) >= v.tris.size() || Locate(v, c.p) != c.tri)) { c.on = false; m.seen |= kMarkPathBlocked; }   // the mesh under it is another one
                 Env::Vec3 p; std::int32_t tri = -1;
-                if (c.act.target && !ActorAt(pic, c.act.target, p, tri)) m.marks |= kMarkTargetGone;
-                if (Sighted(c.act) && Sees(pic, c.key, c.act.target) == Iaus::Tri::No) m.marks |= kMarkSightLost;
-                if (Dist(m.p, c.p) <= t.spotArriveU) m.marks |= kMarkArrived;
-                if (m.nTop == 0 || !SameAct(m.top[0], c.held)) m.marks |= kMarkActionChanged;
-                if (!(c.kinds & KindsOf(pic, m, t))) { c.on = false; m.marks |= kMarkOrder; }       // the road or the class no longer offers it
-                if (m.marks & kMarkCombatEnd) c.on = false;
+                if (c.act.target && !ActorAt(pic, c.act.target, p, tri)) m.seen |= kMarkTargetGone;
+                if (Dist(m.p, c.p) <= t.spotArriveU) m.seen |= kMarkArrived;
+                if (m.nTop == 0 || !SameAct(m.top[0], c.held)) m.seen |= kMarkActionChanged;
+                if (!(c.kinds & KindsOf(pic, m, t))) { c.on = false; m.seen |= kMarkOrder; }       // the road or the class no longer offers it
+                if (m.seen & kMarkCombatEnd) c.on = false;
             }
-            m.fixed = m.decides && c.on && m.marks == 0;
+            m.fixed = m.decides && c.on && m.seen == 0;
             if (m.decides && c.on) {
                 bool in = false; for (Spot& s : pic.pool) if (s.key == c.key) { s.kinds |= c.kinds; in = true; }
                 if (!in) { Spot s; s.key = c.key; s.p = c.p; s.tri = c.tri; s.kinds = c.kinds; s.portals = PortalsAt(v, pic.wallVert, c.tri, c.p, t); s.exits = ExitsAt(v, c.tri, c.p, pic.foes, m.who, t); pic.pool.push_back(s); }
@@ -471,14 +546,19 @@ namespace MFO::Iaus::MovePass {
         asks.clear();
         Work& w = pic.work;
         if (w.stage == Stage::Done) return true;
+        if (v.stamp != pic.envStamp || v.verts.size() != pic.wallVert.size()) { w = Work{}; pic.counts.viewChanged = 1; return true; }   // every index in the work is the other mesh's
         // The clock only decides where to pause. What is computed never depends on it.
         const auto t0 = std::chrono::steady_clock::now();
         const auto more = [&] { return sliceMs > 0.0f && std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count() < sliceMs; };
         do {
             switch (w.stage) {
             case Stage::Flood:    if (!UnitFlood(pic, v, s, t)) { w.stage = Stage::Generate; w.cursor = 0; } break;
-            case Stage::Generate: if (w.cursor < w.gen.size()) UnitGenerate(pic, v, s, t); else { w.stage = Stage::Pool; w.cursor = 0; } break;
-            case Stage::Pool:     UnitPool(pic, v, t); w.stage = Stage::Paths; w.cursor = 0; break;
+            case Stage::Generate: if (w.cursor < w.gen.size()) UnitGenerate(pic, v, s, t); else w.stage = Stage::Merge; break;
+            case Stage::Merge:    UnitMerge(pic); w.stage = Stage::Place; w.cursor = 0; break;
+            case Stage::Place:    if (w.cursor < w.hits.size()) UnitPlace(pic, v, t); else w.stage = Stage::Select; break;
+            case Stage::Select:   UnitSelect(pic); w.stage = Stage::Offer; w.cursor = 0; break;
+            case Stage::Offer:    if (w.cursor < pic.pool.size()) UnitOffer(pic, v, s, t); else w.stage = Stage::Queue; break;
+            case Stage::Queue:    UnitQueue(pic, v); w.stage = Stage::Paths; w.cursor = 0; break;
             case Stage::Paths:    if (w.cursor < w.pathUnits.size()) UnitPath(pic, v, s, t); else { w.stage = Stage::Asks; w.cursor = 0; } break;
             case Stage::Asks:     UnitAsks(pic, profiles, t); asks = w.asked; w.stage = Stage::Done; return true;
             case Stage::Done:     return true;
@@ -487,14 +567,25 @@ namespace MFO::Iaus::MovePass {
         return false;
     }
 
-    void Answer(PartyPicture& pic, std::span<const RayAnswer> answers) {
+    void Answer(PartyPicture& pic, std::span<const RayAnswer> answers, const Tuning& t) {
+        auto& asked = pic.work.asked; auto& late = pic.late;
         for (const RayAnswer& a : answers) {
-            const auto it = std::find_if(pic.work.asked.begin(), pic.work.asked.end(), [&](const RayAsk& k) { return k.spot == a.spot && k.viewer == a.viewer; });
-            if (it == pic.work.asked.end()) continue;   // not a question of this window
-            if (a.sees == Iaus::Tri::Unknown) continue; // not an answer: it stays asked and is carried
-            PairFact f; f.sees = a.sees; f.t = pic.t; f.spotAt = it->p;
-            if (ActorAt(pic, a.viewer, f.actorAt, f.actorTri)) pic.facts[{ a.spot, a.viewer }] = f;
-            pic.work.asked.erase(it);
+            const auto mine = [&](const RayAsk& k) { return k.spot == a.spot && k.viewer == a.viewer; };
+            const auto now = std::find_if(asked.begin(), asked.end(), mine);
+            const auto old = std::find_if(late.begin(), late.end(), mine);
+            if (now == asked.end() && old == late.end()) continue;   // not a question that is open
+            if (a.sees == Iaus::Tri::Unknown) continue;              // not an answer: it stays asked and is carried
+            const RayAsk q = old != late.end() ? *old : *now;
+            if (now != asked.end()) asked.erase(now);
+            if (old != late.end()) late.erase(old);
+            PairFact f; f.sees = a.sees; f.spotAt = q.p; f.t = q.t; f.actorAt = q.viewerAt; f.actorTri = q.viewerTri;
+            if (std::isfinite(a.t) && a.t >= 0.0 && Finite(a.viewerAt)) { f.t = a.t; f.actorAt = a.viewerAt; f.actorTri = kAnyTri; }
+            // a kept shooter's spot: the event counts although the runner's fact may already be too far off to keep
+            if (a.sees == Iaus::Tri::No && pic.t - f.t <= static_cast<double>(t.spotKeptAgeSec))
+                for (Member& m : pic.party) if (m.fixed && m.commit.key == a.spot && m.commit.act.target == a.viewer && Sighted(m.commit.act)) m.marks |= kMarkSightLost;
+            if (Stale(pic, { a.spot, a.viewer }, f, (std::max)(pic.t, f.t), t)) continue;
+            const auto [it, fresh] = pic.facts.try_emplace({ a.spot, a.viewer }, f);
+            if (!fresh && it->second.t <= f.t) it->second = f;
         }
     }
 
@@ -537,9 +628,8 @@ namespace MFO::Iaus::MovePass {
         if (done) for (const auto& p : w.pairs) {
             if (!open[p.member]) continue;
             const Member& m = pic.party[p.member];
-            const std::uint32_t allowed = KindsOf(pic, m, t);
             for (std::uint8_t a = 0; a < m.nTop; ++a)
-                if (const auto mask = Pairing(pic.pool[static_cast<std::size_t>(p.spot)].kinds, allowed, m.top[a])) {
+                if (const auto mask = w.Offered(p.spot, p.member, a)) {
                     order.push_back({ QDist(p.path.length), table.size() });
                     table.push_back(MakeTriple(pic, p.member, a, p.spot, &p, mask, profiles, t));
                 }
@@ -595,7 +685,7 @@ namespace MFO::Iaus::MovePass {
                 a.act = m.commit.act; a.kinds = m.commit.kinds; a.kept = true;
             } else if (const Triple* x = picked[i]) {
                 a.act = m.top[x->action]; a.score = x->score;
-                if (x->spot >= 0) { spotOf(x->spot); a.kinds = Pairing(pic.pool[static_cast<std::size_t>(x->spot)].kinds, KindsOf(pic, m, t), a.act); a.kept = x->incumbent; }
+                if (x->spot >= 0) { spotOf(x->spot); a.kinds = x->kinds; a.kept = x->incumbent; }
             }
             a.action = a.act.family; a.form = a.act.form; a.target = a.act.target;
             out.push_back(a);
@@ -611,7 +701,7 @@ namespace MFO::Iaus::MovePass {
                 const double at = a.kept ? m->commit.at : pic.t;
                 m->commit = Commit{ true, a.key, a.p, a.tri, a.kinds, a.act, m->top[0], at };
             }
-            m->marks = 0;
+            m->seen = 0;
         }
     }
 }

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <queue>
+#include <tuple>
 
 namespace MFO::Iaus::Move {
 
@@ -35,33 +36,40 @@ namespace MFO::Iaus::Move {
         return it != d.end() && it->first == tri ? it->second : -1.0f;
     }
 
+    std::uint32_t Work::Offered(std::int32_t spot, std::uint32_t member, std::uint8_t action) const {
+        const auto it = std::lower_bound(offers.begin(), offers.end(), std::tie(spot, member, action), [](const Offer& o, const auto& k) { return std::tie(o.spot, o.member, o.action) < k; });
+        return it != offers.end() && it->spot == spot && it->member == member && it->action == action ? it->kinds : 0u;
+    }
+
     // Dijkstra over triangle centres, nearest first, ties by triangle. An estimate of the walk: FindPath is the authority for a spot that is paired.
     void Flood(const Env::View& v, const Env::Vec3& from, std::int32_t tri, const Env::Walker& who, float radius, int maxTris, Work::Flood& out) {
         out.d.clear();
         if (tri < 0 || static_cast<std::size_t>(tri) >= v.tris.size()) return;
         using N = std::pair<float, std::int32_t>;
         std::priority_queue<N, std::vector<N>, std::greater<N>> q;
-        std::map<std::int32_t, float> done, best;
-        q.push({ 0.0f, tri }); best[tri] = 0.0f;
-        while (!q.empty() && static_cast<int>(done.size()) < maxTris) {
+        std::vector<float> best(v.tris.size(), kInf);   // < 0 = closed
+        out.cut = false; out.bound = radius;
+        q.push({ 0.0f, tri }); best[static_cast<std::size_t>(tri)] = 0.0f;
+        while (!q.empty()) {
             const auto [d, at] = q.top(); q.pop();
-            if (done.count(at)) continue;
-            done[at] = d;
+            if (best[static_cast<std::size_t>(at)] < 0.0f) continue;
+            if (static_cast<int>(out.d.size()) >= maxTris) { out.cut = true; out.bound = d; break; }
+            best[static_cast<std::size_t>(at)] = -1.0f;
+            out.d.push_back({ at, d });
             const Env::Tri& T = v.tris[static_cast<std::size_t>(at)];
             const Env::Vec3 here = at == tri ? from : Env::Centroid(v, at);
             for (int k = 0; k < 3; ++k) {
                 const std::int32_t nb = T.nb[k];
-                if (nb < 0 || static_cast<std::size_t>(nb) >= v.tris.size() || !Walks(v, T.kind[k]) || done.count(nb)) continue;
+                if (nb < 0 || static_cast<std::size_t>(nb) >= v.tris.size() || !Walks(v, T.kind[k]) || best[static_cast<std::size_t>(nb)] < 0.0f) continue;
                 if (!OpenTo(v, v.tris[static_cast<std::size_t>(nb)], who)) continue;
                 const Env::Vec3 e = Mid(v.verts[T.v[k]], v.verts[T.v[(k + 1) % 3]]);
                 const float nd = d + Dist(here, e) + Dist(e, Env::Centroid(v, nb));
                 if (!(nd <= radius)) continue;
-                const auto it = best.find(nb);
-                if (it != best.end() && it->second <= nd) continue;
-                best[nb] = nd; q.push({ nd, nb });
+                if (best[static_cast<std::size_t>(nb)] <= nd) continue;
+                best[static_cast<std::size_t>(nb)] = nd; q.push({ nd, nb });
             }
         }
-        out.d.assign(done.begin(), done.end());
+        std::sort(out.d.begin(), out.d.end());
     }
 
     void Points(const Env::View& v, std::int32_t tri, const Tuning& t, std::vector<Cand>& out) {
@@ -199,7 +207,7 @@ namespace MFO::Iaus::Move {
         for (const auto& e : g.pic.work.foeFlood) if (e.who == f->id) { fl = &e; break; }
         if (!fl) return false;
         const float his = fl->At(c.tri);
-        const float lead = (his >= 0.0f ? his : g.t.spotRadius) - c.walk;   // not reached by the foe's flood: farther than it looks
+        const float lead = (his >= 0.0f ? his : fl->bound) - c.walk;   // not reached by the foe's flood: at least its bound
         if (!(lead > 150.0f)) return false;
         if (!IsMove(g.act.family) && g.hasTarget && !InBand(g, c)) return false;
         r = c.walk - lead; return true;
@@ -224,6 +232,12 @@ namespace MFO::Iaus::Move {
     bool GenReachUnreach(const GenIn& g, const Cand& c, float& r) {
         if (!g.foe || !g.targetUnreachable || !InBand(g, c)) return false;
         r = c.walk; return true;
+    }
+
+    bool KeptHolds(SpotKind k, const GenIn& g, const Cand& c) {
+        if (k != SpotKind::RetreatExit && k != SpotKind::Kite) return true;
+        const Foe* f = ThreatOf(g, 0);
+        return !f || Dist(f->p, c.p) > Dist(f->p, g.m.p) - g.t.spotArriveU;   // never toward what is on him now
     }
 
     bool IsMove(Family f) {

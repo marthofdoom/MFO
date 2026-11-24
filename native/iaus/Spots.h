@@ -19,6 +19,9 @@ namespace MFO::Iaus::Move {
     using SpotGen   = bool (*)(const GenIn&, const Cand&, float& a_rank);
     using SpotCheck = bool (*)(const GenIn&, const Cand&, Env::Scratch&);   // the dear half (geometry rays), on the best few only. Null = none
 
+    // His committed spot, for the same action and target: the generator's "better than where I stand" half no longer applies, its direction does.
+    [[nodiscard]] bool KeptHolds(SpotKind, const GenIn&, const Cand&);
+
     inline constexpr std::uint64_t F(Family a_f) { return std::uint64_t{ 1 } << static_cast<unsigned>(a_f); }
     template <class... Fs> inline constexpr std::uint64_t Families(Fs... a_f) { return (F(a_f) | ...); }
 

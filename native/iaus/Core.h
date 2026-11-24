@@ -383,6 +383,8 @@ namespace MFO::Iaus {
         float spotArriveU = 90.0f;               // inside this of a committed spot he has arrived
         float spotFactMoveU = 128.0f;            // a sight fact or a path is reused until an end moved this far (or left its triangle)
         float spotFactMaxAgeSec = 5.0f;          // ... or got this old
+        float spotKeptAgeSec = 1.0f;             // a committed spot's own sight is asked again once its answer is this old (kMarkSightLost)
+        float spotUnknownExposure = 0.75f;       // the share an UNANSWERED threat counts as in spot_exposure: neither hidden nor surely seen. It keeps the ray budget from deciding the place
         WorthTable worth{};
     };
     [[nodiscard]] inline constexpr float MoveDecisionSec(const Tuning& a_t) { return a_t.moveDecisionSec >= kMoveDecisionFloorSec ? a_t.moveDecisionSec : kMoveDecisionFloorSec; }   // a NaN reads as the floor

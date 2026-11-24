@@ -44,8 +44,12 @@ namespace MFO::Iaus::Move {
     // ── facts shared by the party: "that actor sees that spot", keyed (spot, actor) ──
     struct PairFact { Iaus::Tri sees = Iaus::Tri::Unknown; double t = 0.0; std::int32_t actorTri = -1; Env::Vec3 actorAt, spotAt; };
     using PairKey = std::pair<SpotKey, FormID>;
-    struct RayAsk    { SpotKey spot = 0; Env::Vec3 p; FormID viewer = 0; bool operator==(const RayAsk& o) const { return spot == o.spot && viewer == o.viewer; } };
-    struct RayAnswer { SpotKey spot = 0; FormID viewer = 0; Iaus::Tri sees = Iaus::Tri::Unknown; };
+    inline constexpr std::int32_t kAnyTri = -2;        // a fact whose viewer's triangle is not known: only how far he moved counts
+    // t / viewerAt / viewerTri: the window's freeze the question was filed at.
+    struct RayAsk    { SpotKey spot = 0; Env::Vec3 p; FormID viewer = 0; double t = 0.0; Env::Vec3 viewerAt; std::int32_t viewerTri = -1;
+                       bool operator==(const RayAsk& o) const { return spot == o.spot && viewer == o.viewer; } };
+    // t >= 0: when the ray was cast and where the viewer stood (a road that answers later than its window says so). t < 0: as the question was FIRST filed.
+    struct RayAnswer { SpotKey spot = 0; FormID viewer = 0; Iaus::Tri sees = Iaus::Tri::Unknown; double t = -1.0; Env::Vec3 viewerAt{}; };
 
     // ── members and foes ──
     enum Mark : std::uint32_t {   // a REAL event since the last pass: it frees a committed member for the next pass, it never runs one
@@ -67,15 +71,17 @@ namespace MFO::Iaus::Move {
         Env::Walker who; float speed = 370.0f;
         Env::Vec3 anchor; float leash = 0.0f;          // 0 = no leash
         bool  wantsDark = false;                       // S4: read only for SpotFacts::light
-        Commit commit; std::uint32_t marks = 0;
+        Commit commit;
+        std::uint32_t marks = 0;                       // the holder's INBOX: set at any time, also between Freeze and Adopt. Freeze takes it, Adopt never touches it
         // frozen by MovePass::Freeze
+        std::uint32_t seen = 0;                        // the marks this window decides on (the inbox it took + what Freeze found). Adopt clears it
         std::array<std::int32_t, 2> threats{ -1, -1 }; // his nearest foes that target him, indexes into PartyPicture::foes
         std::array<std::uint64_t, 2> portals{}; std::uint8_t exits = 0;
         bool  fixed = false;                           // committed and unmarked: a fixed assignment this window
     };
     struct Foe { FormID id = 0; Env::Vec3 p; std::int32_t tri = -1; float ageSec = 0.0f; FormID target = 0; float faceX = 0.0f, faceY = 0.0f; };   // facing: unit, 0 0 = unknown
     struct Area { Env::Vec3 p; float r = 0.0f; };                    // an active hostile area
-    struct LightAt { SpotKey key = 0; float level = 0.0f; };         // INPUT HOOK (S4 / G6): a sampled level at a spot. Absent = unknown, never dark
+    struct LightAt { SpotKey key = 0; float level = 0.0f; };         // Keyed by the pool: a sampler fills it after Phase1, before Phase3. INPUT HOOK (S4 / G6): a sampled level at a spot. Absent = unknown, never dark
 
     // ── budgets. THE ONE TABLE ──
     // 32 facts is the RATE of new sight answers a window buys. 24 spots is the POOL whose sight is asked at all. A firing spot needs its target's fact and up to two
@@ -88,7 +94,8 @@ namespace MFO::Iaus::Move {
         int   paths = 80;            // path searches a window, after the cache
         int   triples = 1920;        // (member, action, spot) scored
         float sliceMs = 3.0f;        // worker time a pump tick gives phase 1
-        int   gatherTris = 192;      // triangles a flood closes
+        int   gatherTris = 2048;     // triangles a flood closes (a bound on the worst mesh: spotRadius 1500 of 64-unit cells is about 3400). A flood it cuts is counted
+        int   lateAsks = 64;         // filed questions of earlier windows an answer may still come for
         int   foeFloods = 8;         // foes whose own walk is flooded (kite)
         int   perGen = 3;            // spots a kind keeps for one member and action
         int   geomPerGen = 64;       // ... of which this many may be tested with geometry rays
@@ -96,7 +103,11 @@ namespace MFO::Iaus::Move {
     };
     inline constexpr MoveBudget kMoveBudget{};
     // What a budget cost this window. The pass counts, the holder logs (once per fight).
-    struct MoveCounts { std::uint32_t spotsDropped = 0, pathsSkipped = 0, asksShort = 0, asksCarried = 0, triplesDropped = 0, generated = 0, paths = 0, triples = 0, unfinished = 0; };   // unfinished: Phase3 ran before Phase1 was done
+    struct MoveCounts { std::uint32_t spotsDropped = 0, pathsSkipped = 0, asksShort = 0, asksCarried = 0, triplesDropped = 0, generated = 0, paths = 0, triples = 0,
+        unfinished = 0,                                // Phase3 ran before Phase1 was done
+        floodsShort = 0,                               // a flood stopped at gatherTris inside spotRadius
+        viewChanged = 0,                               // the mesh changed under the window: phase 1 was dropped, everyone uncommitted stays
+        lateDropped = 0; };                            // filed questions given up on
 
     struct PathFact {
         bool reachable = false; float length = 0.0f, climb = 0.0f, drop = 0.0f;
@@ -107,12 +118,17 @@ namespace MFO::Iaus::Move {
 
     // The pass's working memory for one window. Nothing outside MovePass.cpp / Spots.cpp reads it.
     struct Work {
-        enum class Stage : std::uint8_t { Flood, Generate, Pool, Paths, Asks, Done } stage = Stage::Done;
+        enum class Stage : std::uint8_t { Flood, Generate, Merge, Place, Select, Offer, Queue, Paths, Asks, Done } stage = Stage::Done;
         std::size_t cursor = 0;
-        struct Flood { FormID who = 0; std::vector<std::pair<std::int32_t, float>> d; [[nodiscard]] float At(std::int32_t a_tri) const; };   // sorted by triangle. < 0 = not reached
+        struct Flood { FormID who = 0; std::vector<std::pair<std::int32_t, float>> d; float bound = 0.0f; bool cut = false; [[nodiscard]] float At(std::int32_t a_tri) const; };   // sorted by triangle. < 0 = not reached, so at least `bound` away
         std::vector<Flood> memberFlood, foeFlood;      // memberFlood by party index (empty for who does not decide), foeFlood by foe index
-        struct Hit { Spot s; std::int32_t member = -1; std::int32_t rank = 0; };
-        std::vector<Hit> hits;
+        struct Hit { Spot s; std::int32_t rank = 0; };
+        std::vector<Hit> hits;                         // what the generators found; after Stage::Merge one per key
+        // A spot is SHARED, what it is good for is not: a kind is a claim about ITS member, action, target and threats. Every pooled spot is asked again per
+        // (member, action), so a retreat of one member is never another's walk toward his own attacker. Sorted by (spot, member, action).
+        struct Offer { std::int32_t spot; std::uint32_t member; std::uint8_t action; std::uint32_t kinds; };
+        std::vector<Offer> offers;
+        [[nodiscard]] std::uint32_t Offered(std::int32_t a_spot, std::uint32_t a_member, std::uint8_t a_action) const;   // 0 = not his
         struct GenUnit { std::uint32_t member, action, kind; };
         std::vector<GenUnit> gen;
         struct PathUnit { std::uint32_t member; std::int32_t spot; FormID actor; std::int32_t near; };   // spot < 0: the walk to the actor (target reachability)
@@ -135,7 +151,8 @@ namespace MFO::Iaus::Move {
         // carried across windows
         std::map<PairKey, PairFact> facts;
         std::map<PathKey, PathFact> paths;
-        std::vector<RayAsk> carried;                   // asked, never answered: asked first next window
+        std::vector<RayAsk> carried;                   // wanted, not answered: asked first next window
+        std::vector<RayAsk> late;                      // filed in an earlier window, not answered yet, oldest first: an answer is still taken
         std::vector<std::uint8_t> wallVert;            // per vertex: an end of a Wall edge (the doorway test), for envStamp
         std::uint32_t window = 0;
         // this window

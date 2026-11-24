@@ -82,10 +82,10 @@ namespace MFO::Iaus {
             "need", "far", "need", "need", "need",
             "strike", "hold", "need", "flee_heal", "need", "guard_line",
             "buff_threat", "buff_stealth",
-            "buff_foes", "perks", "consumable_worth", "spell_perks", "hand_lost", "heal_rate",
+            "buff_foes", "perks", "consumable_worth", "spell_perks", "hand_lost", "heal_rate",   // batch 3 (review F7: the old name threat was FoeThreat's; every appended name is unique)
             "spot_path", "spot_sight", "spot_exposure", "spot_fire_line", "spot_range", "spot_path_exposed", "spot_exits", "spot_ally_dist",
             "spot_hostile_area", "spot_leash", "spot_climb", "spot_drop", "spot_detected", "spot_light", "spot_foe_reach", "spot_lane",
-            "spot_portal_busy", "spot_serves", "spot_cover",     // batch 3 (review F7: the old name threat was FoeThreat's; every appended name is unique)
+            "spot_portal_busy", "spot_serves", "spot_cover",
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -519,7 +519,7 @@ namespace MFO::Iaus {
             { "t.moveDecisionSec", &Tuning::moveDecisionSec }, { "t.spotPinKinds", &Tuning::spotPinKinds }, { "t.spotMomentum", &Tuning::spotMomentum }, { "t.spotPreempt", &Tuning::spotPreempt },   // MOVEMENT (S1): the sim's list gains them with S2
             { "t.spotRadius", &Tuning::spotRadius }, { "t.spotSplitArea", &Tuning::spotSplitArea }, { "t.spotEyeU", &Tuning::spotEyeU }, { "t.spotHighU", &Tuning::spotHighU },
             { "t.spotPortalU", &Tuning::spotPortalU }, { "t.spotPortalStandU", &Tuning::spotPortalStandU }, { "t.spotExitU", &Tuning::spotExitU }, { "t.spotPeelU", &Tuning::spotPeelU },
-            { "t.spotArriveU", &Tuning::spotArriveU }, { "t.spotFactMoveU", &Tuning::spotFactMoveU }, { "t.spotFactMaxAgeSec", &Tuning::spotFactMaxAgeSec },
+            { "t.spotArriveU", &Tuning::spotArriveU }, { "t.spotFactMoveU", &Tuning::spotFactMoveU }, { "t.spotFactMaxAgeSec", &Tuning::spotFactMaxAgeSec }, { "t.spotKeptAgeSec", &Tuning::spotKeptAgeSec }, { "t.spotUnknownExposure", &Tuning::spotUnknownExposure },
             { "t.unmeasuredDamage", &Tuning::unmeasuredDamage },   // fix/spell-worth C2: game only until the sim mirror (PLACEHOLDER)
         };
         if (!std::isfinite(a_v)) { if (a_why) *a_why = "not a finite number"; return false; }
