@@ -1689,12 +1689,12 @@ LOOT_KNOBS = [("loot.takeThreshold", 0.5, [0.25, 0.375, 0.667, 0.8]), ("loot.nee
 # NOT searched, each an open decision with its reason: the lab prices their items at 0 because MFO has no road that uses them, so any
 # value found would only say "carry less weight" (soul gems: no recharge road, ClickUp 1dfcuabd356; poisons: no apply road; invisibility,
 # regen and lockpicks: not in the fixture; the sale scale: inert while consumableSellRoad is false, no ALCH sell road).
-# sim v4 batch L: the rows that were dead in the stops lab and are read by the loot world (Loot.h): the guard answer cache and the corpse bar
-# (TheftGate.cpp), the batch hold (Service.cpp), the gate rows (LootTravel_internal.h, StuckAtOrigin.cpp). Searched on EPISODES only.
-LOOT_EPISODE_KNOBS = [("loot.batchHoldMinSec", 3.0, [0.0, 1.5, 6.0]), ("loot.guardFreshSec", 2.0, [1.0, 4.0]), ("loot.guardUnreadMaxSec", 10.0, [5.0, 20.0]),
-                      ("loot.guardRepostSec", 0.5, [0.25, 1.0]), ("loot.guardBarFloorSec", 20.0, [10.0, 40.0]), ("loot.gateConeDeg", 45.0, [22.5, 30.0, 60.0]),
-                      ("loot.gateBeyondU", 1024.0, [256.0, 512.0, 2048.0]), ("loot.gateReadmitSec", 0.0, [30.0, 60.0, 120.0]), ("loot.gateReadmitMoveU", 500.0, [250.0, 1000.0]),
-                      ("loot.gateRepeatU", 300.0, [150.0, 600.0]), ("loot.gateShortU", 300.0, [150.0, 600.0]), ("loot.gateNearU", 200.0, [100.0, 400.0])]
+# sim v4 batch L: the rule rows the loot world reads (Loot.h) and the stops lab could not see. After the review of 9689734b ONE of them is searched: the
+# batch hold. The others stay out, each for its reason (LOOT_NOT_SEARCHED): a guard timer is a safety rule and not a value trade, gateReadmitSec is marth's
+# "no timer" ruling, and the gate rows wait until the lab blocks as often as the field does. Searched on EPISODES only.
+LOOT_EPISODE_KNOBS = [("loot.batchHoldMinSec", 3.0, [0.0, 1.5, 6.0])]
+_GUARD_WHY = "a guard rule's timer: a safety rule, not a value trade. A value search would only ever shorten the caution (review S2). The loot world reads it (scenarios guard-bar-1117, pending-1117c); marth sets it"
+_GATE_WHY = "read by the loot world, NOT searched yet: the field blocks 2 to 5 times as often as the lab (the lab's world is the navmesh alone), so a value found here says nothing about the game (review S6). Searchable once the lab's block rate matches a field log"
 LOOT_NOT_SEARCHED = {"loot.stealNeedMin": "the theft road exists in the loot world (scenario `thief`), but an ordinary episode holds no owned loose item a Thief needs: no signal to search on. PLACEHOLDER",
                      "loot.stealRiskWeight": "as stealNeedMin: PLACEHOLDER", "loot.stealBountyPerGold": "as stealNeedMin: PLACEHOLDER",
                      "loot.stealBountyRef": "as stealNeedMin: PLACEHOLDER",
@@ -1706,6 +1706,9 @@ LOOT_NOT_SEARCHED = {"loot.stealNeedMin": "the theft road exists in the loot wor
                      "loot.regenTarget": "a regen potion is worth 0 in the lab", "loot.lockpickTarget": "no lock-picking road in the lab: a carried pick is worth 0",
                      "loot.saleGoldPerWeight": "inert while LootTuning::consumableSellRoad is false (no ALCH sell road)",
                      "loot.saleWeight": "inert while LootTuning::consumableSellRoad is false (no ALCH sell road)",
+                     "loot.guardFreshSec": _GUARD_WHY, "loot.guardUnreadMaxSec": _GUARD_WHY, "loot.guardRepostSec": _GUARD_WHY, "loot.guardBarFloorSec": _GUARD_WHY,
+                     "loot.gateReadmitSec": "marth 2026-09-24: 'no timer'. A ruling, not a knob: ships 0 and is never searched",
+                     "loot.gateConeDeg": _GATE_WHY, "loot.gateBeyondU": _GATE_WHY, "loot.gateReadmitMoveU": _GATE_WHY, "loot.gateRepeatU": _GATE_WHY, "loot.gateShortU": _GATE_WHY, "loot.gateNearU": _GATE_WHY,
                      "loot.offClassDwellSec": "an equip notice's dwell (EquipAuthority.cpp OffClassTick): no loot rule reads it, in the game or in the lab"}
 
 
@@ -1869,16 +1872,33 @@ def loot_report(sets, heldout):
             raise RuntimeError("no LOOT-REPORT line:\n%s" % t[-400:])
     t = text_run("lootrep:" + json.dumps(cmd[1:]), cmd, "builtin", check=chk)
     m = re.search(r"value/ep with gold ([-0-9.]+), without ([-0-9.]+) .*gate rows failing: ALL (\d+)", t)
-    fail = sorted(set(re.findall(r"^LOOTGATE ALL\s+(.+?)\s+[-0-9.]+\s+<=\s+[-0-9.]+\s+FAIL$", t, re.M)))
-    return {"value": float(m.group(1)), "value_no_gold": float(m.group(2)), "gate_failing": fail}
+    rows = {r.group(1): [float(r.group(2)), r.group(3) == "FAIL"] for r in re.finditer(r"^LOOTGATE ALL\s+(.+?)\s+([-0-9.]+)\s+<=\s+[-0-9.]+\s+(ok|FAIL)$", t, re.M)}
+    return {"value": float(m.group(1)), "value_no_gold": float(m.group(2)), "gate": rows, "gate_failing": sorted(k for k, v in rows.items() if v[1])}
+
+
+LOOT_HARD_ROWS = ("crimes", "guardSeenTakes")   # more of either rejects the table outright (followers never commit detected crimes)
+
+
+def loot_gate_check(name, shipped, kept_rep):
+    """EVERY gate row is a number that must not get worse (every row of kLootBounds is 'at most'): a row the kept table makes worse than the shipped one is an
+    open decision whether or not it crosses its bound, and more crimes or guard-seen takes rejects the table (returns the reason)."""
+    worse = ["%s %.3f -> %.3f" % (k, shipped["gate"][k][0], v[0]) for k, v in sorted(kept_rep["gate"].items()) if k in shipped["gate"] and v[0] > shipped["gate"][k][0] + 1e-9]
+    if worse:
+        open_decision("loot table makes gate rows worse than the shipped table (%s places)" % name, "; ".join(worse))
+    hard = [w for w in worse if w.split(" ")[0] in LOOT_HARD_ROWS]
+    return ("%s places: %s" % (name, "; ".join(hard))) if hard else None
 
 
 def stage_loot_episodes():
     """THE IAUS LOOT TABLE in the loot world (sim v4 batch L, Loot.h: looting in the fight's own place, on the fight's own clock). The 16 score rows
-    of LOOT_KNOBS and the 12 rule rows of LOOT_EPISODE_KNOBS are searched on the mean episode value (fights + potion worth + GoldJ x gold,
-    LootLab.h Score). Then the kept table is CHECKED, never searched, on the gate (LootLab.h kLootBounds) and, when the episodes are played in an
-    extracted set (--loot-places), on that set's HELD-OUT places: a table that loses value there, or fails a gate row the shipped table passed, is
-    an open decision and not a result."""
+    of LOOT_KNOBS and the batch hold (LOOT_EPISODE_KNOBS) are searched on the mean episode value (LootLab.h Score: fights + potion worth + GoldJ x
+    gold + the museum term, less 1000 per crime or guard-seen take, so no step can buy value with one). Then the kept table is CHECKED on the gate
+    (LootLab.h kLootBounds) and, with --loot-places, on that set's HELD-OUT places: ANY gate row worse than the shipped table's is an open decision,
+    more crimes or guard-seen takes REJECTS the table (kept is emptied, the reason recorded), and a table that loses value held-out is an open decision.
+    What is "wanted" in those rows is the shipped table's verdict on the starting bag, and roadLeft% counts what any road could take: a table that takes
+    less cannot read better.
+    KNOWN TIE (review): loot.gold and loot.valuables are not independent. native's Valuables road takes coin too (LootTake.cpp), so with valuables in
+    the plan the gold row decides only the order."""
     global LOOT_PREFIX
     LOOT_PREFIX = "epi:"
     kept, rows = shared_search("loot", LOOT_KNOBS + LOOT_EPISODE_KNOBS, "epi:" + ",".join(CELLS), range(7001, 7001 + CFG["train"]), loot_judge)
@@ -1888,13 +1908,19 @@ def stage_loot_episodes():
     for name, held in (("train", False),) + ((("heldout", True),) if getattr(A, "loot_places", "") else ()):
         b, k = loot_report(None, held), loot_report(",".join(kept) or None, held)
         st[name] = {"shipped": b, "kept": k}
-        new_fail = [g for g in k["gate_failing"] if g not in b["gate_failing"]]
-        if new_fail:
-            open_decision("loot table fails gate rows the shipped table passes (%s places)" % name, ", ".join(new_fail))
+        why = loot_gate_check(name, b, k)
+        if why:
+            st["rejected"] = why
         if held and kept and k["value"] < b["value"]:
             open_decision("loot table loses value on the held-out places", "%.3f against %.3f shipped: the kept values are not confirmed off the places they were searched on" % (k["value"], b["value"]))
     if not getattr(A, "loot_places", ""):
         open_decision("loot table not checked on held-out places", "the episodes ran on the hand-made fixtures; run with --loot-places <set> (needs ~/.cache/mfo-env and <set>.loot.json)")
+    if st.get("rejected"):
+        open_decision("loot table REJECTED: more crimes or guard-seen takes than the shipped table", st["rejected"])
+        SUMMARY["stages"]["loot"]["kept_before_reject"] = list(kept)
+        SUMMARY["stages"]["loot"]["kept"] = []
+        SUMMARY["stages"]["loot"]["rejected"] = st["rejected"]
+    open_decision("loot.gold is tied with loot.valuables", "native's Valuables road takes coin too, so the two rows are not independent: read a kept loot.gold with that in mind")
     SUMMARY["stages"]["loot_world"] = st
 
 
