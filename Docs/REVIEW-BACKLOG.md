@@ -3870,3 +3870,24 @@ SEV-5 harness rows for MFO-B865 test the pure rule and the drop only; nothing te
 - B7 SEV-5 Catalogue.cpp: the F7 review comment moved from heal_rate's line to the spot_cover line. Plan contract's TrustTable / Light::Field are not in the picture (S3 / S4 append; light keyed by SpotKey, known only after UnitPool, so a sampler must fill it after Phase1: document).
 (B7: the light half is documented at `PartyPicture.h LightAt`: keyed by the pool, filled after Phase1. TrustTable / Light::Field stay S3 / S4.)
 - SEV-5 (author of the fix round) `tools/tune_app/selftest.py` was not run to the end: it hangs headless (pre-existing, the reviewer met it too). The validator was called directly.
+
+## feat/move-s1 review round 2 (Opus 5.5, 2026-11-24, raised against fd1def9b; verbatim)
+
+# Opus re-check: feat/move-s1 1dc002fe..fd1def9b. VERDICT: MERGE. Nothing above SEV-4.
+Runs: move_rows standalone g++ -O2, 0 failed, golden 21/21 diff 0; rank_equiv 304732/0; test_tune_driver OK. No MSVC, no sim re-run.
+F1 closed: offers per (spot, member, action) by the row's own gen + check; Pairing/PairsAny gone from paths, asks, table. Kept spot: KeptHolds (retreat/kite direction). 72 picks, 0 toward.
+F2 closed: sight checked before the erase, kept ask at 1 s, Answer marks directly, FillStatic keeps the No.
+F3 closed: unanswered threat = 0.75, gap 8.6% < 15%; stays asked for every threatened ranked member.
+F4 closed: marks inbox / seen; Adopt clears only seen; an unadopted window keeps them. Re-marking costs one extra rescoring at worst.
+F5 closed: 2048, cut counted, kite uses the flood's bound.
+F6 closed: stamp + vert count, work dropped, Phase3 with no pairs = all stay; answers of the old mesh wiped at the next Freeze (stamp differs).
+F7 closed: late list (64, 5 s), t / viewerAt on the answer, Stale() is the one freshness rule, a late No only marks inside spotKeptAgeSec.
+COST measured (-O2, host), worst unit / total per window: 1508 tris n10 0.12 / 4.6 ms; 6032 tris n10 0.35 / 10.8; 15660 tris n10 0.44 / 13.7; pins on, same 0.73 / 21.8 ms.
+ Generator re-run (Offer) 0.02 ms a spot, 0.3 ms a window. Place (ExitsAt) 0.04 a spot. The 2048 gather makes Flood + Generate the bulk (5.5 + 6.3 ms). Every unit under the 3 ms slice;
+ 21.8 ms = 8 slices of 133 ms = over the 0.5 s window at worst case (counted unfinished: nobody moves). See R1.
+5 s OLD ANSWERS: never used as fresh without Stale() (viewer <= 128 u AND same tri, unless t given).
+INERT: no native file outside MovePass/Spots/MoveDump names MovePass/PartyPicture. Decide.cpp gains uncalled TopRanked; TuningFile adds spot.<kind> and the floor. Unchanged.
+R1 SEV-4 (S2/S3) a 10 member party, pins on, ~16k tris needs about 8 pump slices; a window holds about 3 to 4: unfinished every window = nobody re-decides. 4 members no-pins (7 ms) fits 3. Fix in S3: window ends when phase 1 ends (stretch), or gatherTris scaled by party size.
+R2 SEV-4 "first filing counts" also for a re-ask answered promptly with t < 0: the fresh ray is stamped with the OLD viewer place and dropped as Stale when he moved, so that question costs one more window. Fix: answer inside the window with t<0 and `now` found: use *now if the holder is synchronous, or make S2 always send t. Documented in the header, hence SEV-4.
+R3 SEV-5 ExitsAt and every foe flood allocate best(v.tris) (63 KB at 16k tris) per call, 60 to 80 a window; hold it in Scratch.
+R4 merge note: conflicts with feat/spellworth in tools/iaus_harness/run.sh (both edit the source list: keep both); then the MOVE_STANDALONE line in run.sh needs iaus/SpellWorth.cpp (Catalogue.cpp calls SetSpellWorthKnob).
