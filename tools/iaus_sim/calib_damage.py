@@ -24,7 +24,30 @@ WHAT IS REPORTED:
            before it), i.e. an upper bound on "from holding to down"; and the last health point above 75 % of his, if one is known
   POINTS   health-loss rates between two health points of one follower at most 6 s apart (uncapped, but only heal recipients have
            points, so it is the loss rate of followers somebody is trying to heal)
-Every number names its n. A session is not a fight: the gaps between fights are dropped by the own=1 / foes>0 filter."""
+  HITS     (sim v4 slice 1, review F-A of feat/oracle-unbounded) from the fill probe's hit lines, where a session has them
+           ([iaus-fill] hit <attacker> -> <target> source <form> ... | health before <a> at-event <e> after <b>: took <x> in <s> s ... |
+           estimate <e> (hit <h> for <kind> <form>, armor <share>, ...); [Debug] bIausFillProbe = 1). What a line is, and is not:
+             - "took" is the drop between the WORKER's two health samples around the event (0.12 to 0.55 s apart). It is a WINDOW, not a hit.
+             - the engine raises the event twice for most blows (identical time, pair, source and window: one line is dropped), and once
+               more per rider of the blow (an enchantment, a poison, a perk spell: another source form at the same instant). All events of
+               one attacker on one target inside one window are ONE BLOW here; a blow with a rider is an ENCHANTED blow.
+             - lines are rate limited ("lines skipped"), and an event can land one sample late, so a window can read 0 or a sliver.
+           WINDOWS  every distinct window with a loss that a foe's hit on a follower sits in: its share of the target's health (the
+                    largest health the session shows for him stands in for his maximum, which no line prints). This is what a BURST is,
+                    and what the one-hit line (World.h kOneHitLine) is read from: p90.
+           KINDS    what each window holds (classify_window): plain, rider, power, spell, unarmed, sneak, bash, blocked, unsampled,
+                    late, multi, each with its share of the windows and its own loss figures. They are kept APART on purpose: a rider,
+                    a power attack and a foe spell are each their own thing to model, never folded into one multiplier.
+           EVENTS   the per-blow sizes the lab's hit-size spread (World.h kFieldHit) is drawn from: the PLAIN windows only (one plain
+                    weapon blow of one foe: the attacker's weapon sampled, every source of the blow that weapon, no power attack, sneak
+                    attack, bash or block, and the loss at least MIN_SHARE of the attacker's own after-armor estimate). Size = loss over
+                    that attacker's own printed estimate after armor (the line's "hit" x (1 - armor share)), so every plain blow counts
+                    whatever its attacker. The printed kFieldHit row is those ratios divided by their mean (mean 1), sorted. The mean
+                    itself is how far the game's estimate reads under a real plain blow.
+           Also printed: how many lines the rate limit dropped ("lines skipped") and how many windows hold more events than the log
+           has lines for (the line's own "other hit(s)" count).
+Every number names its n. A session is not a fight: the gaps between fights are dropped by the own=1 / foes>0 filter. Two run dirs that
+hold the same session (a log pulled twice) count once: sessions are keyed by the MFO.log's first timestamp and its hit lines."""
 import os
 import re
 import sys
@@ -35,6 +58,12 @@ SENSE = re.compile(r"\[sense\] ([0-9A-F]{8}): own=(\d) foes=(\d+) load=([0-9.]+)
 BLEED = re.compile(r"\[bleed\] ([0-9A-F]{8}) (.*?): (DOWN|UP) \((essential down; was alive for ([0-9.]+)s|alive after|\?)")
 HOBS = re.compile(r"\[heal-obs\] ([0-9A-F]{8}) -> ([0-9A-F]{8}) .*? hp (\d+)% -> (\d+)% after ([0-9.]+)s")
 HOBS_SELF = re.compile(r"\[heal-obs\] ([0-9A-F]{8}) .*?road=direct self.*? hp (\d+)% -> (\d+)% after ([0-9.]+)s")
+HIT = re.compile(r"\[iaus-fill\] hit (.*?) \(([0-9A-F]{8})\) -> (.*?) \(([0-9A-F]{8})\) source ([0-9A-F]{8}) projectile [0-9A-F]{8} power=(\w+) bash=(\w+) blocked=(\w+) "
+                 r"sneak=(\w+) \| health before (\S+) at-event \S+ after (\S+): took (\S+) in (\S+) s, \d+ other hit\(s\) on him in it \| estimate \S+ "
+                 r"\(hit (\S+) for (\w+) ([0-9A-F]{8}), armor (\S+), magic resist")
+OTHER = re.compile(r", (\d+) other hit\(s\) on him in it .*?lines skipped (\d+)")   # the line's own counts: other events inside its window, lines the rate limit dropped before it
+MIN_SHARE = 0.25   # ASSUMPTION (see HITS above): a window under this share of the attacker's own after-armor estimate does not hold the blow
+PLAYER = "00000014"
 RECIP = re.compile(r"\[iaus-why\] (.*?) \(([0-9A-F]{8})\) cast_heal [^|]*?(?:-> [^|(]*\(([0-9A-F]{8})\) )?= [0-9.]+ \|.*?recipient_hp x=([0-9.]+)")
 
 
@@ -78,6 +107,138 @@ def parse(path):
                 names[r.group(2)] = r.group(1)
                 pts[r.group(3) or r.group(2)].append((t, float(r.group(4))))
     return sense, bleed, pts, names
+
+
+def parse_hits(path):
+    """The foe-on-follower hit events of one session, de-duplicated: [(t, attacker name, attacker id, target id, target name, source, flags,
+    before, after, took, kind, weapon, weapon hit, armor)], plus the session's follower ids (those with [sense] lines) and its key."""
+    fol, ev, first = set(), {}, None
+    for line in open(path, errors="replace"):
+        m = TS.match(line)
+        if not m:
+            continue
+        if first is None:
+            first = line[:14]
+        if "[sense]" in line:
+            s = SENSE.search(line)
+            if s:
+                fol.add(s.group(1))
+            continue
+        if "[iaus-fill] hit " not in line:
+            continue
+        h = HIT.search(line)
+        if not h:
+            continue
+        t = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3)) + int(m.group(4)) / 1000.0
+        g = h.groups()
+        key = (round(t, 3), g[1], g[3], g[4], g[9], g[10])   # the engine's second event of one blow: same instant, pair, source and window
+        e = ev.get(key)
+        if e is None:
+            e = ev[key] = {"t": t, "an": g[0], "a": g[1], "tn": g[2], "tg": g[3], "src": g[4], "power": g[5] == "true", "bash": g[6] == "true", "blocked": g[7] == "true",
+                           "sneak": g[8] == "true", "before": float(g[9]), "after": float(g[10]), "took": float(g[11]), "kind": g[14], "wpn": g[15], "hit": float(g[13]), "armor": float(g[16]), "other": 0, "skipped": 0, "lines": 1}
+            o = OTHER.search(line)
+            if o:
+                e["other"], e["skipped"] = int(o.group(1)), int(o.group(2))
+        else:
+            o = OTHER.search(line)   # the second line of one blow: its counts still count
+            if o:
+                e["other"], e["skipped"] = max(e["other"], int(o.group(1))), e["skipped"] + int(o.group(2))
+            e["lines"] += 1
+            if g[0] != "?" and e["an"] == "?":
+                e.update({"an": g[0], "kind": g[14], "wpn": g[15], "hit": float(g[13])})
+    evs = [e for e in ev.values() if e["tg"] in fol and e["a"] not in fol and e["a"] != PLAYER]
+    return evs, fol, (first, len(ev))
+
+
+def classify_window(es, took):
+    """What a window with a loss holds, from its de-duplicated events: (kind, reference event). Kinds, in this order of test:
+       multi     more than one attacker, or blows at more than one instant: the loss cannot be split
+       unsampled the attacker's weapon was never sampled (no estimate on any of its lines)
+       spell     the attacker's sampled attack is a spell;   unarmed  a creature's own attack
+       power     a power attack;   sneak / bash / blocked   as the line's flags say
+       rider     one weapon blow with another source form at the same instant (an enchantment, a poison, a perk spell), or a
+                 source that is not the sampled weapon
+       late      a plain blow whose window holds under MIN_SHARE of the attacker's own after-armor estimate (ASSUMPTION: the blow
+                 landed in the neighbouring sample)
+       plain     ONE plain weapon blow of ONE foe: the only kind the hit-size spread is drawn from"""
+    if len({x["a"] for x in es}) != 1 or len({round(x["t"], 1) for x in es}) != 1:
+        return "multi", None
+    ref = next((x for x in es if x["kind"] == "weapon"), None)
+    if ref is None:
+        k = next((x["kind"] for x in es if x["kind"] in ("spell", "unarmed")), "unsampled")
+        return k, None
+    for flag in ("power", "sneak", "bash", "blocked"):
+        if any(x[flag] for x in es):
+            return flag, ref
+    if any(x["src"] != ref["wpn"] for x in es):
+        return "rider", ref
+    est = ref["hit"] * (1.0 - ref["armor"])
+    if not ref["armor"] < 1.0 or not est > 0.0 or took < MIN_SHARE * est:
+        return "late", ref
+    return "plain", ref
+
+
+def hits_report(dirs):
+    """HITS: the windows and the per-blow sizes over every session that has hit lines (docstring HITS)."""
+    seen, wins, blows, used, skipped, others = set(), [], [], [], 0, 0
+    for d in dirs:
+        path = d if d.endswith(".log") else os.path.join(d, "MFO.log")
+        evs, fol, key = parse_hits(path)
+        if not evs:
+            continue
+        if key in seen:
+            print("HITS  %s: the same session as an earlier run dir (first line %s, %d events), counted once" % (d, key[0], key[1]))
+            continue
+        seen.add(key)
+        used.append(d)
+        hpmax = defaultdict(float)
+        for e in evs:
+            for v in (e["before"], e["after"]):
+                if v == v:
+                    hpmax[e["tg"]] = max(hpmax[e["tg"]], v)
+        w = defaultdict(list)
+        for e in evs:
+            if e["took"] == e["took"]:
+                w[(e["tg"], e["before"], e["after"])].append(e)
+        nw = nb = 0
+        skipped += sum(e["skipped"] for e in evs)
+        for (tg, before, after), es in sorted(w.items(), key=lambda kv: min(x["t"] for x in kv[1])):
+            took = es[0]["took"]
+            if not took > 0.0:
+                continue
+            nw += 1
+            kind, ref = classify_window(es, took)
+            others += max(x["other"] for x in es) > sum(x["lines"] for x in es) - 1   # the sink counted more events in the window than the log holds lines for (rate limited)
+            wins.append((took / hpmax[tg], kind))
+            if kind == "plain":
+                nb += 1
+                blows.append((took / (ref["hit"] * (1.0 - ref["armor"])), took / hpmax[tg], ref["an"], ref["wpn"]))
+        print("HITS  %s: %d foe-on-follower event(s), %d window(s) with a loss, %d plain single blow(s)" % (d, len(evs), nw, nb))
+    if not wins:
+        print("HITS  no session given has [iaus-fill] hit lines of a foe on a follower (run with [Debug] bIausFillProbe = 1)")
+        return
+    q = lambda xs, p: xs[min(len(xs) - 1, int(p * len(xs)))]
+    sh = sorted(x[0] for x in wins)
+    print("FIELD HIT WINDOWS n=%d over %d session(s): loss as a share of the target's health  median %.1f%%  p75 %.1f%%  p90 %.1f%%  max %.1f%%  (30%% or more: %d)" % (
+        len(sh), len(used), 100 * q(sh, 0.5), 100 * q(sh, 0.75), 100 * q(sh, 0.9), 100 * sh[-1], sum(x >= 0.30 for x in sh)))
+    print("  the rate limit dropped %d line(s) before the ones read; %d window(s) say they hold more events than the log has lines for" % (skipped, others))
+    # WHAT THE WINDOWS HOLD: each kind's share of the windows and its own loss figures, kept apart so each can be modelled as itself
+    for kind in ("plain", "rider", "power", "spell", "unarmed", "sneak", "bash", "blocked", "unsampled", "late", "multi"):
+        xs = sorted(x[0] for x in wins if x[1] == kind)
+        if xs or kind in ("plain", "multi"):
+            print("FIELD HIT KIND %-9s n=%-3d share of windows %5.1f%%%s" % (kind, len(xs), 100.0 * len(xs) / len(wins),
+                  "  loss median %.1f%%  p90 %.1f%%  max %.1f%%" % (100 * q(xs, 0.5), 100 * q(xs, 0.9), 100 * xs[-1]) if xs else ""))
+    if not blows:
+        return
+    # THE SPREAD: each plain blow over the attacker's OWN printed estimate after armor (the line's hit x (1 - armor share)), so every
+    # plain blow counts (no per-kind median, no minimum per kind), then over the mean of those ratios so the mean is 1.
+    ratios = sorted(b[0] for b in blows)
+    mean = sum(ratios) / len(ratios)
+    rs = [r / mean for r in ratios]
+    print("FIELD HIT EVENTS n=%d plain single blows: loss over the attacker's own after-armor estimate  median %.2f  p90 %.2f  max %.2f  mean %.3f" % (
+        len(ratios), q(ratios, 0.5), q(ratios, 0.9), ratios[-1], mean))
+    print("FIELD HIT SPREAD n=%d  after the division by the mean: median %.2f  p90 %.2f  max %.2f" % (len(rs), q(rs, 0.5), q(rs, 0.9), rs[-1]))
+    print("kFieldHit[%d] = { %s };" % (len(rs), ", ".join("%.2ff" % r for r in rs)))
 
 
 def main():
@@ -163,6 +324,8 @@ def main():
     if rates:
         rs = sorted(rates)
         print("FIELD POINTS n=%d  median %.1f %%/s  p75 %.1f  p90 %.1f  max %.1f" % (len(rs), rs[len(rs) // 2], rs[(3 * len(rs)) // 4], rs[(9 * len(rs)) // 10], rs[-1]))
+    print("\nHITS  the fill probe's hit lines (windows = bursts; events = plain single blows; see the header)")
+    hits_report(dirs)
     return 0
 
 

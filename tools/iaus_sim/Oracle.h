@@ -297,11 +297,13 @@ namespace Sim {
         OracleCfg cfg;
         IausPolicy iaus;                       // followers the oracle does not drive, and IAUS's own pick for the log
         std::function<bool(const Fight&, const Ctl&, const Opt&)> allowed;   // extra constraints of the caller (nullptr = none); the class rulings are ClassAllows
-        OracleStats st;
+        OracleStats st;                        // every follower the oracle drives
+        OracleStats stSubj;                    // the SUBJECT only (ctl 0): what the per-class ORCSTOP / ORCREFUSED lines print (review F-C of 610e2952: a companion's
+                                               // decisions and refusals were merged under the subject's class label)
         // The class filter (the abilities, then the written rulings), counted by reason; then the caller's own constraint.
         [[nodiscard]] bool Ok(const Fight& F, const Ctl& c, const Opt& o) {
             const char* why = ClassRefuses(F, c, o); if (!why && g_classRulings) why = RulingRefuses(F, c, o);
-            if (why) { ++st.refused[why]; if (F.trace) std::fprintf(F.trace, "%7.2f  ORACLE REFUSED %s: %s (%s)\n", F.now, F.b[static_cast<std::size_t>(c.body)].c.name.c_str(), o.Label().c_str(), why); return false; }
+            if (why) { ++st.refused[why]; if (&c == &F.ctl[0]) ++stSubj.refused[why]; if (F.trace) std::fprintf(F.trace, "%7.2f  ORACLE REFUSED %s: %s (%s)\n", F.now, F.b[static_cast<std::size_t>(c.body)].c.name.c_str(), o.Label().c_str(), why); return false; }
             return !allowed || allowed(F, c, o); }
         std::map<std::string, Disagreement>* log = nullptr;
         std::vector<double> last;
@@ -388,6 +390,7 @@ namespace Sim {
             for (const Candidate& k : sv.g.postures) if (k.f.posture != c.drawn) { Opt o; o.k = &k; if (Ok(F, c, o)) opt.push_back(o); }
             if (cfg.ext) { std::vector<Opt> ex; ExtOptions(F, ci, ex); for (const Opt& o : ex) if (Ok(F, c, o)) opt.push_back(o); }
             opt.push_back(Opt{});   // idle: his own AI
+            const long rollouts0 = st.rollouts;
             // EVALUATE: the race (OracleCfg). Streams are shared by all options (stream k has one seed for every option), so two options are
             // compared on the same luck and the test is on their PAIRED difference.
             const std::size_t N = opt.size(); std::vector<std::vector<double>> U(N); std::vector<char> alive(N, 1); std::vector<double> u(N, -1e9);
@@ -412,8 +415,9 @@ namespace Sim {
                 if (live <= 1 || n >= ceil) break;
                 next = std::min(ceil, n * 2);
             }
-            st.options += static_cast<long>(N); st.streams += n; ++st.decisions;
-            if (live > 1) { ++st.bound; st.standing += static_cast<long>(live); double other = -1e9; for (std::size_t i = 0; i < N; ++i) if (alive[i] && i != best) other = std::max(other, u[i]); st.unresolved += u[best] - other; st.unresolvedMax = std::max(st.unresolvedMax, u[best] - other); }
+            { OracleStats one; one.options = static_cast<long>(N); one.streams = n; one.decisions = 1; one.rollouts = st.rollouts - rollouts0;
+              if (live > 1) { one.bound = 1; one.standing = static_cast<long>(live); double other = -1e9; for (std::size_t i = 0; i < N; ++i) if (alive[i] && i != best) other = std::max(other, u[i]); one.unresolved = one.unresolvedMax = u[best] - other; }
+              const long r = one.rollouts; one.rollouts = 0; st.Merge(one); one.rollouts = r; if (ci == 0) stSubj.Merge(one); }
             // pick: the best; the action he is already on wins when it still stands (not separated from the best) and is within 0.3 U of it (a person does not dither)
             if (c.hasLastKey) for (std::size_t i = 0; i < N; ++i) if (alive[i] && opt[i].k && opt[i].ext == Ext::None && KeyOf(*opt[i].k) == c.lastKey && u[i] >= u[best] - 0.3) { best = i; break; }
             // what IAUS's own pick costs: the oracle's PAIRED lead over it, on the streams both ran (an option dropped early ran fewer)

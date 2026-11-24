@@ -64,8 +64,10 @@ namespace Sim {
         bool areas = true;       // an ACTIVE area (cloak = moves with the caster, circle / rune / wall = fixed at the cast point) lives in the world while it lasts
         bool perks = true;       // Snapshot::perks spell group (spellsRead, spellCost / spellMagnitude / spellCount per school), perk-effects.md section 9
         bool hittail = true;     // a foe's physical hit on the party is drawn from the FIELD's hit-size spread (World.h kFieldHit; iaus-sim-v3.md 15.5), mean 1: the same damage a minute, in fewer and harder hits
-        void AllOff() { height = chase = lof = delivery = hands = stance = sidestep = casterhold = blockdir = areas = perks = hittail = false; }
-        [[nodiscard]] bool Any() const { return height || chase || lof || delivery || hands || stance || sidestep || casterhold || blockdir || areas || perks; }
+        bool burst = true;       // native 2de581de..ad4578a8 mirrored (heal timing, 11-17g): Combatant::grossPerSec / maxHit filled from sampled laps through the game's own
+                                 // Estimate::LapGross / BurstReads, so Facts::recipientHitsToDown and t.dyingHitsToDown / urgencyHitsDiv / the three windows are live (iaus-sim-v4.md 9.1)
+        void AllOff() { height = chase = lof = delivery = hands = stance = sidestep = casterhold = blockdir = areas = perks = hittail = burst = false; }
+        [[nodiscard]] bool Any() const { return height || chase || lof || delivery || hands || stance || sidestep || casterhold || blockdir || areas || perks || hittail || burst; }   // review F-B of 610e2952: hittail was left out, so `--world v2 --v3 hittail=on` was tagged v2
     };
     inline V3 g_v3;
     inline int   g_waiver = 2;            // --waiver none|self|player: the chase cap's held-foe waiver. 2 = the game today (marth 11-13: the foe fights HIM or the player), 1 = the game of 10-19 (HIM only), 0 = none

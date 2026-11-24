@@ -231,7 +231,7 @@ namespace {
     // else " world=v3" plus what differs from the v3 defaults.
     struct V3Flag { const char* name; bool V3::* m; };
     inline constexpr V3Flag kV3Flags[] = { { "height", &V3::height }, { "chase", &V3::chase }, { "lof", &V3::lof }, { "delivery", &V3::delivery }, { "hands", &V3::hands }, { "stance", &V3::stance }, { "sidestep", &V3::sidestep },
-                                           { "casterhold", &V3::casterhold }, { "blockdir", &V3::blockdir }, { "areas", &V3::areas }, { "perks", &V3::perks }, { "hittail", &V3::hittail } };
+                                           { "casterhold", &V3::casterhold }, { "blockdir", &V3::blockdir }, { "areas", &V3::areas }, { "perks", &V3::perks }, { "hittail", &V3::hittail }, { "burst", &V3::burst } };
     std::string WorldTag(const char* lead) {
         if (!g_v3.Any()) return "";
         std::string o = std::string(lead) + "world=v3"; std::string off; for (const V3Flag& f : kV3Flags) if (!(g_v3.*(f.m))) off += std::string(off.empty() ? "" : ",") + f.name + "=off";
@@ -977,7 +977,7 @@ static int RealMain(int argc, char** argv) {
             F.tauntVisible = tauntVisible; F.engineCasts = engineCasts; F.estimates = estimates; F.scrollRoad = scrollRoad; Fight Gf = F;
             RunMode(F); OraclePolicy O; O.cfg = oc; O.cfg.allFollowers = !g_oracleSubjectOnly; std::map<std::string, SitRec> sl; std::array<long, kFamilies> gn{}; if (gapDump) { O.sit = &sl; O.gen = &gn; }
             RunFight(Gf, O); const double uI = Utility(F), uO = Utility(Gf);
-            std::scoped_lock lk(mx); CO& r = co[static_cast<std::size_t>(c)]; r.d.push_back(uO - uI); r.st.Merge(O.st);
+            std::scoped_lock lk(mx); CO& r = co[static_cast<std::size_t>(c)]; r.d.push_back(uO - uI); r.st.Merge(O.stSubj);   // the SUBJECT's search only (review F-C): with --oracle-subject-only it is all of it
             if (gapDump) { std::printf("GAPFIGHT %s %s %d %.4f %.4f\n", classes[static_cast<std::size_t>(c)].name.c_str(), sidx < 0 ? "nat" : hs[static_cast<std::size_t>(sj[static_cast<std::size_t>(sidx)].first)].name, job, uI, uO);
                 for (const auto& kv : sl) { SitRec& q = r.sit[kv.first]; q.n += kv.second.n; q.dU += kv.second.dU; } for (std::size_t f = 0; f < kFamilies; ++f) r.gen[f] += gn[f]; r.dec += O.subjDec; }
             if (sidx < 0) { r.uI += uI; r.uO += uO; r.orc.uSum += uO; r.orc.Add(Gf.t, false); r.iaus.uSum += uI; r.iaus.Add(F.t, false); }
@@ -995,7 +995,7 @@ static int RealMain(int argc, char** argv) {
             { auto mi = Metrics(r.iaus); auto G = [](const std::map<std::string, double>& m, const char* k) { auto i = m.find(k); return i == m.end() ? -1.0 : i->second; };   // THE ORACLE-RELATIVE SURVIVAL READ (marth 11-17 "Oracle downs"; Playstyles.h): the same natural fights, IAUS and the class oracle
               std::printf("ORCSURV %s %d  iaus downs/f %.3f selfHealLow%% %.1f  |  oracle downs/f %.3f selfHealLow%% %.1f\n", sc.name.c_str(), classOracle, G(mi, "downs/f"), G(mi, "selfHealLow%"), G(sr.oracleMetrics, "downs/f"), G(sr.oracleMetrics, "selfHealLow%"));
               std::printf("ORCHEAL %s %d  iaus healLate%% %.1f healAt%% %.1f dwh/f %.3f  |  oracle healLate%% %.1f healAt%% %.1f dwh/f %.3f\n", sc.name.c_str(), classOracle, G(mi, "healLate%"), G(mi, "healAt%"), G(mi, "dwh/f"), G(sr.oracleMetrics, "healLate%"), G(sr.oracleMetrics, "healAt%"), G(sr.oracleMetrics, "dwh/f"));   // the heal-timing and ally-survival bands (Playstyles.h): his heals on another begun under Policy.h kOneHitLine, allies down while he held a heal
-              std::printf("ORCSTOP %s %s\n", sc.name.c_str(), StopLine(r.st).c_str());   // the search's stopping rule at work (Oracle.h OracleCfg), over ALL the class's gap fights
+              std::printf("ORCSTOP %s %s\n", sc.name.c_str(), StopLine(r.st).c_str());   // the search's stopping rule at work (Oracle.h OracleCfg), the SUBJECT's decisions over all the class's gap fights
               for (const auto& kv : r.st.refused) std::printf("ORCREFUSED %s %ld %s\n", sc.name.c_str(), kv.second, kv.first.c_str()); }   // options the class filter refused, by reason
             std::printf("%-17s %7.2f %7.2f %+7.2f  %7.1f %7.1f  %+7.2f %5.2f %6ld\n", sc.name.c_str(), sr.iausU, sr.oracleU, sr.gap, pI, pO, cg.gap, cg.se, cg.fights); R.scen.push_back(std::move(sr)); R.classGaps.push_back(std::move(cg)); }
         for (std::size_t i = 0; i < sj.size(); ++i) { const Scenario& scn = hs[static_cast<std::size_t>(sj[i].first)]; const SO& q = so[i]; const double n = gapScen;

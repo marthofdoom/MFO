@@ -24,7 +24,7 @@ STAGES    prep      the world inputs exist, each list's potion-worth table is me
                     accepted value carried into the next sweep -> holdout -> many-seed gates -> fresh-seed cross-world confirmatory
                     -> Knight guard floor. The T1 rows (melee, ranged, mage) are searched first and their accepted values are
                     every later class's baseline. One dashboard results file per finished sweep.
-          joint     the whole final table against the shipped one on all 15 cells (128 seeds, three configs), and each T1 value
+          joint     the whole final table against the shipped one on every cell (128 seeds, three configs), and each T1 value
                     left out in turn. A failure is an open decision: no value is written.
           edge      marth "Widen to x4 / x0.25": only knobs whose accepted value sits at the edge of the range tried are searched
                     again past it, same RULE; a wider value that passes is an open decision (never shipped).
@@ -40,19 +40,22 @@ STAGES    prep      the world inputs exist, each list's potion-worth table is me
           logistics the logistics world (Logistics.h): today's loot rules against the loot oracle per class (IAUS loot policy: post-T2).
           summary   summary.json + summary.md.
 
+CELLS     15 by default (the Beta 1 cells: 12 tree-ON classes and the 3 tree-OFF base cells), 38 under --cells all (+ the 23 T3 / T4 / T5
+          classes). "Every cell" below means the cells of the run; summary.json config records them (cells, cell_list).
+
 RULE (fixed before any result of this driver was read; a number is ACCEPTED only when every line holds):
   train        built-in world, the default roads (g3), seeds 1..N: the best value of a sweep has paired d > 2.5 se and d >= 0.15 J.
   holdout      seeds 1001.., never used to pick: d > 1.5 se.
   gates        marth, Q-gate-rule "Gate on many seeds": judged on the train + holdout seeds, never on a six-seed set. With stealth
                off and as shipped, no class may get WORSE, and a drop counts only beyond noise: worse = d < -2 se and d < -0.05 J
-               (when the 15 cells are judged at once, -2.5 se); and never more than 0.5 J down (Thief, Mercenary 0.25) when
+               (when every cell is judged at once, -2.5 se); and never more than 0.5 J down (Thief, Mercenary 0.25) when
                that drop is itself outside one se. A T1 row (melee / ranged / mage) is also the companion in other classes' fights, so its value is gated
-               on all 15 cells at all three configs; any other row moves its own class only.
+               on every cell at all three configs; any other row moves its own class only.
   cross-world  fresh seeds 4001.. on every world: the equal-weight mean of the worlds' d is > 2 se, no world is worse (d < -2 se),
                and as shipped the mean over the worlds is not worse and inside the band. A list's actors are test input: a value
                that is best on one list only is never accepted.
-  joint        the whole final table against the shipped one on all 15 cells, on the train + holdout seeds, at all three configs:
-               no cell worse (the 15-at-once bar), no 15-cell mean worse, and no T1 value whose removal makes the table better.
+  joint        the whole final table against the shipped one on every cell, on the train + holdout seeds, at all three configs:
+               no cell worse (the all-cells-at-once bar), no all-cell mean worse, and no T1 value whose removal makes the table better.
   knight       the Knight line's guard floor (>= 60% under two or more own-taunted foes, measured on 36 seeds) holds on every
                world, default and as shipped; where the shipped table is already under it, the value may not lower it by more than 0.5.
   card         CLASS IDENTITY (marth 11-13: "a class must play like that class"): the class's bands (Playstyles.h, parsed at run time, never
@@ -383,7 +386,7 @@ def scope():
 
 
 def cells():
-    """The 15 Beta 1 cells, plus every other class searched in this --out or named by --classes (a new class is gated with the rest)."""
+    """The cells of the run (the 15 Beta 1 cells, or all 38 under --cells all), plus every other class searched in this --out or named by --classes (a new class is gated with the rest)."""
     extra = [c for c in (scope() or []) + list(SUMMARY["stages"].get("classes", {})) if c not in CELLS]
     return CELLS + sorted(set(extra), key=extra.index)
 
@@ -744,7 +747,7 @@ def judge(cls, kept, spec, train_d=None, forced=False, fresh0=4001, sets=None, b
             if target:
                 b, v = jmany([req(w, target, g, kept, fresh, base_sets), req(w, target, g, cur, fresh, sets)])
                 d, se = paired(b, v)
-            else:   # a global: the mean over the 15 cells
+            else:   # a global: the mean over the cells
                 res = jmany([req(w, c, g, kept if x == 0 else cur, fresh, base_sets if x == 0 else sets) for c in CELLS for x in (0, 1)])
                 per = [[y[0] - x[0] for x, y in zip(res[2 * i], res[2 * i + 1])] for i in range(len(CELLS))]
                 dd = [sum(col) / len(col) for col in zip(*per)]
@@ -1038,22 +1041,52 @@ def cpp_line(spec):
     return 'SetCurveParam(%s, static_cast<Family>(%s), static_cast<Cons>(%s), sh.curve[%s], "%s", %s);' % (row, f, c, c, param, v)
 
 
-def final_curves():
+def final_curves(with_withheld=False):
+    """THE ONE READER of the run's accepted class values (classes, rejudge, the gap stage's (a) search), in acceptance order. A value the
+    recalib stage WITHHELD (summary.json withheld) is not part of the table: every stage that reads "the final table", the joint gate
+    and ship.table see the table without it. with_withheld=True is the recalib stage's own view (it re-judges every accepted value)."""
     out = []
     for cls, r in SUMMARY["stages"].get("classes", {}).items():
         out += r.get("kept", [])
+    # ONE VALUE PER KNOB. The rejudge stage and the classes stage can both accept a value for the same knob of one class (the default
+    # rejudge spec warrior:6.32.b is also a classes knob). The classes stage searched the knob's whole range after it, so ITS value is the
+    # table's and the rejudged one is dropped. The gap stage's search never takes a knob the table already holds (gap_search `taken`),
+    # and a value it does hold for a taken knob (an older summary) is dropped the same way.
+    have = {k.split("=")[0] for k in out}
     for r in SUMMARY["stages"].get("rejudge", []):
-        if r.get("accepted") and r["spec"] not in out:
+        if r.get("accepted") and r["spec"].split("=")[0] not in have:
             out.append(r["spec"])
+            have.add(r["spec"].split("=")[0])
     for cls, v in SUMMARY["stages"].get("gap", {}).get("kept", {}).items():   # the gap stage's (a) search
-        out += [k for k in v if k not in out]
+        for k in v:
+            if k.split("=")[0] not in have:
+                out.append(k)
+                have.add(k.split("=")[0])
+    if not with_withheld:
+        wh = set(SUMMARY.get("withheld", []))
+        out = [k for k in out if k not in wh]
     return out
 
 
+def ship_state():
+    """summary.json ship: the table ships only when the joint gate PASSED on exactly the final table (final_curves(): the accepted values
+    less the withheld ones). A joint that did not run, failed, or graded another table (the gap search's whole-set drop; a value recalib
+    withheld AFTER the joint graded the larger table) leaves ship.table empty and needs_joint_rerun says why. A passing joint on the
+    reduced table clears it (backlog 2026-11-19: the flag stayed set because the withheld list alone kept it)."""
+    j = SUMMARY["stages"].get("joint", {}).get("verdict", "")
+    fin, wh, jt = final_curves(), SUMMARY.get("withheld", []), SUMMARY["stages"].get("joint", {})
+    need = "" if j == "PASS" and jt.get("table") == fin else (
+        "joint gate: %s" % (j or "not run") if j != "PASS" else
+        "recalib withheld %d value(s) after the joint gate graded the larger table: re-run the joint stage on the table without them" % len(wh) if wh and set(jt.get("table", [])) == set(fin) | set(wh) else
+        "the joint gate graded a different table than the final one (%d vs %d values): re-run the joint stage" % (len(jt.get("table", [])), len(fin)))
+    return {"table": fin if not need else [], "withheld": wh, "joint": j or "not run", "needs_joint_rerun": need,
+            "note": "ship.table is non-empty only when the joint gate PASSED on exactly this table (the accepted values less the withheld ones); otherwise it is empty and needs_joint_rerun says why"}
+
+
 def stage_joint():
-    """THE WHOLE FINAL TABLE against the shipped one, once more, on all 15 cells: the values were accepted one at a time, each in the
+    """THE WHOLE FINAL TABLE against the shipped one, once more, on every cell: the values were accepted one at a time, each in the
     table that existed when it was searched, and the companions' rows (T1) move everyone's fights. On the 128 train + holdout seeds, at
-    the default roads, with stealth off and as shipped: no cell may be worse (the 15-at-once bar), no pooled mean may be worse. And
+    the default roads, with stealth off and as shipped: no cell may be worse (the all-cells-at-once bar), no pooled mean may be worse. And
     each T1 value is left out in turn: the table without it must not be better than the table with it."""
     curves = final_curves()
     st = {"table": curves, "cells": {}, "pooled": {}, "leave_one_out": [], "verdict": "no accepted value: nothing to gate"}
@@ -1083,13 +1116,13 @@ def stage_joint():
         for g, (d, se) in pooled.items():
             st["pooled"][g] = [round(d, 3), round(se, 3)]
             if worse(d, se):
-                fails.append("the 15-cell mean is worse at %s (%+.2f, se %.2f)" % (g, d, se))
+                fails.append("the %d-cell mean is worse at %s (%+.2f, se %.2f)" % (len(cells()), g, d, se))
         for spec in [c for c in curves if c.split(":")[0] in T1]:
             _, lo = table_vs([c for c in curves if c != spec], curves)
             st["leave_one_out"].append({"spec": spec, "contribution": {g: [round(d, 3), round(se, 3)] for g, (d, se) in lo.items()}})
             for g, (d, se) in lo.items():
                 if worse(d, se):
-                    fails.append("T1 value %s makes the final table worse at %s (%+.2f, se %.2f over the 15 cells)" % (spec, g, d, se))
+                    fails.append("T1 value %s makes the final table worse at %s (%+.2f, se %.2f over the %d cells)" % (spec, g, d, se, len(cells())))
         if A.decisions == "auto":   # CLASS IDENTITY + POTIONS of every cell in the final table, against the shipped one
             st["card_potion"] = {}
             for c in cells():
@@ -1238,7 +1271,11 @@ GLOBALS = [("t.momentum", 1.25, [1.0, 1.05, 1.1, 1.15, 1.2]), ("t.powerCd", 10.0
            # NOT searched here (review F3 of 5749026a): t.waivedRangeX and t.bowRange. The lab knows both (Tune.h), but the game's tuning file has no entry
            # for them (iaus/Catalogue.cpp SetTuningScalar), so a found value could not be shipped. They stay fixed placeholders until native adds the names.
            # fix/field-1117b-choice placeholders: the cast time a fire-and-forget spell's effect is divided by, the health under which his own heal gets the dying boost
-           ("t.spellCastSec", 1.5, [1.0, 2.0, 2.5]), ("t.dyingSelfHp", 0.25, [0.2, 0.3, 0.35])]
+           ("t.spellCastSec", 1.5, [1.0, 2.0, 2.5]), ("t.dyingSelfHp", 0.25, [0.2, 0.3, 0.35]),
+           # heal timing (native 11-17g, mirrored by the sim's `burst` switch since sim v4 slice 1): the ally's dying line, how many of his largest recent
+           # burst count as dying, the urgency divisor. The three sampling windows (t.grossWindowSec, t.maxHitWindowSec, t.burstWindowSec) are sized from
+           # the game's lap cadence (Core.h, principle 9) and are NOT searched: the lab samples every 133 ms whatever the party size.
+           ("t.dyingAllyHp", 0.25, [0.2, 0.3, 0.35]), ("t.dyingHitsToDown", 1.2, [1.0, 1.5, 2.0]), ("t.urgencyHitsDiv", 3.0, [2.0, 4.0, 5.0])]
 
 
 # ── the gap stage ────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1595,7 +1632,7 @@ def stage_logistics():
 # One knob = one native member (Tune.h kWorthKnobs / kLootKnobs*): worth.<f> = iaus/ConsumableWorth.h WorthTable::<f>, loot.<f> =
 # iaus/LootNeed.h LootTuning::<f>. Values: x0.5 / x0.75 / x1.33 / x2 of the placeholder inside the member's valid range (a 0..1 share stays
 # inside 0..1, a count stays >= its smallest meaningful value). Both tables are SHARED (one per game), so every value is judged like a
-# global on the pooled 15 cells (`beta1`) with the T1 gates.
+# global on the pooled cells (`beta1`) with the T1 gates.
 WORTH_KNOBS = [("worth.ratioCap", 2.0, [1.0, 1.5, 3.0, 4.0]), ("worth.pressureFull", 1.0, [0.5, 0.75, 1.33, 2.0]),
                ("worth.dangerSpan", 0.34, [0.17, 0.255, 0.45, 0.68]), ("worth.hurtWeight", 1.0, [0.5, 0.75, 1.33, 2.0]),
                ("worth.magickaWinLine", 0.15, [0.075, 0.1125, 0.2, 0.3]), ("worth.staminaWinLine", 0.10, [0.05, 0.075, 0.133, 0.2]),
@@ -1624,7 +1661,18 @@ LOOT_NOT_SEARCHED = {"loot.stealNeedMin": "no theft road in the lab (thief steal
                      "loot.invisTarget": "no invisibility potion in the fixture (a sneak road the logistics world does not model)",
                      "loot.regenTarget": "no regen potion in the fixture", "loot.lockpickTarget": "no lockpick in the fixture",
                      "loot.saleGoldPerWeight": "inert while LootTuning::consumableSellRoad is false (no ALCH sell road)",
-                     "loot.saleWeight": "inert while LootTuning::consumableSellRoad is false (no ALCH sell road)"}
+                     "loot.saleWeight": "inert while LootTuning::consumableSellRoad is false (no ALCH sell road)",
+                     # native 8f39de61..78a9831d (field 11-17c / 11-17g). The lab's logistics world has no guards, no service lap, no travel legs and no
+                     # blocked legs, so none of these moves a number there. Each becomes searchable with sim v4's loot slice (iaus-sim-v4.md section 3).
+                     "loot.guardFreshSec": "no guard answer cache in the lab (TheftGate.cpp timer): PLACEHOLDER until sim v4 loot",
+                     "loot.guardUnreadMaxSec": "no guard answer cache in the lab: PLACEHOLDER until sim v4 loot",
+                     "loot.guardRepostSec": "no guard answer cache in the lab: PLACEHOLDER until sim v4 loot",
+                     "loot.batchHoldMinSec": "no batch hold in the lab (a loot episode is one plan, no leg boundary rescans): PLACEHOLDER until sim v4 loot",
+                     "loot.offClassDwellSec": "no off-class weapon dwell in the lab (EquipAuthority OffClassTick): PLACEHOLDER until sim v4 loot",
+                     "loot.gateConeDeg": "no blocked legs in the lab (GATED needs pathing, sim v4 navmesh): PLACEHOLDER",
+                     "loot.gateBeyondU": "no blocked legs in the lab: PLACEHOLDER", "loot.gateReadmitSec": "no blocked legs in the lab; ships 0 (marth 2026-09-24 'no timer')",
+                     "loot.gateReadmitMoveU": "no blocked legs in the lab: PLACEHOLDER", "loot.gateRepeatU": "no blocked legs in the lab: PLACEHOLDER",
+                     "loot.gateShortU": "no blocked legs in the lab: PLACEHOLDER", "loot.gateNearU": "no blocked legs in the lab: PLACEHOLDER"}
 
 
 def final_sets():
@@ -1691,8 +1739,8 @@ def shared_search(stage, knobs, pooled, train, judge_one, base_sets=None):
 def stage_worth():
     """THE WORTH-THE-GOLD TABLE (iaus/ConsumableWorth.h WorthTable, feat/consumables). Needs the consumables world (--sim-flags with
     "--consumables on": gold, item values, buff potions and food in the kits, Setup.h FillConsumables), else the cost side is inert and
-    the stage refuses. Every value is shared, so it is judged as a global by judge("beta1"): holdout on the pooled 15 cells, many-seed
-    gates on all 15 cells at all three configs, fresh-seed cross-world over every world, the Knight floor."""
+    the stage refuses. Every value is shared, so it is judged as a global by judge("beta1"): holdout on the pooled cells, many-seed
+    gates on every cell at all three configs, fresh-seed cross-world over every world, the Knight floor."""
     if "--consumables on" not in (A.sim_flags or ""):
         raise SystemExit("the worth stage needs --sim-flags \"--consumables on\" (without the consumables kit the worth rule's cost side is inert)")
     curves = final_curves()
@@ -1706,7 +1754,7 @@ def stage_worth():
 
 def loot_judge(bs, ns, forced):
     """The loot table's RULE (the combat RULE carried over, 33.3, with what the logistics world can and cannot measure): holdout on seeds
-    8001.. (d > 1.5 se, pooled 15 cells); gates on the 128 train + holdout seeds per cell (no cell worse at the 15-at-once bar, none out of
+    8001.. (d > 1.5 se, pooled cells); gates on the 128 train + holdout seeds per cell (no cell worse at the all-cells-at-once bar, none out of
     band); confirmatory on FRESH seeds 9001.. pooled (d > 2 se): the cross-WORLD step cannot run, the simulator refuses a list logistics
     world (34.6: the extracts hold no containers); no Knight floor (a loot value does not change a fight in the lab)."""
     row = {"steps": {}, "accepted": False}
@@ -1914,7 +1962,8 @@ def stage_rating():
 def stage_recalib():
     """The potion-worth table was measured under the shipped drink curves. Measure it again under the accepted values and confirm every
     accepted value once more with the new table (fresh seeds 9001..). A value that fails is an open decision, never silently kept."""
-    curves = final_curves()
+    SUMMARY["withheld"] = []   # this stage judges EVERY accepted value again: an earlier pass's withheld list (or a seeded summary's) never carries over
+    curves = final_curves(with_withheld=True)
     st = {"accepted": curves, "rows": []}
     if curves:
         tab = os.path.join(A.out, "potworth-builtin-final.txt")
@@ -1999,7 +2048,7 @@ def render_md():
         j = s["joint"]
         L += ["## The whole final table against the shipped one (joint gate)", "", "Verdict: **%s**" % j["verdict"], ""]
         if j["pooled"]:
-            L += ["Mean over the 15 cells: " + ", ".join("%s %+.2f (se %.2f)" % (g, v[0], v[1]) for g, v in j["pooled"].items()), ""]
+            L += ["Mean over the %d cells: " % len({k.split("/")[0] for k in j.get("cells", {})}) + ", ".join("%s %+.2f (se %.2f)" % (g, v[0], v[1]) for g, v in j["pooled"].items()), ""]
             L += ["- without `%s`: the table with it is %s" % (r["spec"], ", ".join("%s %+.2f (se %.2f)" % (g, v[0], v[1]) for g, v in r["contribution"].items())) for r in j["leave_one_out"]] + [""]
     if "edge" in s:
         L += ["## Accepted values at the edge of their range, searched past it (x4 / x0.25)", "", "| Class | Knob | Shared | Accepted (side) | Widened | Train (best widened vs accepted) | Verdict |", "|---|---|---|---|---|---|---|"]
@@ -2120,6 +2169,48 @@ def replay(path):
     return 0
 
 
+def rerun_after(name, done, rest):
+    """The stages that must run AGAIN after stage `name` finished, given the stages `done` so far and those still to come (`rest`).
+    -> (stages, why).
+      recalib withheld a value after the joint gate graded the larger table: joint, on the table without it, in this same run, so the
+        round ends with a verdict on exactly the table it would ship and the caller never changes its arguments (backlog 2026-11-19).
+      the gap search moved the table (G2, review of 7e883a9a): a stage that reads the final table and already ran describes the table
+        from before it (the default order puts gap first, so this is a custom order only)."""
+    if name == "recalib" and SUMMARY.get("withheld") and "joint" in done and "joint" not in rest:
+        return ["joint"], "recalib withheld %d value(s), the table changed" % len(SUMMARY["withheld"])
+    if name == "gap" and SUMMARY["stages"].get("gap", {}).get("search_changed"):
+        again = [x for x in ("floor", "rating", "recalib") if x in done and x not in rest]
+        return again, "gap search moved the table"
+    return [], ""
+
+
+def carry_over(old, cells_now, bin_sha_now=None):
+    """What a resumed or one-stage run takes from the summary.json already in --out: every stage's result, the decisions, the withheld
+    list. NOTHING when that summary was made by ANOTHER SIMULATOR BINARY (config.bin_sha, recorded since sim v4 slice 1): every number in
+    it is another world's, and the cache (keyed by the binary's hash) replays none of it, so the round starts clean and says so. A
+    summary with no recorded hash (an older driver) is carried with a warning. EXCEPT also when that summary is of a run with ANOTHER CELL SET (--cells 15 against all; a summary from before the driver recorded
+    its cells counts as 15): its joint and recalib stages graded a table of other classes, so both are dropped with the withheld list,
+    and this run decides them again. (Round 2 of 11-19: a summary seeded from a 15-cell round carried recalib rows of 15 classes into a
+    38-cell round.) Returns the lines to log."""
+    lines = []
+    was_bin = old.get("config", {}).get("bin_sha")
+    if bin_sha_now and was_bin and was_bin != bin_sha_now:
+        return ["RESUME: the summary in --out was made by another simulator binary (sha256 %s, now %s): NOTHING is carried over, every stage of this run decides again (its cached results belong to the other binary too)" % (was_bin[:12], bin_sha_now[:12])]
+    if bin_sha_now and not was_bin:
+        lines.append("RESUME: the summary in --out records no simulator hash (an older driver): carried over, UNCHECKED against this binary")
+    SUMMARY["stages"], SUMMARY["open_decisions"] = old.get("stages", {}), [d for d in old.get("open_decisions", []) if d.get("stage")]
+    SUMMARY["auto_decisions"], SUMMARY["withheld"] = [d for d in old.get("auto_decisions", []) if d.get("stage")], old.get("withheld", [])
+    was = old.get("config", {}).get("cells", "15")
+    if was == cells_now:
+        return lines
+    dropped = [k for k in ("joint", "recalib") if SUMMARY["stages"].pop(k, None) is not None]
+    wh, SUMMARY["withheld"] = SUMMARY["withheld"], []
+    for key in ("open_decisions", "auto_decisions"):
+        SUMMARY[key] = [d for d in SUMMARY[key] if d.get("stage") not in ("joint", "recalib")]
+    return lines + ["RESUME: the summary in --out is of a --cells %s run and this is --cells %s: its %s stage result(s) and %d withheld value(s) describe another table and are DROPPED; run joint and recalib again in this round"
+            % (was, cells_now, " and ".join(dropped) or "no joint / recalib", len(wh))]
+
+
 def main():
     global A, CFG, POOL
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -2128,7 +2219,7 @@ def main():
     ap.add_argument("--smoke", action="store_true", help="a few seeds and knobs, every stage exercised; its numbers are NOT results")
     ap.add_argument("--for-class", help="THE NEW-CLASS WORKFLOW (iaus-sim-v2.md 34.4): one class (a new or changed row), on an --out that holds the earlier run: sets --classes to it and --stages to prep,classes,joint,edge,gap,floor,summary")
     ap.add_argument("--cells", choices=("15", "all"), default="15", help="15 (default): the Beta 1 cells. all: + the 23 parked T3 / T4 / T5 classes (38 cells; adds the sim's --parked to every run; the pooled stages, rating and logistics cover all 38)")
-    ap.add_argument("--classes", help="comma list; default the 15 cells, the furthest from the oracle first")
+    ap.add_argument("--classes", help="comma list; default every cell of the run (--cells), the furthest from the oracle first")
     ap.add_argument("--worlds", default="builtin,LoreRim,Tuxborn,Vanilla")
     ap.add_argument("--stages", default=DEFAULT_STAGES)
     ap.add_argument("--rejudge", default="warrior:6.32.b=0.15", help="space-separated --curve specs to re-judge under RULE")
@@ -2157,6 +2248,7 @@ def main():
         if "--parked" not in A.sim_flags.split():
             A.sim_flags = (A.sim_flags + " --parked").strip()
     A.bin = os.path.abspath(A.bin)
+    bin_sha = sha(A.bin)   # of the simulator itself, before any --sim-flags wrapper
     CFG = SMOKE if A.smoke else FULL
     os.makedirs(A.out, exist_ok=True)
     sim_flags = world_flags(A.world, A.sim_flags)   # sim v3: the world is ALWAYS said (the binary's own default is v3)
@@ -2178,11 +2270,11 @@ def main():
         try:
             old = json.load(open(prev))
             if old.get("config", {}).get("smoke") == A.smoke:
-                SUMMARY["stages"], SUMMARY["open_decisions"] = old.get("stages", {}), [d for d in old.get("open_decisions", []) if d.get("stage")]
-                SUMMARY["auto_decisions"], SUMMARY["withheld"] = [d for d in old.get("auto_decisions", []) if d.get("stage")], old.get("withheld", [])
+                for line in carry_over(old, A.cells, bin_sha):
+                    log(line)
         except ValueError:
             pass   # cut off by a kill: every stage it held replays from the cache
-    SUMMARY["config"] = dict(CFG, smoke=A.smoke, worlds=A.worlds, bin=A.bin, sim_flags=A.sim_flags, world=A.world, knobs=A.knobs)
+    SUMMARY["config"] = dict(CFG, smoke=A.smoke, worlds=A.worlds, bin=A.bin, sim_flags=A.sim_flags, world=A.world, knobs=A.knobs, cells=A.cells, cell_list=list(CELLS), bin_sha=bin_sha, classes=A.classes, stages=A.stages)
     log("START%s stages=%s worlds=%s cache=%d results" % (" (SMOKE)" if A.smoke else "", A.stages, ",".join(A.worlds), len(CACHE)))
     stages = {"prep": stage_prep, "rejudge": stage_rejudge, "classes": stage_classes, "joint": stage_joint, "edge": stage_edge, "globals": stage_globals, "consts": stage_consts, "floor": stage_floor, "rating": stage_rating, "recalib": stage_recalib, "gap": stage_gap, "logistics": stage_logistics, "worth": stage_worth, "loot": stage_loot}
     order = A.stages.split(",")
@@ -2207,23 +2299,11 @@ def main():
         save_summary()
         log("STAGE %s done (%.0f s; seed runs %d, %d of them served from the cache = %.1f%%)" % (name, cs["wall_s"], cs["seed_runs"], cs["from_cache"], 100.0 * cs["from_cache"] / max(1, cs["seed_runs"])))
         done.append(name)
-        if name == "gap" and SUMMARY["stages"].get("gap", {}).get("search_changed"):
-            # G2 (review of 7e883a9a): the (a) search moved the table, so a stage that reads the final table and already ran in this
-            # order describes the table from before it: run it again (the default order puts gap first, so this is a custom order only).
-            again = [x for x in ("floor", "rating", "recalib") if x in done and x not in order[i:]]
-            if again:
-                log("gap search moved the table: %s run again after it" % ",".join(again))
-                order[i:i] = again
-    j = SUMMARY["stages"].get("joint", {}).get("verdict", "")
-    # the table ships only when the joint gate PASSED on exactly this table: a joint that did not run, or ran on a table that a later stage
-    # changed (the gap search's whole-set drop, recalib's withheld values), leaves ship.table empty with the reason
-    fin, wh, jt = final_curves(), SUMMARY.get("withheld", []), SUMMARY["stages"].get("joint", {})
-    need = "" if j == "PASS" and jt.get("table") == fin and not wh else (
-        "joint gate: %s" % (j or "not run") if j != "PASS" else
-        "the joint gate graded a different table than the final one (%d vs %d values): re-run the joint stage" % (len(jt.get("table", [])), len(fin)) if jt.get("table") != fin else
-        "recalib withheld %d value(s) after the joint gate graded the larger table: re-run the joint stage on the table without them" % len(wh))
-    SUMMARY["ship"] = {"table": fin if not need else [], "withheld": wh, "joint": j or "not run", "needs_joint_rerun": need,
-                       "note": "ship.table is non-empty only when the joint gate PASSED on exactly this table with nothing withheld; otherwise it is empty and needs_joint_rerun says why"}
+        again, why = rerun_after(name, done, order[i:])
+        if again:
+            log("%s: %s run again after it" % (why, ",".join(again)))
+            order[i:i] = again
+    SUMMARY["ship"] = ship_state()
     save_summary()
     EMIT.shutdown(wait=True)
     log("DONE: %s/summary.md, %d open decision(s), %d automatic decision(s)" % (A.out, len(SUMMARY["open_decisions"]), len(SUMMARY["auto_decisions"])))

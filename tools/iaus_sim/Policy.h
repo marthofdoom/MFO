@@ -27,6 +27,9 @@ namespace Sim {
         Decision  d;
     };
 
+    // The tuning every IausPolicy starts from (Tune.h points it at a searched copy; the default is the game's own).
+    inline const Tuning*& ActiveTuning() { static const Tuning* t = &DefaultTuning(); return t; }
+
     // The estimate inputs of one actor, from what the GAME can read of him: his drawn weapon (or the spell in his hand) through the
     // engine's own damage and rate model (I8 research 2.1 / 2.4), his armor, his magic resistance, the damage he has been taking.
     inline void FillEstimate(const Fight& F, const Body& o, Combatant& k) {
@@ -45,6 +48,8 @@ namespace Sim {
             k.hitsPerSec = (w.Has() ? w.speed : 1.0f) * static_cast<float>(ranged ? F.D->G("fCombatDPSBowSpeedMult", 0.2) : F.D->G("fCombatDPSMeleeSpeedMult", 1.0));
         }
         k.armor = ArmorMitigation(r, F.ArmorOf(o), sp.pieces); k.magicResist = F.ResistOf(o, kAvResistMagic); k.lossPerSec = o.recentDmg / 2.0f;
+        // SIM V3 `burst` (iaus/Fills.cpp:587, written with lossPerSec): the gross rate and the largest burst, read at his last sample (World.h SampleBursts).
+        if (g_v3.burst) { k.grossPerSec = o.burstGross; k.maxHit = o.burstMax; }
     }
 
     // Concealment::Prepare: true when a FRESH point is known (younger than 3 s, of the kind asked). At most one pick per 1.5 s;
@@ -62,12 +67,6 @@ namespace Sim {
     inline bool PreparePick(const Fight& F, const Ctl& c, const Body& self, bool flee) { return PreparePickKind(F, c, self, flee ? 1 : 0); }
 
     // The tuning every IausPolicy starts from (Tune.h points it at a searched copy; the default is the game's own).
-    // ONE HARD HIT FROM DOWN (CALIBRATED, iaus-sim-v3.md 15.5): the 90th percentile of the field's hit windows on followers took 30.1 % of the
-    // target's health (_evidence/deck-run-1117f, 16 windows with damage; the largest 96.7 %). A recipient under this share of his health
-    // can be downed by the next such hit, and a heal takes about 1.8 s from the pick to landing (the Opus heal-timing diagnosis of 11-17,
-    // 1.0 to 2.9 s), so a heal that BEGINS under the line is late. Heal timing is judged by this, not by the mean health at the heal.
-    inline constexpr float kOneHitLine = 0.30f;
-    inline const Tuning*& ActiveTuning() { static const Tuning* t = &DefaultTuning(); return t; }
 
     // a_t: the tuning the gather reads (the game's gather reads DefaultTuning().bowWeaponRange, iaus/Candidates.cpp; the lab reads the searched copy so
     // `t.bowRange` moves the gather and the generator together).
@@ -428,10 +427,10 @@ namespace Sim {
                 if ((fam == Family::CastOffense || (fam == Family::Scroll && hostile)) && e.resistAv >= 0) { ++t.elemCasts; const float r = F.ResistOf(*tg, e.resistAv); if (r >= 50.0f) ++t.resistedCasts; if (r < 0.0f) ++t.weakCasts; if (r >= 100.0f) ++t.immuneCasts; }
                 if (fam == Family::CastOffense) { ++t.offPickN; t.offPickDmg += s.dmg + s.dot * s.dotDur; t.offPickCost += e.cost; }
                 if (fam == Family::CastHeal) { ++t.healPickN; t.healPickSize += s.heal + s.hot * s.hotDur; if (s.e.concentration) ++t.healPickConc; if (target == x.c.id) ++t.healPickSelf; }
-                if (fam == Family::CastHeal && target == x.c.id) { t.selfHealAtSum += x.c.hp / std::max(1.0f, x.c.hpMax); ++t.selfHealN; if (x.c.hp < 0.25f * x.c.hpMax) ++t.selfHealLowN; }
-                if (fam == Family::CastHeal) { const Body* r = F.Find(target); if (r && r != &x) { t.healAtSum += r->c.hp / std::max(1.0f, r->c.hpMax); ++t.healAtN; if (r->c.hp < kOneHitLine * r->c.hpMax) ++t.healLateN; }
+                // (the health at which a heal BEGINS, healAt% / healLate% / selfHealLow%, is tallied in World.h StartCast since sim v4 slice 1: every heal he begins)
+                if (fam == Family::CastHeal) {
                     for (const Body& o : F.b) if (&o != &x && o.role == Role::Follower && o.act == Act::Cast && o.hitAt >= 0 && o.actTarget == target) { const SimSpell* os = F.SpellOf(o, o.actSpell); if (os && os->e.nature == Prune::Nature::Heal) { ++t.doubleHeals; break; } }
-                    (void)r; }
+                }
             }
             if (thrashed && subj) ++t.castThrash;   // the waiting claim is dropped; the new one starts its own wait
             F.StartCast(x, si, s, target, e.source == SpellSource::Staff ? 0.0f : e.cost, true); if (hostile) { c.lastTarget = tg->c.id; peel(); }

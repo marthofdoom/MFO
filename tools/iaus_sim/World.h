@@ -15,6 +15,7 @@
 #include "iaus_sim/Detect.h"
 
 #include "iaus/Reach.h"
+#include "iaus/Estimate.h"    // SIM V3 `burst`: LapGross / BurstReads, the game's own pure lap maths
 #include "iaus/Reposition.h"   // batch I: the spell range, the back-off need, the hidden step (the game's own pure functions)
 #include <unordered_map>
 #include "iaus_sim/Playstyles.h"
@@ -114,6 +115,13 @@ namespace Sim {
         std::vector<Effect> fx;
         std::vector<double> spellReady;  // per spec spell (foes) / per book entry (follower engine casts)
         float recentDmg = 0;             // decaying incoming damage per second (2 s window)
+        // SIM V3 `burst` (native iaus/Fills.cpp Track, 11-17g): his GROSS damage per sampled lap. One sample every TM::pump (each follower's lap samples every
+        // actor, Fills kLossMinDtSec 0.10 s, and a lap is served every 133 ms), the maths is the game's own Estimate::LapGross / BurstReads.
+        std::vector<MFO::Iaus::Estimate::BurstSample> burst;   // newest last, pruned past the longer window
+        float    burstHp = -1.0f;        // his health at the last sample (< 0 = never sampled)
+        unsigned burstN = 0;             // hit events on him since the last sample (the sink's g_taken; a hit the party caused is not one, review F1 of b98052f0)
+        float    burstFloor = 0.0f;      // the least those hits did: each attacker's own hit estimate after HIS armor / resistance estimate
+        float    burstGross = 0.0f, burstMax = 0.0f;   // Combatant::grossPerSec / maxHit as of his last sample (the game reads them on the lap that samples, Fills.cpp:560-563)
         float dmgDealt = 0;
         int   arrows = 60, potions = 0;
         bool  rangedMode = false, casterMode = false;
@@ -224,7 +232,7 @@ namespace Sim {
         long   castUnfired = 0, castDeferred = 0, healFullExit = 0, castRepeat = 0; double unfiredSec = 0;   // castRepeat: picks that drew the repeat table (the claim stood and had fired)
         // THE SELF-HEAL POINT (the caster survival band, Playstyles.h): his health share each time a decision of his began to mend HIMSELF (a heal cast at himself, a health potion).
         long   selfHealLowN = 0;   // ... and how many of those began under a quarter of his health (the oracle-relative survival band)
-        long   healLateN = 0;      // his heals on ANOTHER that began with the recipient within one hard hit of down (Policy.h kOneHitLine): the heal-timing band of the healers (healLate%)
+        long   healLateN = 0;      // his heals on ANOTHER that began with the recipient within one hard hit of down (World.h kOneHitLine): the heal-timing band of the healers (healLate%)
         long   selfHealN = 0; double selfHealAtSum = 0; long healYield = 0;   // healYield: his channelled heal gave its hand to a non-heal pick under threat (11-17b)
         // THE FIELD SCENARIOS' READS (11-17): his first damage on a foe (per fight: N is 0 or 1) and what his cast decisions picked: offense (the spell's own
         // damage and cost) and heals (the heal's size, how many were channelled, how many were for himself).
@@ -337,6 +345,20 @@ namespace Sim {
     };
 
     struct Policy;   // decides for one follower when he is served (Policy.h)
+    struct Fight; struct Body;
+    inline void FillEstimate(const Fight& F, const Body& o, Combatant& k);   // Policy.h: the estimate inputs of one actor, as the game's gather reads them
+    inline const Tuning*& ActiveTuning();           // Policy.h: the tuning under search (the game's LiveTuning())
+    inline constexpr double kBurstKeepSec = 30.0;   // the longest window the lab honours for Tuning::grossWindowSec / maxHitWindowSec (4 and 8 s shipped; a larger --set value is read as this)
+    // ONE HARD BURST FROM DOWN (CALIBRATED, iaus-sim-v4.md 9.2; was 0.30 from the 16 windows of one fight, iaus-sim-v3.md 15.5). The 90th
+    // percentile of the field's health-loss WINDOWS on followers (a window = the drop between two worker samples around a foe's hit, 0.12 to
+    // 0.55 s: one blow with whatever rides on it, a power attack, a spell) is 34.5 % of the target's health: 139 windows of five sessions,
+    // `calib_damage.py` FIELD HIT WINDOWS, the largest 100 %. The plain blows alone read 33.0 % (n = 27), so the line does not rest on what a
+    // window holds. It is the window figure because the game's own read (Estimate::HitsToDown) is the largest burst inside
+    // Tuning::burstWindowSec. A recipient under this share of his health can be downed by the next such burst, and a heal takes about 1.8 s
+    // from the pick to landing (the Opus heal-timing diagnosis of 11-17, 1.0 to 2.9 s), so a heal that BEGINS under the line is late. Heal
+    // timing is judged by this (healLate%), not by the mean health at the heal.
+    // ASSUMPTION inside it: the target's maximum health is the largest health the session's hit lines show for him (no line prints it).
+    inline constexpr float kOneHitLine = 0.35f;
 
     struct Fight {
         const Data* D = nullptr;
@@ -369,6 +391,7 @@ namespace Sim {
         std::vector<Spawn> late;
         float foeHpTotal = 0;                      // every foe's full health, late ones included (Utility)
         double now = 0, nextPump = 0, maxSec = 150;
+        double burstAt = 0;                        // SIM V3 `burst`: the next gross-damage sample of every actor (Body::burst)
         double decCrossAt[10] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 }; bool decDowned = false;   // the decline record's per-fight state (Tally::decCross)
         int rr = 0;
         bool tauntVisible = true, engineCasts = true, g10Sticky = false, over = false;
@@ -686,6 +709,32 @@ namespace Sim {
             }
             (void)by;
         }
+        // SIM V3 `burst`: the game's hit sink (iaus/Fills.cpp, TESHitEvent on a follower or the player that no party member caused) and the per-lap sample.
+        // Called where the lab lands a HIT (a weapon blow, a spell's impact, a bash); a tick of a lasting effect raises no event and shows as the net drop.
+        void NoteHit(Body& x, const Body& by) {
+            if (!g_v3.burst || !estimates || by.Party() || !x.Party() || x.role == Role::Summon) return;
+            Combatant ae, xe; FillEstimate(*this, by, ae); FillEstimate(*this, x, xe);
+            const float est = ae.hitIsMagic ? ae.hit * (std::max)(0.0f, 1.0f - xe.magicResist / 100.0f) : ae.hit * (1.0f - xe.armor);
+            ++x.burstN; if (std::isfinite(est) && est > 0.0f) x.burstFloor += est;
+        }
+        void SampleBursts() {
+            const Tuning& lt = *ActiveTuning();
+            const double gw = std::min(kBurstKeepSec, lt.grossWindowSec > 0.0f ? double(lt.grossWindowSec) : 4.0), mw = std::min(kBurstKeepSec, lt.maxHitWindowSec > 0.0f ? double(lt.maxHitWindowSec) : 8.0);
+            const double bw = lt.burstWindowSec > 0.0f ? double(lt.burstWindowSec) : 0.5;
+            for (Body& x : b) {
+                if (!x.alive) continue;
+                if (x.burstHp >= 0.0f) {
+                    const float gross = MFO::Iaus::Estimate::LapGross(x.burstHp - x.c.hp, x.burstN, x.burstFloor);
+                    if (std::isfinite(gross) && gross > 0.0f) x.burst.push_back({ now, gross });
+                }
+                x.burstN = 0; x.burstFloor = 0.0f; x.burstHp = x.c.hp;
+                if (x.burst.empty()) { x.burstGross = x.burstMax = 0.0f; continue; }
+                // the reads, once per sample (Fills.cpp:560-563: pruned past the longer window, then BurstReads at the sample's own time). Done HERE and not
+                // per snapshot: an oracle rollout builds a snapshot per follower lap, and BurstReads is quadratic in the samples it holds.
+                std::erase_if(x.burst, [&](const MFO::Iaus::Estimate::BurstSample& s) { return now - s.t > (std::max)(gw, mw); });
+                MFO::Iaus::Estimate::BurstReads(x.burst, now, gw, mw, bw, x.burstGross, x.burstMax);
+            }
+        }
         // returns the health actually removed
         float Hurt(Body& x, float dmg, Body* by, bool fromIaus = false) {
             if (g_calmBreaks && x.calmed && by && by->Party() && dmg > 0.0f && now < x.ctrlUntil) { x.ctrlUntil = now; x.calmed = false; }
@@ -760,17 +809,24 @@ namespace Sim {
             return D->dfs.mode == 2 ? 1.0f / static_cast<float>(n) : std::pow(std::max(0.0f, 1.0f - D->dfs.reduction), static_cast<float>(n - 1));
         }
         // one physical hit that has connected in time and space
-        // THE FIELD'S HIT-SIZE SPREAD (SIM V3 `hittail`; CALIBRATED, iaus-sim-v3.md 15.5). A foe's physical hit on the party is multiplied by one
-        // of these, drawn evenly. They are the 16 hit windows with damage that foes landed on followers in _evidence/deck-run-1117f/MFO.log
-        // ([iaus-fill] hit, 19:44:45 to 19:45:51, one fight), each as the health it took before armor (took / (1 - the target's armor share,
-        // both printed on the line)) over the MEDIAN of its own attacker kind (eleven arrows of the Conqueror and Ravager Archers, median 53; five
-        // blows of one Conqueror Berserker, median 54), then divided by their mean (1.729) so the mean is 1. Arrows: 1.32 3.13 0.91 1.74 1 3.55
-        // 1 1 1 2.08 1. Blows: 0.67 6.76 1 1 0.5. MEAN 1 ON PURPOSE: at matched pressure the lab's damage per second already agrees with the
-        // field (15.4), what differed is how it arrives. So a usual hit is 0.58 of the lab's old one and one hit in four is 1.2 to 3.9 times it.
-        // n = 16, one fight, three followers: re-derive with calib_damage.py when more sessions carry the probe (bIausFillProbe).
-        static constexpr float kFieldHit[16] = { 0.76f, 1.81f, 0.53f, 1.01f, 0.58f, 2.05f, 0.58f, 0.58f, 0.58f, 1.20f, 0.58f, 0.39f, 3.91f, 0.58f, 0.58f, 0.29f };
+        // THE FIELD'S HIT-SIZE SPREAD (SIM V3 `hittail`; CALIBRATED on a small sample, iaus-sim-v4.md 9.2; it replaces the table of iaus-sim-v3.md 15.5).
+        // A foe's physical hit on the party is multiplied by one of these, drawn evenly. PER EVENT since sim v4 slice 1 (Opus review F-A of 610e2952:
+        // the first table was 16 health-loss WINDOWS of one fight, with power attacks and enchantment riders among them, stacked on the lab's own
+        // power attacks). Now: `calib_damage.py <run dirs>` (its HITS section; the last line it prints is this row) over the five sessions that carry
+        // the fill probe's hit lines (_evidence/deck-run-1117c, 1117f, 1117g, 1118-adelinda, 1119-jesper): 139 windows with a loss, of which 27 are
+        // PLAIN (one plain weapon blow of one foe: the attacker's weapon sampled, every source of the blow that weapon, no power attack, sneak
+        // attack, bash, block or rider). Each plain blow is the health it took over the ATTACKER'S OWN printed estimate after armor (the line's
+        // hit x (1 - armor share)), so all 27 count whatever the attacker, then divided by the mean of the 27 (2.202: the game's estimate reads
+        // that far under a real plain blow) so the mean is 1. MEAN 1 ON PURPOSE (15.4: at matched pressure the lab's damage per second agrees
+        // with the field; what differs is how it arrives).
+        // HONEST SIZE: 27 blows, and part of the spread is the estimate's own error from one attacker to the next. What this table does NOT
+        // carry, each kept as its own figure by the tool (FIELD HIT KIND) for the day it is modelled: riders on a foe's blow (35 windows, 25 %),
+        // power attacks (15, which the lab models itself), foe spells (14, p90 71 % of the target's health), unsampled attackers (37). No window
+        // holds blows of several attackers or instants (0 of 139), so nothing here or in the lab models a multi-blow window.
+        static constexpr float kFieldHit[] = { 0.35f, 0.38f, 0.38f, 0.43f, 0.44f, 0.51f, 0.51f, 0.57f, 0.68f, 0.90f, 0.90f, 0.90f, 0.90f, 0.91f, 0.95f, 1.02f, 1.10f, 1.14f, 1.22f, 1.28f, 1.34f, 1.36f, 1.48f, 1.53f, 1.85f, 1.85f, 2.10f };
+        static constexpr int kFieldHitN = static_cast<int>(sizeof(kFieldHit) / sizeof(kFieldHit[0]));
         float Physical(Body& a, Body& d, float dmg, bool power, bool ranged, bool fromIaus) {
-            if (g_v3.hittail && a.role == Role::Foe && d.Party()) dmg *= kFieldHit[std::min(15, static_cast<int>(VU(a, 37, 0.0f, 16.0f)))];
+            if (g_v3.hittail && a.role == Role::Foe && d.Party()) dmg *= kFieldHit[std::min(kFieldHitN - 1, static_cast<int>(VU(a, 37, 0.0f, static_cast<float>(kFieldHitN))))];
             const Rules& r = D->rules; bool blocked = false; float blockedFrac = 0.0f; const float rawDmg = dmg;
             if (a.role == Role::Follower) dmg *= FollowerScale();
             bool sneakAtk = false, flankAtk = false;
@@ -805,6 +861,7 @@ namespace Sim {
             if (a.role == Role::Player) dmg *= r.diffByPC;
             if (a.ctl == 0) { if (Controlled(d)) { ++t.hitsOnControlled; if (power) ++t.powOnControlled; }
                 for (const Body& o : b) if (o.role == Role::Foe && Up(o) && now < o.ctrlUntil) { ++t.hitsWhileCtl; break; } }
+            NoteHit(d, a);
             const float dealt = Hurt(d, dmg, &a, fromIaus);
             // --draw-spoil P (MODEL, no engine source: whether a plain hit interrupts an NPC's draw is not decoded; a stagger already does):
             // a melee hit that lands on a body mid-draw spoils the draw with chance P (the arrow is not fired, he starts again).
@@ -823,7 +880,7 @@ namespace Sim {
             float k = mag * a.dmgScale * (1.0f - el) * (1.0f - mr);
             if (d.role == Role::Player) k *= r.diffToPC;
             if (a.role == Role::Player) k *= r.diffByPC;
-            if (s.dmg > 0) Hurt(d, s.dmg * k, &a, fromIaus);
+            if (s.dmg > 0) { NoteHit(d, a); Hurt(d, s.dmg * k, &a, fromIaus); }
             if (a.stealthy && d.role == Role::Foe && (s.dmg > 0 || s.ctrl)) { if (a.cloakUntil > now) a.cloakUntil = now; ForceDetect(a, d); }
             if (s.dmg > 0 && D->poise.on && D->poise.magicHealth > 0.0f) PoiseHit(a, d, s.dmg * k * D->poise.magicHealth);   // ActiveEffectHandler: health damage x the JSON's factor
             if (trace) std::fprintf(trace, "%7.2f  spell %s: %s -> %s (%u) dmg %.0f (x%.2f)%s  hp %.0f/%.0f\n", now, s.e.name.c_str(), a.c.name.c_str(), d.c.name.c_str(), d.c.id, s.dmg * k, k, s.ctrl ? " control" : "", d.c.hp, d.c.hpMax);
@@ -993,7 +1050,7 @@ namespace Sim {
                 if (tg && Up(*tg) && x.ctl >= 0 && kind != Act::Bash && g_learnReach) ctl[static_cast<std::size_t>(x.ctl)].reach.Observe(x.c.id, kReachWeapon, kReachSeedEdge, 1u, std::max(0.0f, x.swingDist - (tg->c.bodyRadius > 0.0f ? tg->c.bodyRadius : MFO::Iaus::ReachBook::kRefRadius)), !whiff);   // Fills.cpp LearnReach: one outcome, a chain of one swing, the EDGE distance at its start
                 if (whiff && x.ctl == 0 && kind == Act::Power && x.actIaus) ++t.powerWhiffs;
                 if (!tg || !Up(*tg) || whiff) return;   // whiff
-                if (kind == Act::Bash) { Hurt(*tg, 3.0f, &x); if (D->poise.on) PoiseHit(x, *tg, PoiseDamage(x, *tg, 0.0f, false, false, true, 0.0f)); else Stagger(*tg, TM::bashStagger, &x); return; }
+                if (kind == Act::Bash) { NoteHit(*tg, x); Hurt(*tg, 3.0f, &x); if (D->poise.on) PoiseHit(x, *tg, PoiseDamage(x, *tg, 0.0f, false, false, true, 0.0f)); else Stagger(*tg, TM::bashStagger, &x); return; }
                 Physical(x, *tg, WeaponDamage(D->rules, *x.spec, x.spec->melee, kind == Act::Power) * FortifyDmg(x), kind == Act::Power, false, x.actIaus);
             } else if (kind == Act::Shoot) {
                 if (!tg) return;
@@ -1231,6 +1288,13 @@ namespace Sim {
             x.hitAt = now + s.castSec; x.actEnd = x.hitAt + TM::castRecover; x.c.caster = true; Action(x, dg.soundNormal);
             x.claimAt = now; x.claimUntil = now; x.lofWaited = false; x.reDrawUntil = 0; x.castStarted = false;
             if (x.ctl == 0 && fromIaus) ++t.castPick;
+            // THE HEALTH AT WHICH A HEAL BEGINS (healAt%, healLate%, selfHealLow%), for EVERY heal the subject begins: his decision layer's cast_heal, a
+            // healing scroll (the Scroll family, the oracle's ext:scroll) and his own combat AI's heal (review F-D of 610e2952: the last two were
+            // not counted, so an oracle that healed by scroll, or a follower whose AI healed for him, read better heal timing than he had).
+            if (x.ctl == 0 && s.e.nature == Prune::Nature::Heal) {
+                if (target == x.c.id) { t.selfHealAtSum += x.c.hp / std::max(1.0f, x.c.hpMax); ++t.selfHealN; if (x.c.hp < 0.25f * x.c.hpMax) ++t.selfHealLowN; }
+                else if (const Body* r = Find(target)) { t.healAtSum += r->c.hp / std::max(1.0f, r->c.hpMax); ++t.healAtN; if (r->c.hp < kOneHitLine * r->c.hpMax) ++t.healLateN; }
+            }
             if (x.ctl >= 0) {   // SIM V3: a follower's cast is a claim that Harbinger builds and the engine fires (iaus-sim-v3.md 4.2, 4.3)
                 // hands: a stream has no charge of its own (the lab's 2 s is the lump of v2); MODEL 0.25 s to raise the hand
                 const bool direct = g_v3.hands && s.e.concentration && s.e.source == SpellSource::Spell;   // a stream goes down the DIRECT road (CastTargetDirect / CastSelfDirect, Docs/CAST-DELIVERY.md): no claim to wait for
@@ -1541,6 +1605,7 @@ namespace Sim {
         void IntoRoom(Body& o, float r) { if (!(arenaR > 0.0f)) return; const float ox = o.c.x - arenaX, oy = o.c.y - arenaY, od = std::hypot(ox, oy); if (od > r) { o.c.x = arenaX + ox * r / od; o.c.y = arenaY + oy * r / od; } }
         void StepWorld() {
             SetArena();
+            if (g_v3.burst && estimates && now >= burstAt) { burstAt += TM::pump; SampleBursts(); }
             for (std::size_t i = 0; i < b.size(); ++i) {
                 Body& x = b[i]; if (!x.alive) continue;
                 if (x.c.downed) { if (now >= x.downUntil) { x.c.downed = false; x.c.hp = std::max(x.c.hp, D->rules.bleedoutDefault * x.c.hpMax); } continue; }
