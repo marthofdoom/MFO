@@ -441,7 +441,7 @@ namespace {
         std::sort(ecs.begin(), ecs.end());
         std::printf("PATHING GATE  %d natural fights per class and environment class  seed=%llu  places=%s (%zu, %zu classes)  bounds=%s%s\n", n, static_cast<unsigned long long>(seed), g_envLabel.c_str(), g_envPool.draw.size(), ecs.size(),
                     oracleN > 0 ? "the class oracle on the same fights + margin" : "kPathBounds (PLACEHOLDERS, not oracle-measured)", WorldTag("  ").c_str());
-        int fails = 0, cells = 0; long bad = 0, forever = 0; double cpu = 0; long fightsRun = 0;
+        int fails = 0, cells = 0, blind = 0; long bad = 0, forever = 0; double cpu = 0; long fightsRun = 0;
         for (const std::string& ec : ecs) {
             std::vector<const SimEnv*> sub; for (const SimEnv* e : g_envPool.draw) if (e->cls == ec) sub.push_back(e);
             struct Cell { Agg iaus, pair /* IAUS on the fights the oracle also played (review F9) */, orc; }; std::vector<Cell> cell(scope.size()); std::mutex mx; std::atomic<int> next{ 0 }; const int jobs = static_cast<int>(scope.size()) * n;
@@ -460,10 +460,12 @@ namespace {
                 for (const PathBound& b : kPathBounds) { const double v = oracleN > 0 ? mp.at(b.metric) : m.at(b.metric), lim = oracleN > 0 ? std::max(0.0, mo.at(b.metric)) + b.margin : b.bound;
                     if (oracleN > 0) std::printf("ORCPATH %s %s %s  iaus %.3f  oracle %.3f  bound %.3f\n", scope[ci].name.c_str(), ec.c_str(), b.metric, v, mo.at(b.metric), lim);
                     if (v > lim) { char t[96]; std::snprintf(t, sizeof t, "%s%s %.2f > %.2f", why.empty() ? "" : ", ", b.metric, v, lim); why += t; } }
+                char det[16]; if (m.at("detour.p90") < 0) { std::snprintf(det, sizeof det, "no legs"); ++blind; } else std::snprintf(det, sizeof det, "%.2f", m.at("detour.p90"));   // no arrived leg over 200 units: the row is NOT MEASURED, and says so (it used to print -1.00 and pass)
                 if (m.at("env.bad") > 0) why += std::string(why.empty() ? "" : ", ") + "env.bad"; if (m.at("env.stuckForever") > 0) why += std::string(why.empty() ? "" : ", ") + "stuck forever";
-                std::printf("  %-26s %12s %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %9.2f %7s%s%s\n", scope[ci].name.c_str(), "", m.at("stuck%"), m.at("reblock/f"), m.at("osc/min"), m.at("unreach%"), m.at("detour.p90"), m.at("holdUnreach.s/f"), m.at("hold%"), m.at("repeat/f"), m.at("U"), why.empty() ? "PASS" : "FAIL", why.empty() ? "" : "  ", why.c_str());
+                std::printf("  %-26s %12s %9.2f %9.2f %9.2f %9.2f %9s %9.2f %9.2f %9.2f %9.2f %7s%s%s\n", scope[ci].name.c_str(), "", m.at("stuck%"), m.at("reblock/f"), m.at("osc/min"), m.at("unreach%"), det, m.at("holdUnreach.s/f"), m.at("hold%"), m.at("repeat/f"), m.at("U"), why.empty() ? "PASS" : "FAIL", why.empty() ? "" : "  ", why.c_str());
                 if (!why.empty()) { ++fails; std::printf("PATHGATE FAIL %s %s: %s\n", scope[ci].name.c_str(), ec.c_str(), why.c_str()); } }
         }
+        if (blind) std::printf("\nDETOUR NOT MEASURED in %d cell(s) (\"no legs\": no leg over 200 units arrived, a bow that stands and shoots): the detour bound is not tested there\n", blind);
         std::printf("\nPATH GATES: %d cell(s), %d FAIL  |  env.bad %ld (must be 0)  stuck forever %ld (must be 0)  |  %.2f ms CPU per IAUS fight (%ld fights)  => %s\n", cells, fails, bad, forever, fightsRun ? 1000.0 * cpu / double(fightsRun) : 0.0, fightsRun, fails == 0 && bad == 0 && forever == 0 ? "PASS" : "FAIL");
         return gate && (fails || bad || forever) ? 1 : 0;
     }

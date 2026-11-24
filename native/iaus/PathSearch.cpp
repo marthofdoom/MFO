@@ -76,7 +76,21 @@ namespace MFO::Iaus::Env {
         a_out.Clear();
         const std::size_t n = a_v.tris.size();
         if (a_q.fromTri < 0 || a_q.toTri < 0 || static_cast<std::size_t>(a_q.fromTri) >= n || static_cast<std::size_t>(a_q.toTri) >= n) return false;
-        if (a_q.fromTri == a_q.toTri) { a_out.pts.push_back({ a_q.to, a_q.toTri, Corner::Goal }); a_out.length = Dist(a_q.from, a_q.to); a_out.reachable = true; return true; }
+        // A door's LEAF stands inside its triangle, so the last straight piece of a path (into the goal's triangle, or the whole path when start and
+        // goal share one) can cross a leaf the walker cannot open without crossing any edge. -1 = it does not. a_t = where along a -> b the leaf is.
+        const auto shutLeaf = [&](std::int32_t tri, const Vec3& a, const Vec3& b, float& t) -> std::int32_t {
+            const std::int32_t d = a_v.tris[static_cast<std::size_t>(tri)].door; if (d < 0) return -1;
+            const Door& D = a_v.doors[static_cast<std::size_t>(d)]; if (!D.leaf || D.state == DoorState::Open || !LeafCrossed(D, a, b, t)) return -1;
+            const bool opens = D.state == DoorState::Closed ? a_q.who.opensDoors : (a_q.who.opensDoors && a_q.who.unlocks);
+            return opens ? -1 : d;
+        };
+        if (a_q.fromTri == a_q.toTri) {
+            float lt = 0.0f; const std::int32_t sd = shutLeaf(a_q.fromTri, a_q.from, a_q.to, lt);
+            if (sd >= 0) {   // BLOCKED: the path ends short of the leaf
+                const float len = std::max(1.0f, Dist(a_q.from, a_q.to)), te = std::max(0.0f, lt - 4.0f / len);
+                Vec3 at{ a_q.from.x + (a_q.to.x - a_q.from.x) * te, a_q.from.y + (a_q.to.y - a_q.from.y) * te, 0.0f }; at.z = HeightAt(a_v, a_q.fromTri, at.x, at.y);
+                a_out.pts.push_back({ at, a_q.fromTri, Corner::Goal }); a_out.length = Dist(a_q.from, at); a_out.reachable = false; a_out.blocked = true; a_out.blockDoor = sd; return true; }
+            a_out.pts.push_back({ a_q.to, a_q.toTri, Corner::Goal }); a_out.length = Dist(a_q.from, a_q.to); a_out.reachable = true; return true; }
         if (!a_v.weak.empty() && a_v.weak[static_cast<std::size_t>(a_q.fromTri)] != a_v.weak[static_cast<std::size_t>(a_q.toTri)]) return false;   // no link of any kind joins them
         if (a_s.mark.size() < n) { a_s.mark.assign(n, 0); a_s.g.resize(n); a_s.parent.resize(n); a_s.state.resize(n); a_s.entry.resize(n); a_s.gen = 0; }
         if (++a_s.gen == 0) { std::fill(a_s.mark.begin(), a_s.mark.end(), 0u); a_s.gen = 1; }
@@ -135,6 +149,11 @@ namespace MFO::Iaus::Env {
             const float l = std::max(1.0f, std::hypot(c.x - at.x, c.y - at.y)), inl = std::min(4.0f, 0.5f * l);
             goal = { at.x + (c.x - at.x) / l * inl, at.y + (c.y - at.y) / l * inl, 0.0f }; goal.z = HeightAt(a_v, a_s.corridor[i - 1].tri, goal.x, goal.y);
             a_s.corridor.resize(i); break; }
+        if (reach && a_s.corridor.size() > 1) {   // the goal lies across a shut leaf inside its own triangle: the path ends where it came into that triangle
+            float lt = 0.0f; const Vec3 in = a_s.entry[static_cast<std::size_t>(a_q.toTri)]; const std::int32_t sd = shutLeaf(a_q.toTri, in, a_q.to, lt);
+            if (sd >= 0) { const float len = std::max(1.0f, Dist(in, a_q.to)), te = std::max(0.0f, lt - 4.0f / len);
+                goal = { in.x + (a_q.to.x - in.x) * te, in.y + (a_q.to.y - in.y) * te, 0.0f }; goal.z = HeightAt(a_v, a_q.toTri, goal.x, goal.y);
+                a_out.blocked = true; a_out.blockDoor = sd; reach = false; } }
         if (a_s.corridor.size() == 1) { a_out.pts.push_back({ goal, a_q.fromTri, Corner::Goal }); a_out.length = Dist(a_q.from, goal); a_out.reachable = reach; return true; }
         // portals, split into funnel runs at each drop
         const float inset = a_t.cornerInset * a_q.who.radius;

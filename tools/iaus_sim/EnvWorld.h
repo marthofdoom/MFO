@@ -83,6 +83,22 @@ namespace Sim {
         return EQ::CastRay(EnvViewOf(F), a, b, tl_envScratch, g_sightT, g_envT.targetMargin).clear;
     }
 
+    // Does he hold the offense approach claim when he walks at a foe: a follower who walks in for SIGHT (a caster, a bow in his hands). A blade
+    // pursues by the engine's own combat movement, which the claim's backoff, cap and block never bound.
+    inline bool EnvClaimWalker(const Fight& F, const Body& x) {
+        return x.ctl >= 0 && (x.casterMode || x.rangedMode || F.ctl[static_cast<std::size_t>(x.ctl)].drawn == PostureKind::Bow);
+    }
+    // Is his approach on this foe blocked NOW. A block lapses (the foe may be walked to again) when he stands more than blockLapseU from where it
+    // was made (native BlockStands, kBlockMoveUnits: "things moved on") or a door has changed since (the lab's reason the route was undone).
+    inline bool EnvApprBlocked(Fight& F, const Body& x, std::uint32_t foe) {
+        if (!EnvClaimWalker(F, x)) return false;
+        Ctl& c = F.ctl[static_cast<std::size_t>(x.ctl)];
+        for (std::size_t i = 0; i < c.apprBlocked.size(); ++i) { const Ctl::ApprBlock& q = c.apprBlocked[i]; if (q.foe != foe) continue;
+            if (std::hypot(x.c.x - q.x, x.c.y - q.y) <= g_envT.blockLapseU && q.stamp == F.doorStamp) return true;
+            if (F.trace) std::fprintf(F.trace, "%7.2f  BLOCK LAPSED %s on %u (%s)\n", F.now, x.c.name.c_str(), foe, q.stamp == F.doorStamp ? "he moved on" : "a door changed");
+            c.apprBlocked.erase(c.apprBlocked.begin() + static_cast<std::ptrdiff_t>(i)); return false; }
+        return false;
+    }
     enum class LegEnd { Blocked, Unreachable, Stuck };
     inline void EnvLegEnd(Fight& F, Body& x, LegEnd how) {
         Nav& n = x.nav; const bool subj = x.ctl == 0;
@@ -94,15 +110,15 @@ namespace Sim {
         if (how != LegEnd::Stuck) {
             if (subj && how == LegEnd::Blocked) ++F.t.pathBlocked;
             n.holdUntil = F.now + static_cast<double>(g_envT.retrySec);
-            // BLOCKED on the way to a foe (apmf/OffenseApproach.cpp:20: "the approach is BLOCKED (released, foe not re-filed this fight)"): a door he cannot open ends it for the fight.
-            if (g_v4.caststart && how == LegEnd::Blocked && n.blocked && x.ctl >= 0 && n.goalBody) { Ctl& c = F.ctl[static_cast<std::size_t>(x.ctl)]; const Body* gb = F.Find(n.goalBody);
-                if (gb && gb->role == Role::Foe && std::find(c.apprBlocked.begin(), c.apprBlocked.end(), n.goalBody) == c.apprBlocked.end()) { c.apprBlocked.push_back(n.goalBody); if (subj) ++F.t.apprBlocked; } }
-            // ENGINE DROPPED (apmf/OffenseApproach.cpp:409, 11-17f): a follower's approach on a foe the engine cannot path to ends with a timed backoff
-            // (Tuning::offenseApproachBackoffSec), at most offenseApproachDropCap times per (follower, foe) per fight. Past the cap the foe is blocked.
-            if (g_v4.caststart && how == LegEnd::Unreachable && x.ctl >= 0 && n.goalBody) { Ctl& c = F.ctl[static_cast<std::size_t>(x.ctl)]; const Body* gb = F.Find(n.goalBody);
+            // THE OFFENSE APPROACH'S OWN BOUNDS (apmf/OffenseApproach.cpp). They bound the ch.24 approach CLAIM, which only a follower walking in for
+            // sight holds (a caster, a bow: EnvClaimWalker), never a blade's pursuit (re-check R2). A path the engine could not make is ENGINE
+            // DROPPED: a timed backoff (Tuning::offenseApproachBackoffSec), at most offenseApproachDropCap times per (follower, foe) per fight,
+            // then a block. A route that ends at a door he cannot open is the same undone path (native has no ending called "a door"), so it takes
+            // the same road and is no longer a block for the fight at the first try. The block is scoped to where and when it was made (EnvApprBlocked).
+            if (g_v4.caststart && (how == LegEnd::Unreachable || (how == LegEnd::Blocked && n.blocked)) && n.goalBody && EnvClaimWalker(F, x)) { Ctl& c = F.ctl[static_cast<std::size_t>(x.ctl)]; const Body* gb = F.Find(n.goalBody);
                 if (gb && gb->role == Role::Foe) { const Tuning& lt = *ActiveTuning(); int* cnt = nullptr; for (auto& kv : c.apprDrops) if (kv.first == n.goalBody) cnt = &kv.second;
                     if (!cnt) { c.apprDrops.push_back({ n.goalBody, 0 }); cnt = &c.apprDrops.back().second; }
-                    if (++*cnt > static_cast<int>(lt.offenseApproachDropCap)) { c.apprBlocked.push_back(n.goalBody); if (subj) ++F.t.apprBlocked; }
+                    if (++*cnt > static_cast<int>(lt.offenseApproachDropCap)) { if (std::none_of(c.apprBlocked.begin(), c.apprBlocked.end(), [&](const Ctl::ApprBlock& q) { return q.foe == n.goalBody; })) { c.apprBlocked.push_back({ n.goalBody, x.c.x, x.c.y, F.doorStamp }); if (subj) ++F.t.apprBlocked; } }
                     else { n.holdUntil = F.now + static_cast<double>(std::max(0.0f, lt.offenseApproachBackoffSec)); if (subj) ++F.t.apprDrops; } } }
         } else { n.exact = true; n.exactUntil = F.now + 3.0; if (subj) ++F.t.pathStuckLegs; }
         if (F.trace && x.ctl >= 0) std::fprintf(F.trace, "%7.2f  LEG %s: %s at (%.0f, %.0f, %.0f) toward (%.0f, %.0f, %.0f), corner %d of %d%s%s, hold until %.1f\n", F.now, x.c.name.c_str(), how == LegEnd::Blocked ? "BLOCKED" : how == LegEnd::Unreachable ? "UNREACHABLE" : "STUCK", x.c.x, x.c.y, x.c.z, n.goal.x, n.goal.y, n.goal.z, int(n.i), int(n.n), n.reach ? "" : " (no route to the goal)", n.away ? " (away)" : "", n.holdUntil);
@@ -177,12 +193,13 @@ namespace Sim {
 
     // A leg is over. Its detour sample (2.5) is taken when he ARRIVED: what he walked over the length of the route he was given (FindPath's, or the
     // straight line of a direct walk), so a route round a wall is not a detour and a walk that wandered off its route is. The route is measured
-    // FROM WHERE HE STOOD (EnvPlan), and what the goal itself moved while he walked (Nav::legDrift: a foe he chases) is added to it: nobody can
-    // walk less than that, so following a moving foe step for step reads 1 and not 3 (review F8: a route of 100 and a foe who walked 150 read 2.5).
+    // FROM WHERE HE STOOD (EnvPlan), and how far the goal ended from where it began (the NET displacement of a foe he chases, at most
+    // legGoalU by the leg's own rule) is added to it, so following a moving foe reads about 1 and not 3 (review F8: a route of 100 and a foe who
+    // walked 150 read 2.5). Net, not the goal's whole travel (re-check): a foe pacing back and forth would otherwise excuse any walk.
     inline void EnvLegClose(Fight& F, Body& x, bool arrived) {
         Nav& n = x.nav;
         if (arrived) n.exact = false;
-        if (arrived && n.legOpen && n.legReach && x.ctl == 0 && n.walked > 200.0f && n.legLen > 1.0f) { const double r = static_cast<double>(n.walked / std::max(50.0f, n.legLen + n.legDrift));
+        if (arrived && n.legOpen && n.legReach && x.ctl == 0 && n.walked > 200.0f && n.legLen > 1.0f) { const double r = static_cast<double>(n.walked / std::max(50.0f, n.legLen + std::hypot(n.goal.x - n.legG0x, n.goal.y - n.legG0y)));
             F.t.detourSum += r; ++F.t.detourN; ++F.t.detourHist[std::clamp(static_cast<int>((r - 1.0) * 4.0), 0, 15)];
             if (F.trace && r > 2.0) std::fprintf(F.trace, "%7.2f  DETOUR %s: walked %.0f on a route of %.0f, from (%.0f, %.0f) toward (%.0f, %.0f)\n", F.now, x.c.name.c_str(), static_cast<double>(n.walked), static_cast<double>(n.legLen), n.legSx, n.legSy, n.legG0x, n.legG0y); }
         n.legOpen = false; n.walked = 0.0f;
@@ -195,7 +212,7 @@ namespace Sim {
             if (subj && longLeg && n.legLong && F.now - n.legAt < static_cast<double>(T.oscSec) && fx * n.legDx + fy * n.legDy < -0.5f) { ++F.t.pathOsc;
                 if (F.trace) std::fprintf(F.trace, "%7.2f  REVERSAL %s: a new leg to (%.0f, %.0f) heads back %.1f s after the last began toward (%.0f, %.0f)\n", F.now, x.c.name.c_str(), gx, gy, F.now - n.legAt, n.legG0x, n.legG0y); }
             n.legDx = fx; n.legDy = fy; }
-        n.legLong = longLeg; n.legAt = F.now; n.legSx = x.c.x; n.legSy = x.c.y; n.legG0x = gx; n.legG0y = gy; n.walked = 0.0f; n.legOpen = true; n.legLen = len; n.legReach = reach; n.legDrift = 0.0f; n.legGx1 = gx; n.legGy1 = gy;
+        n.legLong = longLeg; n.legAt = F.now; n.legSx = x.c.x; n.legSy = x.c.y; n.legG0x = gx; n.legG0y = gy; n.walked = 0.0f; n.legOpen = true; n.legLen = len; n.legReach = reach;
         if (subj) { ++F.t.pathLegs; if (!reach) ++F.t.pathUnreach; }
     }
 
@@ -229,12 +246,16 @@ namespace Sim {
     // not a push along a bearing, so he does not walk into a wall and keep walking. From him, nine straight walks fanned over the half circle that
     // leads away from what he leaves, each up to awayU long. The one that ends farthest from it wins, when it gains at least awayGainU. When none
     // does he is CORNERED and stands (counted apart: Tally::pathCorneredSec, never as stuck).
-    inline bool EnvAwayPick(const Fight& F, const Body& x, float fromX, float fromY, EQ::Vec3& out, std::int32_t& outTri) {
+    inline bool EnvAwayPick(const Fight& F, const Body& x, float fromX, float fromY, const Body* keep, EQ::Vec3& out, std::int32_t& outTri) {
         const EnvTuning& T = g_envT; const EQ::View v = EnvViewOf(F); const EQ::Walker who = WalkerOf(x); const EQ::Vec3 pos{ x.c.x, x.c.y, x.c.z };
-        const float base = std::atan2(x.c.y - fromY, x.c.x - fromX), now0 = std::hypot(x.c.x - fromX, x.c.y - fromY); float best = now0 + T.awayGainU; bool have = false;
+        const float base = std::atan2(x.c.y - fromY, x.c.x - fromX), now0 = std::hypot(x.c.x - fromX, x.c.y - fromY); float best = now0 + T.awayGainU; bool have = false, haveSeen = false;
         for (int i = 0; i < 9; ++i) { const float a = base + static_cast<float>(((i + 1) / 2) * ((i & 1) ? 1 : -1)) * 0.3927f;   // 0, +-22.5, +-45, +-67.5, +-90 degrees: straight back first
             const EQ::Walk w = EQ::WalkLine(v, x.nav.tri, pos, { pos.x + std::cos(a) * T.awayU, pos.y + std::sin(a) * T.awayU, pos.z }, who);
-            const float d = std::hypot(w.end.x - fromX, w.end.y - fromY); if (d > best + 1.0f) { best = d; out = w.end; outTri = w.tri; have = true; } }
+            const float d = std::hypot(w.end.x - fromX, w.end.y - fromY); if (d <= now0 + T.awayGainU) continue;
+            // A back-off from a foe he fights (keep) PREFERS a point that still sees him (re-check R1): a step back behind the corner he just came
+            // round is the dither. Any point with sight beats every point without. A flight (no keep) takes the farthest, as before.
+            const bool seen = keep && g_v4.los && EnvSeesPoint(F, { w.end.x, w.end.y, w.end.z + T.eyeFrac * T.bodyH }, *keep);
+            if ((seen && !haveSeen) || (seen == haveSeen && d > best + 1.0f)) { best = d; out = w.end; outTri = w.tri; have = true; haveSeen = seen; } }
         return have;
     }
 
@@ -245,7 +266,7 @@ namespace Sim {
         // The offense approach's block (apmf/OffenseApproach.cpp): a foe past the drop cap, or behind a door he cannot open, is not walked to again this
         // fight. No leg is filed, so this is not stuck time. It is HOLD time (Tally::pathHoldSec, the same tally the backoff before the cap feeds: review
         // F8), and HOLD-UNREACHABLE time too when his attack stays on that foe (EnvStep counts it).
-        if (g_v4.caststart && g_v4.path && !away && x.ctl >= 0 && to) { const Ctl& bc = F.ctl[static_cast<std::size_t>(x.ctl)]; if (std::find(bc.apprBlocked.begin(), bc.apprBlocked.end(), to->c.id) != bc.apprBlocked.end()) { if (subj) F.t.pathHoldSec += TM::dt; return; } }
+        if (g_v4.caststart && g_v4.path && !away && to && EnvApprBlocked(F, x, to->c.id)) { if (subj) F.t.pathHoldSec += TM::dt; return; }
         const float step = speed * TM::dt; const bool idleBefore = F.now - n.wantAt > 0.5;
         // THE STUCK WINDOW COUNTS WANTED SECONDS (review F8). A gap in the asking (a swing, a stagger, a turn spent on a cast) is taken out of the window
         // and does not clear it, so a body that asks, fails, swings and asks again is stuck. Only a gap past wantGapSec is standing by choice.
@@ -256,17 +277,16 @@ namespace Sim {
         else if (away) {
             const float fromX = 2.0f * x.c.x - tx, fromY = 2.0f * x.c.y - ty;   // every away caller asks for (him + (him - what he leaves))
             if (!n.away || F.now >= n.awayUntil || std::hypot(n.goal.x - x.c.x, n.goal.y - x.c.y) < 12.0f) {
-                EQ::Vec3 p; std::int32_t pt = -1; const bool was = n.away && n.n > 0; n.awayUntil = F.now + static_cast<double>(T.awayPickSec);
-                if (EnvAwayPick(F, x, fromX, fromY, p, pt)) { if (!was) { EnvLegClose(F, x, false); EnvLegStart(F, x, p.x - x.c.x, p.y - x.c.y, std::hypot(p.x - x.c.x, p.y - x.c.y), p.x, p.y, 0.0f, true); }
+                EQ::Vec3 p; std::int32_t pt = -1; const bool was = n.away && n.n > 0; n.awayUntil = F.now + static_cast<double>(to ? T.awayCommitSec : T.awayPickSec);   // a back-off commits to its pathed point, a flight follows the threat
+                if (EnvAwayPick(F, x, fromX, fromY, to, p, pt)) { if (!was) { EnvLegClose(F, x, false); EnvLegStart(F, x, p.x - x.c.x, p.y - x.c.y, std::hypot(p.x - x.c.x, p.y - x.c.y), p.x, p.y, 0.0f, true); }
                     n.goal = p; n.goalTri = pt; n.pts[0] = { p, pt, EQ::Corner::Goal }; n.n = 1; n.i = 0; n.reach = true; }
                 else { n.n = n.i = 0; if (n.legOpen) EnvLegClose(F, x, false); }
                 n.away = true; n.goalBody = 0; }
-            if (n.n) EnvTryStep(F, x, n.goal.x, n.goal.y, step); else cornered = true;
+            if (n.n) { if (!EnvTryStep(F, x, n.goal.x, n.goal.y, step)) n.awayUntil = F.now; } else cornered = true;   // a step that went nowhere ends the commitment: he picks again
             if (subj) { F.t.pathAwaySec += TM::dt; if (cornered) F.t.pathCorneredSec += TM::dt; }
         }
         else {
             EQ::Vec3 gp; const std::int32_t gt = EnvGoal(F, x, tx, ty, to, point, gp); n.goalBody = to ? to->c.id : 0;
-            if (n.legOpen && !n.away) { n.legDrift += std::hypot(gp.x - n.legGx1, gp.y - n.legGy1); n.legGx1 = gp.x; n.legGy1 = gp.y; }
             if (F.now >= n.holdUntil) {
                 const bool spent = n.n == 0 || n.i >= n.n || n.away, stale = n.stamp != F.doorStamp;
                 if (spent || stale || (gt != n.goalTri && F.now - n.pathAt >= static_cast<double>(T.repathSec))) EnvPlan(F, x, gt, gp, idleBefore);
@@ -321,7 +341,7 @@ namespace Sim {
             if (Fight::Up(s0)) { const Body* tg = F.Find(c0.steer ? c0.steer : s0.c.targetId);
                 // holdUnreach (2.5): his attack is on a foe he cannot reach and cannot shoot (no ranged way in his hands, or no sight). Reach = the last route he asked for toward that foe.
                 const bool canShoot = c0.drawn == PostureKind::Bow || c0.drawn == PostureKind::Staff || (c0.gate.spellsOnClass && c0.drawn == PostureKind::None);
-                const bool capped = tg && std::find(c0.apprBlocked.begin(), c0.apprBlocked.end(), tg->c.id) != c0.apprBlocked.end();
+                const bool capped = tg && EnvClaimWalker(F, s0) && std::any_of(c0.apprBlocked.begin(), c0.apprBlocked.end(), [&](const Ctl::ApprBlock& q) { return q.foe == tg->c.id; });
                 if (tg && Fight::Up(*tg) && !tg->Party() && !tg->airborne && (capped || (s0.nav.goalTri >= 0 && !s0.nav.reach && F.now - s0.nav.wantAt < 1.5 + static_cast<double>(ActiveTuning()->offenseApproachBackoffSec) && s0.nav.goalBody == tg->c.id)) && (!canShoot || !EnvSees(F, s0, *tg))) F.t.pathHoldUnreachSec += TM::dt; } }
     }
 

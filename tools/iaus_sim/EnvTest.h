@@ -189,7 +189,41 @@ namespace Sim {
             ok(K.t.pathStuckSec == 0.0 && K.t.pathStuckLegs == 0, "stuck: three steps of asking every 3.4 s is standing by choice (past wantGapSec), never stuck");
             const SimEnv& I = env("island"); const EQ::Vec3 ia = at(I, 128, 6, 2, 2), ib = at(I, 128, 6, 15, 2); Fight L = solo(I); Body& sl = place(L, ia); const EQ::View lv = L.env->View(L.doors, 0); const EnvPoint lg{ ib, EQ::TriAt(lv, ib), 0, 0 };
             for (int k = 0; k < 15 * 30; ++k) { L.Move(sl, ib.x, ib.y, sl.spec->run, false, nullptr, &lg); EnvStep(L); L.now += TM::dt; }
-            ok(lg.tri >= 0 && L.t.pathUnreach >= 4 && L.t.pathRepeat >= 3 && L.t.pathHoldSec > 5.0 && L.t.pathStuckSec == 0.0 && L.t.envStuckForever == 0, "hold: a goal no route reaches is asked for again and again: every wait is HOLD time and none of it stuck time, and every end beside the last is a REPEAT"); }
+            ok(lg.tri >= 0 && L.t.pathUnreach >= 4 && L.t.pathRepeat >= 3 && L.t.pathHoldSec > 5.0 && L.t.pathStuckSec == 0.0 && L.t.envStuckForever == 0, "hold: a goal no route reaches is asked for again and again: every wait is HOLD time and none of it stuck time, and every end beside the last is a REPEAT");;
+            // THE SIGHT DWELL AND THE BACK-OFF (re-check R1)
+            Fight M = solo(O); Body& sm = place(M, a); Body* mf = nullptr; for (Body& o : M.b) if (o.role == Role::Foe) mf = &o;
+            auto sw = [&](bool los, double sec) { bool r = false; for (const double end = M.now + sec; M.now < end; M.now += TM::dt) r = M.SightWalk(sm, *mf, los); return r; };
+            const bool w1 = !sw(false, 1.4) && sw(false, 0.2), w2 = sw(true, 1.4) && !sw(true, 0.2); sw(false, 1.0); sw(true, 0.04); const bool w3 = !sw(false, 1.4) && sw(false, 0.2);
+            ok(w1 && w2 && w3, "sight dwell: the walk-in begins after 1.5 s of no sight and ends after 1.5 s of sight, and one opposite sample starts the clock again (native kSightDwellMs)");
+            { const bool fb = M.StyleOf(sm).fallback > 0.05f; const bool b0 = M.BackOff(sm, 300.0f, 320.0f, false), b1 = M.BackOff(sm, 300.0f, 320.0f, true), b2 = M.BackOff(sm, 400.0f, 320.0f, true), b3 = M.BackOff(sm, 430.0f, 320.0f, true), b4 = M.BackOff(sm, 400.0f, 320.0f, true);
+              ok(!b0 && b1 == fb && b2 == fb && !b3 && !b4, "back-off: it begins inside its distance with sight, goes on until backOutU past it, does not begin again on the way out, and a style with no fallback never does it"); }
+            // A SHUT LEAF INSIDE ONE TRIANGLE (re-check): a goal just past a door's leaf, in the leaf's own triangle, is not reached by a walker who cannot open it
+            { const SimEnv& PD = env("doorway-plain"); const EQ::View pv = PD.View(PD.doors0, 0); int cases = 0, good = 0, same = 0;
+              for (const EQ::Door& dr : PD.doors0) { if (!dr.leaf || dr.tri < 0) continue; const float ex = dr.bx - dr.ax, ey = dr.by - dr.ay, el = std::max(1e-3f, std::hypot(ex, ey));
+                  for (const float fr : { 0.15f, 0.5f, 0.85f }) for (const float dl : { 3.0f, 6.0f, 10.0f, -3.0f, -6.0f, -10.0f }) { const float mx = dr.ax + ex * fr, my = dr.ay + ey * fr; EQ::Vec3 nearP{ mx + ey / el * dl, my - ex / el * dl, 0.0f }, farP{ mx - ey / el * dl, my + ex / el * dl, 0.0f };
+                      nearP.z = EQ::HeightAt(pv, dr.tri, nearP.x, nearP.y); farP.z = EQ::HeightAt(pv, dr.tri, farP.x, farP.y);
+                      if (EQ::TriAt(pv, farP) != dr.tri) continue;
+                      const bool sameTri = EQ::TriAt(pv, nearP) == dr.tri; const EQ::Vec3 from = sameTri ? nearP : PD.entries[0].p;
+                      if (!sameTri && !(route(PD, PD.doors0, from, nearP, beast) && path.reachable)) continue;   // the far point must be the far side as seen from the entry
+                      ++cases; same += sameTri;
+                      const bool rb = route(PD, PD.doors0, from, farP, beast); const bool beastStops = rb && !path.reachable && path.blocked && path.blockDoor >= 0 && PD.doors0[static_cast<std::size_t>(path.blockDoor)].id == dr.id;
+                      const bool rm = route(PD, PD.doors0, from, farP, man); good += beastStops && rm && path.reachable; } }
+              ok(cases > 0 && good == cases && same > 0, "leaf: a goal across a closed leaf inside the leaf's own triangle is BLOCKED for a beast (the path names the door) and reached by a man, from the same triangle and from the room"); }
+            { const SimEnv& PD = env("doorway-plain"); EQ::View bv = PD.View(PD.doors0, 0); std::vector<EQ::Wall> ws(bv.walls.begin(), bv.walls.end()); std::vector<EQ::Door> ds(bv.doors.begin(), bv.doors.end());
+              const bool clean = EQ::Invalid(bv) == nullptr && !ws.empty() && !ds.empty(); ws[0].hi = std::numeric_limits<float>::quiet_NaN(); EQ::View v1 = bv; v1.walls = ws;
+              bool leafBad = false; for (EQ::Door& d : ds) if (d.leaf) { d.bx = std::numeric_limits<float>::infinity(); leafBad = true; break; } EQ::View v2 = bv; v2.doors = ds;
+              ok(clean && EQ::Invalid(v1) != nullptr && leafBad && EQ::Invalid(v2) != nullptr, "snapshot check: a wall or a door leaf that is not finite is refused"); }
+            // THE APPROACH CLAIM'S BOUNDS AT A DOOR HE CANNOT OPEN (re-check R2)
+            { const SimEnv& LK = env("locked-door"); auto setup = [&](Fight& H, bool caster) -> Body& { Body& s = place(H, LK.entries[0].p); Body* f = nullptr; for (Body& o : H.b) if (o.role == Role::Foe) f = &o;
+                  f->alive = true; const EQ::View v = H.env->View(H.doors, 0); const EQ::Vec3 p = LK.spawns[0].p; f->c.x = p.x; f->c.y = p.y; f->c.z = p.z; f->nav = Nav{}; f->nav.tri = EQ::TriAt(v, p); s.casterMode = caster; s.rangedMode = false; return *f; };
+              auto walk = [&](Fight& H, Body& f, double sec) { Body& s = H.b[static_cast<std::size_t>(H.ctl[0].body)]; for (const double end = H.now + sec; H.now < end; H.now += TM::dt) { H.Move(s, f.c.x, f.c.y, s.spec->run, false, &f); EnvStep(H); } };
+              Fight C1 = solo(LK); Body& f1 = setup(C1, true); Body& s1 = C1.b[static_cast<std::size_t>(C1.ctl[0].body)]; walk(C1, f1, 45.0);
+              const bool capped = C1.t.apprDrops == 3 && C1.t.apprBlocked == 1 && EnvApprBlocked(C1, s1, f1.c.id); const long legs0 = C1.t.pathLegs; walk(C1, f1, 10.0); const bool quiet = C1.t.pathLegs == legs0;
+              ok(capped && quiet, "door block: a caster's approach on a foe behind a door he cannot open is backed off three times (offenseApproachDropCap), then blocked, and he does not walk at it again");
+              place(C1, { s1.c.x - 400.0f, s1.c.y, s1.c.z }); s1.casterMode = true; const bool tri = s1.nav.tri >= 0, lapsed = tri && !EnvApprBlocked(C1, s1, f1.c.id); walk(C1, f1, 12.0);
+              ok(lapsed && C1.t.pathLegs > legs0 && C1.t.apprBlocked == 2, "door block: it lapses once he stands blockLapseU from where it was made, the walk is filed again, and the next undone path blocks at once (the count stands)");
+              Fight C2 = solo(LK); Body& f2 = setup(C2, false); walk(C2, f2, 45.0);
+              ok(C2.t.apprDrops == 0 && C2.t.apprBlocked == 0 && C2.t.pathBlocked >= 8 && C2.t.pathHoldSec > 10.0, "door block: a blade's pursuit is never bound by the claim (no backoff, no cap): he asks again every retry and it is counted as hold time and re-blocks"); } }
           // STACKED FLOORS (review F1, F2, F6): an upper floor exactly over a lower one, joined by a ramp at the side. The same x, y exists on both.
           { const std::shared_ptr<SimEnv> SE = MakeStacked(); const SimEnv& S2 = *SE; const EQ::View v = S2.View(S2.doors0, 0); const EQ::Vec3 lo{ 200.0f, 40.0f, 0.0f }, up{ 200.0f, 40.0f, 300.0f };
             const std::int32_t tl = EQ::TriAt(v, lo), tu = EQ::TriAt(v, up); const EQ::Walk w = EQ::WalkLine(v, tl, lo, up, man);

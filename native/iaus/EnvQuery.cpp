@@ -264,6 +264,9 @@ namespace MFO::Iaus::Env {
             if (t.door < -1 || (t.door >= 0 && static_cast<std::size_t>(t.door) >= nd)) return "a triangle names a door past the table"; }
         for (const Door& d : a_v.doors) if (d.tri < -1 || (d.tri >= 0 && static_cast<std::size_t>(d.tri) >= nt)) return "a door names a triangle past the table";
         for (const Vec3& p : a_v.verts) if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) return "a vertex is not finite";
+        for (const Wall& w : a_v.walls) { if (!std::isfinite(w.ax) || !std::isfinite(w.ay) || !std::isfinite(w.az) || !std::isfinite(w.bx) || !std::isfinite(w.by) || !std::isfinite(w.bz) || !std::isfinite(w.lo) || !std::isfinite(w.hi)) return "a wall is not finite";
+            if (static_cast<std::uint8_t>(w.kind) > static_cast<std::uint8_t>(WallKind::Face)) return "a wall kind out of range"; }
+        for (const Door& d : a_v.doors) if (d.leaf && (!std::isfinite(d.ax) || !std::isfinite(d.ay) || !std::isfinite(d.bx) || !std::isfinite(d.by) || !std::isfinite(d.z0) || !std::isfinite(d.z1))) return "a door leaf is not finite";
         if (!a_v.weak.empty() && a_v.weak.size() != nt) return "the weak labels are not one per triangle";
         if (!a_v.walk.empty() && a_v.walk.size() != nt) return "the walk labels are not one per triangle";
         if (a_v.grid) { const Grid& g = *a_v.grid; const std::size_t cells = static_cast<std::size_t>(std::max(0, g.nx)) * static_cast<std::size_t>(std::max(0, g.ny));

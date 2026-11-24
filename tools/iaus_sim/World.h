@@ -166,6 +166,7 @@ namespace Sim {
         bool   ctrlLive = false;                                     // delivery: his combat controller is active (the engine's detection has seen a foe)
         bool   lofWaited = false, castStarted = false;               // lof: this cast has been held at least once (one count per cast) / its 0x06 start test has passed
         double strafeUntil = 0; float sgx = 0, sgy = 0;              // stance: a held caster's side step goal
+        std::uint32_t swFoe = 0; bool swWalk = false, backing = false; double swSince = -1;   // SIM V4: the sight dwell of his walk-in on swFoe (Fight::SightWalk) and the back-off's hysteresis (Fight::BackOff)
         struct Stream { bool live = false; int spell = -1; std::uint32_t target = 0; double end = 0, nextBeat = 0; bool iaus = false, beats = false; } stream;   // hands: a concentration stream on his left hand
         double reDrawUntil = 0;                                      // hands: his two-handed weapon / bow is being drawn again until then
         Nav    nav;                                                  // SIM V4: his triangle and his route (Env.h). Untouched without an environment
@@ -360,7 +361,7 @@ namespace Sim {
         std::uint32_t lastFireForm = 0, lastFireTarget = 0; double lastFireAt = -1e9;
         // SIM V4 `caststart` (cast/CastOn.cpp g_scriptOffenseNeverFired / g_offenseNeverStartedCount): (spell << 32 | target, 0 = every target) held off for
         // the fight / pairs with one never-started failure. apprDrops: (foe, ENGINE DROPPED endings of his approach on it). apprBlocked: foes past the drop cap.
-        std::vector<std::uint64_t> csHeld, csOnce; std::vector<std::pair<std::uint32_t, int>> apprDrops; std::vector<std::uint32_t> apprBlocked;
+        std::vector<std::uint64_t> csHeld, csOnce; std::vector<std::pair<std::uint32_t, int>> apprDrops; struct ApprBlock { std::uint32_t foe = 0; float x = 0, y = 0; std::uint64_t stamp = 0; }; std::vector<ApprBlock> apprBlocked;   // a block is scoped to where and when it was made (EnvWorld.h EnvApprBlocked)
         // cast/NoEffect.cpp: consecutive ZERO readings per (spell, target) and the pairs held off for the fight after SeatRows::kZerosToHold of them. Keys are SeatRows::HoldLedger::Key.
         std::vector<std::pair<std::uint64_t, int>> nzZeros; std::vector<std::uint64_t> nzHeld;
         [[nodiscard]] bool ZeroHeld(std::uint32_t form, std::uint32_t target) const { return std::find(nzHeld.begin(), nzHeld.end(), MFO::SeatRows::HoldLedger::Key(form, target)) != nzHeld.end(); }
@@ -985,6 +986,27 @@ namespace Sim {
 
         // ── the engine's combat AI (MODEL from the combat style) ──
         // away: a backpedal or a flight from what he leaves. to: the BODY he walks to (its storey is the goal's). point: an explicit mesh point. SIM V4 reads the three, the plane none.
+        // DOES HE WALK IN FOR SIGHT (re-check R1). On the plane: whenever he does not see the foe, as before. In a place the walk follows native's
+        // dwell (apmf/OffenseApproach.cpp kSightDwellMs, mirrored as EnvTuning::sightDwellSec, THE one constant both sites read): it begins only
+        // after the foe has read occluded for the dwell and ends only after he has read visible for the dwell, each clock reset by one opposite
+        // sample. Per follower and foe (a new foe starts not walking). Without it a caster at a corner walked in, saw, backed off behind the
+        // same corner and walked in again every step: 71 percent of the lab's reversals came within half a second of the last leg.
+        bool SightWalk(Body& x, const Body& tg, bool los) {
+            if (!env) return !los;
+            if (x.swFoe != tg.c.id) { x.swFoe = tg.c.id; x.swWalk = false; x.swSince = -1; x.backing = false; }
+            if (!los == x.swWalk) x.swSince = -1;
+            else { if (x.swSince < 0) x.swSince = now; if (now - x.swSince >= static_cast<double>(g_envT.sightDwellSec)) { x.swWalk = !los; x.swSince = -1; } }
+            return x.swWalk;
+        }
+        // DOES HE BACK OFF a foe nearer than `in`. On the plane: d < in, as before. In a place: it begins inside `in` with sight, goes on until
+        // he is EnvTuning::backOutU past it (hysteresis, so one step out does not end it and one step in begin it again), and only a body whose
+        // combat style falls back does it at all (the bow line's own gate. Native has no step-back of its own: it is the engine's fallback).
+        bool BackOff(Body& x, float d, float in, bool los) {
+            if (!env) return d < in;
+            if (StyleOf(x).fallback <= 0.05f) { x.backing = false; return false; }
+            x.backing = x.backing ? d < in + g_envT.backOutU : (los && d < in);
+            return x.backing;
+        }
         void Move(Body& x, float tx, float ty, float speed, bool away = false, const Body* to = nullptr, const EnvPoint* point = nullptr) {
             const float dx = tx - x.c.x, dy = ty - x.c.y, d = std::hypot(dx, dy); if (d < 1e-3f && !(env && (to || point))) return;   // (SIM V4: a goal straight over or under him is still a walk)
             if (x.airborne || x.perch) return;   // SIM V3: on the wing he flies his circuit (FlightStep), on a ledge he stays on it; nothing walks him
@@ -1536,8 +1558,8 @@ namespace Sim {
                     const float want = 750.0f;
                     float far = want * 1.4f;   // the lab's standoff before card H4
                     if (g_t2.range && c) { const float des = HandRange(x, *c, tg); if (des > 0.0f) far = std::min(far, des * Reposition::kCloseSlack); }   // H4 is a BOUND (apmf/RangeApproach.cpp, Reposition.h RangeToHold: "stay inside R"): it can make him close sooner (a touch spell, a short stream), it never holds him back from the engine's own standoff
-                    if (!los || d > far) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); }
-                    else if (d < 320.0f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true);
+                    if (SightWalk(x, *tg, los) || d > far) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); }
+                    else if (BackOff(x, d, 320.0f, los)) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true, tg);   // tg: in a place the fallback point keeps sight of him (EnvAwayPick)
                     return;
                 }
                 x.casterMode = false;
@@ -1548,8 +1570,8 @@ namespace Sim {
                 // distance the pick allowed (Tuning::bowWeaponRange); without one he waits.
                 const bool far = g_v3.chase && c && c->steerNoApproach && c->steer == tg->c.id;
                 if (far && !los) return;
-                if (!far && (!los || d > r.rangedDist * 1.6f)) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); return; }
-                if (d < r.rangedMin && st.fallback > 0.05f) { Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true); }
+                if (!far && (SightWalk(x, *tg, los) || d > r.rangedDist * 1.6f)) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); return; }
+                if (BackOff(x, d, r.rangedMin, los) && st.fallback > 0.05f) { Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true, tg); }
                 if (now >= x.think) {
                     const Weapon& w = x.spec->ranged; float draw = w.anim == 9 ? TM::crossbowReload : TM::bowNock + r.bowDraw / std::max(0.3f, w.speed) * 0.6f + RU(x, 30, TM::bowHoldMin, TM::bowHoldMax) * 0.5f;
                     // --point-blank (GMST: the hold time has a minimum DISTANCE, 256, and an absolute minimum, 0.1 s; how the engine blends
@@ -1620,11 +1642,11 @@ namespace Sim {
             const float d = Dist(x, *tg); const bool los = Sees(x, *tg); const Rules& r = D->rules;
             if (x.casterMode) {   // the stance his last free step fought in (a caster with a blade drawn closes like a blade, also while he casts)
                 float far = 750.0f * 1.4f; if (g_t2.range) { const float des = HandRange(x, c, tg); if (des > 0.0f) far = std::min(far, des * Reposition::kCloseSlack); }
-                if (!los || d > far) { if (g_t2.c8 && LeashTurn(x, &c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); }
-                else if (d < 320.0f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true);
+                if (SightWalk(x, *tg, los) || d > far) { if (g_t2.c8 && LeashTurn(x, &c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); }
+                else if (BackOff(x, d, 320.0f, los)) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true, tg);
             } else if (c.drawn == PostureKind::Bow) {
-                if (!los || d > r.rangedDist * 1.6f) { if (g_t2.c8 && LeashTurn(x, &c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); }
-                else if (d < r.rangedMin && StyleOf(x).fallback > 0.05f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true);
+                if (SightWalk(x, *tg, los) || d > r.rangedDist * 1.6f) { if (g_t2.c8 && LeashTurn(x, &c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); }
+                else if (BackOff(x, d, r.rangedMin, los) && StyleOf(x).fallback > 0.05f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true, tg);
             } else if (c.drawn != PostureKind::Staff) {   // Melee, Silver, or bare hands (Brain's hasMelee)
                 const float reach = Reach(x);
                 if (c.leash > 0.0f && d > reach && Dist(x, b[0]) > c.leash && Dist(*tg, b[0]) > c.leash) { if (!(env && Dist(x, b[0]) <= c.leash + kLeashStandU)) Move(x, b[0].c.x, b[0].c.y, x.spec->run, false, &b[0]); return; }

@@ -58,7 +58,11 @@ namespace Sim {
         float wantGapSec = 3.0f;                     // ASSUMPTION: not asked to move for longer than this = he stood by choice, and the stuck window begins again (review F8: any gap of three steps used to clear it)
         float legGoalU = 200.0f;                     // a goal that moved farther than this starts a new leg
         float oscSec = 3.0f;                         // a new leg heading back within this of the last leg's start is a reversal
-        float legMinU = 150.0f;                      // ... when both legs go farther than this (footwork around a foe in reach is not a leg)
+        float legMinU = 200.0f;                      // ... when both legs go farther than this (footwork around a foe in reach is not a leg). Above the 160 unit side step of a held caster (World.h), which is footwork: at 150 it was a leg (re-check R1)
+        float sightDwellSec = 1.5f;                  // native apmf/OffenseApproach.cpp kSightDwellMs 1500: a walk-in for sight begins / ends only after the verdict has held this long (Fight::SightWalk)
+        float backOutU = 100.0f;                     // ASSUMPTION: a back-off that began inside its distance goes on until he is this far past it (Fight::BackOff)
+        float awayCommitSec = 2.0f;                  // a back-off that keeps a foe in sight COMMITS to its pathed point for at most this long (a flight re-picks every awayPickSec)
+        float blockLapseU = 300.0f;                  // native apmf/OffenseApproach.cpp kBlockMoveUnits: an approach block lapses when he stands this far from where it was made
         float reblockU = 300.0f;                     // LootTuning::gateRepeatU: a block this near his previous block is a re-block. The same radius makes an UNREACHABLE or a STUCK end a repeat of his previous end of that kind (review F8)
         float dropSec = 0.6f;                        // ASSUMPTION: the time a drop takes
         float maxDrop = 600.0f;                      // the deepest drop a walker with the ability takes (the README's p95)
@@ -106,7 +110,7 @@ namespace Sim {
         double blockSince = -1, passUntil = 0; std::uint32_t blocker = 0;                                          // a body in his way
         std::int32_t door = -1; double doorAt = 0;                                                               // the door he is opening
         double dropUntil = 0; EQ::Vec3 dropTo; std::int32_t dropTri = -1;                                          // a drop in flight
-        double legAt = -1e9; float legDx = 0, legDy = 0, legSx = 0, legSy = 0, legGx = 0, legGy = 0, legG0x = 0, legG0y = 0, walked = 0; bool legOpen = false, legReach = false, legLong = false, away = false, exact = false /* his last leg ended STUCK: the next route is searched from where he stands */; float legLen = 0, legDrift = 0 /* how far the leg's GOAL has moved since it began (a chase) */, legGx1 = 0, legGy1 = 0; double awayUntil = 0, exactUntil = 0;
+        double legAt = -1e9; float legDx = 0, legDy = 0, legSx = 0, legSy = 0, legGx = 0, legGy = 0, legG0x = 0, legG0y = 0, walked = 0; bool legOpen = false, legReach = false, legLong = false, away = false, exact = false /* his last leg ended STUCK: the next route is searched from where he stands */; float legLen = 0; double awayUntil = 0, exactUntil = 0;
         float endX[3] = {}, endY[3] = {}; bool hadEnd[3] = {};   // where his last leg of each kind ended (LegEnd: BLOCKED, UNREACHABLE, STUCK): an end beside it is a repeat
     };
 
