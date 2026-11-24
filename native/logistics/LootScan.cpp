@@ -164,7 +164,6 @@ namespace MFO::Logistics {
             // still zero TES/worldspace derefs). The target's cell is the one that
             // makes an excursion loot a table OUT: once he walks at pile 1, pile 2
             // beside it becomes visible even from another cell.
-            GateReadmitSweep(a_now);   // field 11-17c F2: the timer / moved-away re-admit of GATED records (both off-able in looting.txt)
             auto* cell = a_follower->GetParentCell();
             if (!cell || !cell->IsAttached()) return false;
             const auto origin = a_follower->GetPosition();

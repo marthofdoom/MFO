@@ -347,7 +347,10 @@ namespace MFO::SelfTest {
                 const P B{ 0, 0, 0 }, T{ 1000, 0, 0 };
                 const auto cross = [&](P a, P b) { return Iaus::GatePassCrossed(B, T, a, b, 150.0f, 256.0f); };
                 const bool pass = cross({ -300, 0, 0 }, { 300, 0, 0 })            // near -> far through the point lifts
-                    && cross({ -300, 100, 0 }, { 300, -100, 0 })                  // through, 100u beside the point (inside the tolerance)
+                    && cross({ -300, 100, 0 }, { 300, -100, 0 })
+                    && !cross({ -100, 0, 0 }, { 10, 0, 0 })                       // jitter at the stall point (R3: plane shifted past the door) does not
+                    && !cross({ -5, -100, 0 }, { 5, 100, 0 })                     // nor a near-point wobble
+                    && cross({ -10, 0, 0 }, { 200, 0, 0 })                        // a real pass beyond the shifted plane does                  // through, 100u beside the point (inside the tolerance)
                     && !cross({ 300, 0, 0 }, { -300, 0, 0 })                      // far -> near does not
                     && !cross({ -300, 600, 0 }, { 300, 600, 0 })                  // passes by beside it (600u off the line) does not
                     && !cross({ 100, 0, 0 }, { 400, 0, 0 })                       // started on the far side does not

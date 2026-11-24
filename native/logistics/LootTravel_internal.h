@@ -493,7 +493,7 @@ namespace MFO::Logistics {
                 if (g.target != a_target || g.gate == a_gate) continue;
                 g.gate = a_gate;
                 spdlog::info("[loot] GATED {:08X}: its gate is {:08X} -- only that ref's open/close/activate "
-                             "re-admits it (plus a door unlocking near it, or its cell re-attaching)",
+                             "re-admits it (plus a door unlocking near it, its cell re-attaching, someone at the item, or the player walking through the block point)",
                              a_target, a_gate);
             }
         }
@@ -508,7 +508,7 @@ namespace MFO::Logistics {
             g_gateCount.store(0, std::memory_order_relaxed);
         }
 
-        // RE-ADMIT SWEEP (field 11-17c F2), worker, once per scan: a record is lifted after LootTuning::gateReadmitSec (0 = no timer, marth
+        // RE-ADMIT SWEEP (field 11-17c F2), worker, once per follower service lap and per party-combat lap (R1): a record is lifted after LootTuning::gateReadmitSec (0 = no timer, marth
         // 2026-09-24) or once the follower that made it stands more than gateReadmitMoveU from the block point (0 = off). Logged like every re-admit.
         inline void GateReadmitSweep(Clock::time_point a_now) {
             const auto& tu = Iaus::DefaultLootTuning();
@@ -517,14 +517,14 @@ namespace MFO::Logistics {
                 g_passSample.valid = false;
                 return;
             }
-            // MOVED THROUGH (marth 2026-11-24): the player's step since the last sample (this sweep runs once per follower scan, so the period is the
+            // MOVED THROUGH (marth 2026-11-24): the player's step since the last sample (this sweep runs every follower service lap and party-combat lap, so the period is the
             // real elapsed time, never assumed) is tested as a SEGMENT against each record, so a sprint between two samples cannot skip the block point.
             // A space change, a step longer than the fastest run allows for that period (teleport), or a gap over kPassMaxGapSec drops the sample.
             bool         havePass = false;
             RE::NiPoint3 passA{}, passB{};
             RE::FormID   passSpace = 0;
             if (tu.gatePassU > 0.0f) {
-                constexpr float kPassMaxGapSec = 10.0f;   // a longer gap cannot be bounded by a run speed: resample
+                constexpr float kPassMaxGapSec = 3.0f;    // a longer gap cannot be bounded by a run speed: resample
                 constexpr float kPassSlackU    = 64.0f;   // position jitter
                 auto* pc = RE::PlayerCharacter::GetSingleton();
                 const RE::FormID sp = pc ? SpaceKey(pc) : 0;
@@ -552,7 +552,7 @@ namespace MFO::Logistics {
             }
             const auto lim = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<float>(tu.gateReadmitSec));
             std::lock_guard lk(g_gateMx);
-            EraseGatesIf("re-admit sweep (timer, the follower moved away, or someone stands at the item)", 0, [&](const GateRecord& g) {
+            EraseGatesIf("re-admit sweep (timer, the follower moved away, someone stands at the item, or the player walked through the block point)", 0, [&](const GateRecord& g) {
                 if (tu.gateReadmitSec > 0.0f && a_now - g.since >= lim) return true;
                 for (auto* a : nearActors)
                     if (a->GetFormID() != g.follower &&   // the gating follower's own position is gateReadmitMoveU's job (a real gate sits < gateNearU from the item)
@@ -703,14 +703,24 @@ namespace MFO::Logistics {
         // Returns false (and records NOTHING) when the probe names no door or activator at the block: the caller treats it as a stuck / repath event.
         // LiveGateAtPoint (N3): is a GATED record live whose block point lies within gateRepeatU of a_pos, in a_target's space? A second block there
         // is the SAME obstacle: it gates the new target only (no cone), and is no stuck evidence. Worker; takes g_gateMx.
-        inline bool LiveGateAtPoint(RE::TESObjectREFR* a_target, const RE::NiPoint3& a_pos) {
-            if (!a_target || g_gateCount.load(std::memory_order_relaxed) <= 0) return false;
-            const RE::FormID space = SpaceKey(a_target);
-            const float      r     = Iaus::DefaultLootTuning().gateRepeatU;
+        // Same = a live gate's block point is within gateRepeatU AND the new target lies on that record's far side (dot2D(record target - block,
+        // new target - block) > 0): the same obstacle with another item behind it. Jammed = a live gate's point is near but the new target is NOT
+        // on its far side: he is jammed there himself, which is stuck evidence, never a gate. None = no live gate at the point. Same wins over Jammed.
+        enum class LiveGate { None, Same, Jammed };
+        inline LiveGate LiveGateAtPoint(RE::TESObjectREFR* a_target, const RE::NiPoint3& a_pos) {
+            if (!a_target || g_gateCount.load(std::memory_order_relaxed) <= 0) return LiveGate::None;
+            const RE::FormID   space = SpaceKey(a_target);
+            const float        r     = Iaus::DefaultLootTuning().gateRepeatU;
+            const RE::NiPoint3 tp    = a_target->GetPosition();
+            LiveGate           res   = LiveGate::None;
             std::lock_guard lk(g_gateMx);
-            for (const GateRecord& g : g_gates)
-                if (g.space == space && g.blockPos.GetDistance(a_pos) <= r) return true;
-            return false;
+            for (const GateRecord& g : g_gates) {
+                if (g.space != space || g.blockPos.GetDistance(a_pos) > r) continue;
+                const float dot = (g.targetPos.x - g.blockPos.x) * (tp.x - g.blockPos.x) + (g.targetPos.y - g.blockPos.y) * (tp.y - g.blockPos.y);
+                if (dot > 0.0f) return LiveGate::Same;
+                res = LiveGate::Jammed;
+            }
+            return res;
         }
         // a_targetOnly (N3): record this target alone, never the cone past it (a repeat at a live gate's point).
         inline bool MarkGated(RE::Actor* a_follower, RE::TESObjectREFR* a_target, float a_blockedSecs,
@@ -724,6 +734,10 @@ namespace MFO::Logistics {
             g.targetPos = a_target->GetPosition();
             g.since     = a_now;
             g.targetOnly = a_targetOnly || g.blockPos.GetDistance(g.targetPos) > Iaus::DefaultLootTuning().gateShortU;
+            if (a_targetOnly) {   // R4: a second follower in flight to the SAME item must not downgrade its cone record to a target-only one.
+                std::lock_guard lk0(g_gateMx);
+                if (std::any_of(g_gates.begin(), g_gates.end(), [&](const GateRecord& o) { return o.target == g.target && !o.targetOnly; })) return true;
+            }
             if (!LogGateNeighbours(a_follower, a_target, g.blockPos)) {
                 spdlog::info("[loot] {:08X} target {:08X} Movement Blocked {:.1f}s at ({:.0f},{:.0f},{:.0f}), {:.0f} u short: the probe names NO door or "
                              "activator -- a bump / repath, NOT a gate. Nothing recorded against the target or its cone; stuck evidence, the leg retries",
@@ -733,7 +747,7 @@ namespace MFO::Logistics {
             spdlog::info("[loot] {:08X} target {:08X} GATED -- Movement Blocked {:.1f}s at ({:.0f},{:.0f},{:.0f}), "
                          "{:.0f} u short; skipping it and the items behind the same block ({:.0f}-degree half-angle cone past "
                          "the block, <= +{:.0f} u, same floor) until a door/gate/lever event near it, its "
-                         "cell re-attaching, or the re-admit sweep (timer {:.0f}s, moved {:.0f} u; 0 = off). No actor in front of him. No strike, not sticky.{}",
+                         "cell re-attaching, or the re-admit sweep (timer {:.0f}s, moved {:.0f} u; 0 = off), or the player walking through the block point. No actor in front of him. No strike, not sticky.{}",
                          g.follower, g.target, a_blockedSecs, g.blockPos.x, g.blockPos.y, g.blockPos.z,
                          g.blockPos.GetDistance(g.targetPos), Iaus::DefaultLootTuning().gateConeDeg, Iaus::DefaultLootTuning().gateBeyondU,
                          Iaus::DefaultLootTuning().gateReadmitSec, Iaus::DefaultLootTuning().gateReadmitMoveU,

@@ -211,6 +211,11 @@ namespace MFO::Logistics {
         const auto id  = a_follower->GetFormID();
         const auto now = Clock::now();
 
+        // R1: the gate re-admit sweep (timer / near / player-moved-through) runs EVERY service lap, ahead of every early return below, so the
+        // player's pass sample is never starved by a walking leg, a stuck cooldown, a sneak hold or a party fight (NoteInCombat feeds it there). Worker,
+        // like LootNearby; one atomic load when no gate exists.
+        GateReadmitSweep(now);
+
         // STUCK AT HIS OWN ORIGIN (StuckAtOrigin.cpp): the episode's evidence window and the door rescue tick on every
         // service, independent of whether any loot rule dispatches (the loot suppression would otherwise starve them).
         StuckAtOriginTick(a_follower, now);
@@ -1344,14 +1349,15 @@ namespace MFO::Logistics {
                         const bool real = FindGateObstacle(a_follower, tref, bp).Any();
                         const BlockGround ground = NoteBlockGround(id, tref->GetFormID(), bp, tref->GetPosition(), now);
                         if (real) {
-                            if (LiveGateAtPoint(tref, bp)) {
+                            const LiveGate liveGate = LiveGateAtPoint(tref, bp);
+                            if (liveGate == LiveGate::Same) {
                                 // N3: blocked again at a LIVE gate's point: the same locked door with another item behind it. That is a gate
                                 // fact, not stuck evidence: gate the new target only (no second cone) and keep it out of the stuck run.
                                 skipWhy = MarkGated(a_follower, tref, held, now, blockPos, /*a_targetOnly*/ true)
                                     ? "GATED (a live gate stands at this point; this target only)"
                                     : "BLOCKED, obstacle probe empty (not gated)";
                                 feedStuck = false;
-                            } else if (StuckAtOriginRepeatsBlock(id, bp, now)) {
+                            } else if (liveGate == LiveGate::Jammed || StuckAtOriginRepeatsBlock(id, bp, now)) {   // R2: a live gate here but the target is NOT behind it = he is jammed himself
                                 // blocked again within gateRepeatU of his previous block point: HE is stuck, not the target. No gate (it froze
                                 // all outdoor loot until unload); the block feeds the stuck-at-origin record below.
                                 spdlog::info("[loot] {:08X} target {:08X} blocked again within {:.0f} u of his previous block point after "

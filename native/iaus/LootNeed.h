@@ -152,7 +152,7 @@ namespace MFO::Iaus {
         float gatePassU = 150.0f, gatePassRunU = 1000.0f;
     };
     // The geometry of the "moved through" lift, pure (self-test row t2.theft e). Points are (x, y, z) game units. True when the segment a->b goes from the
-    // NEAR side of the block point B (behind it, opposite the target T: signed distance along B->T below 0) to the FAR side (>= 0), crossing that plane
+    // NEAR side of the block point B (behind it, opposite the target T: signed distance along B->T below the plane, which sits min(96, len/2) toward T from B) to the FAR side (>= 0), crossing that plane
     // within a_tolU of B sideways and within a_zBand of B in height. Far to near, a pass beside the point, a start on the far side and a segment that stays
     // on one side are all false. The caller owns the space and teleport checks.
     struct GatePt { float x = 0.0f, y = 0.0f, z = 0.0f; };
@@ -162,7 +162,10 @@ namespace MFO::Iaus {
         if (len < 1.0f || a_tolU <= 0.0f) return false;
         const auto along = [&](const GatePt& p) { return ((p.x - a_block.x) * dx + (p.y - a_block.y) * dy) / len; };
         const auto side  = [&](const GatePt& p) { return ((p.x - a_block.x) * -dy + (p.y - a_block.y) * dx) / len; };
-        const float sa = along(a_a), sb = along(a_b);
+        // The plane sits shifted toward T by min(96, len/2): the stall point is up to 256u IN FRONT of the door, so the unshifted plane let a player
+        // walking up to the shut door (or jittering there) cross it. The shift puts it past the door.
+        const float shift = std::min(96.0f, len * 0.5f);
+        const float sa = along(a_a) - shift, sb = along(a_b) - shift;
         if (!(sa < 0.0f && sb >= 0.0f)) return false;
         const float t  = sa / (sa - sb);
         const float lc = side(a_a) + t * (side(a_b) - side(a_a));
