@@ -1033,11 +1033,11 @@ Result on the library: `osc/min` of the six caster cells from about 12 to betwee
 **Checks.** `sim --env-test`: 81 checks pass (sight dwell, back-off, leaf, snapshot, three door-block checks). `baseline_v4_builtin.txt` rewritten once more. It compares with 0 metrics changed at 1 and at 16 threads. `--world v3` and `--world v2`: 0 metrics changed. Solo walk: fixtures 657 trips and 0 wrong, library copy 10615 walked and 2 wrong, none over or under the goal. `run.sh` with `SIM_CLITEST=1`: CLI-CHECKS PASS (the field-log check skipped again). Local MSVC build of the two changed native files and the link: exit 0.
 
 
-## 14. Batch C as built (branch `feat/sim-v4-choice`, 2026-11-24)
+## 15. Batch C as built (branch `feat/sim-v4-choice`, 2026-11-24)
 
 Slices S7, S11a, S11b (the skeleton only) and S11c, with the mirror of `fix/spell-worth` in front of them. The sim and the driver follow the oracle now. Native gained one unwired file pair.
 
-### 14.1 Where things are
+### 15.1 Where things are
 
 | What | Where | To change it |
 |---|---|---|
@@ -1056,9 +1056,9 @@ Slices S7, S11a, S11b (the skeleton only) and S11c, with the mirror of `fix/spel
 | The fence form of the J rule | `tune_driver.py judge(fence=True)` | |
 | The cost cuts | `tune_driver.py table_slice` (3 and 4), the size loop in `follow_class` (2) | |
 | The tune's world | `tune_driver.py V4_TRAIN`, `HOLD_FLAGS`, `world_flags`, `--world v4` (the default) | |
-| The spell-worth reader, SKELETON | `native/iaus/SpellWorth.h`, `SpellWorth.cpp` | see 14.6 |
+| The spell-worth reader, SKELETON | `native/iaus/SpellWorth.h`, `SpellWorth.cpp` | see 15.6 |
 
-### 14.2 The mirror of fix/spell-worth
+### 15.2 The mirror of fix/spell-worth
 
 Most of that fix needed no mirror: the lab compiles `native/iaus/Generate.cpp`, so the per-second comparison (`Facts::expRate` against `bestDamage`), the exploit term reading no resist the damage already carries, the immune pairs dropped and the placeholder for an unmeasured spell were in the lab the moment main had them. What the lab fills itself is the BOOK, and it filled `measured = true` for every spell. So the lab had no unmeasured spell and the placeholder could not be searched.
 
@@ -1074,7 +1074,7 @@ Not in the extract, so not mirrored: effect and MGEF conditions (native counts c
 
 Effect on the built-in baseline: the stream unit moves the casters (evoker, seed 1, J 68.19 to 71.75). The three baselines were rewritten once, at the end of the batch.
 
-### 14.3 Field-size books, and the field's failure reproduced
+### 15.3 Field-size books, and the field's failure reproduced
 
 `--books field` gives a caster the mix of Jesper's book (74 offense, 4 control, 13 heal, 8 buff, 3 ward. Summon 6 is an ASSUMPTION, his line holds none) times a size drawn per follower between 60 and 120 percent, from the world's taught spell records of each nature that his skill allows, without replacement, seeded by the fight. A class off the Mage line holds 35 percent of it (ASSUMPTION). A spell he cannot pay for stays in the book, as in the field. Costs, magnitudes and perk multipliers are the list's own, as before. `--books heldout` draws from the other half of the records (a hash of the editor id), so a tuning is checked on spells no search saw. The built-in world has 17 spells and gives what it has: field-size books need a list world.
 
@@ -1087,7 +1087,7 @@ The field's failure was two things. Checked by the three counters, natural brack
 - **Unmeasured spells on top, and tied.** Reproduced with `--spell-rules old`, gone today.
 - **A level-capped Turn on top.** NOT reproduced by the rules alone: the lab's will-work answers a capped pair No on the lap after it is asked, under both rules, so a capped control spell is on top in about one lap in a hundred either way. In the field the Turn also keyed a row no caster served (`--seats old` in the v4 world is that game). @@SEATSNOTE@@
 
-### 14.4 The regret report
+### 15.4 The regret report
 
 On the gap pass (`--class-oracle N --spell-regret`), so it costs no oracle fight of its own. Per decision of the subject where IAUS picked a cast or the oracle's best option is one: the oracle's paired lead of its best castable spell over IAUS's pick, in U, counted only when the race dropped IAUS's pick. The causes, in the order they are tested:
 
@@ -1103,7 +1103,7 @@ The table, before (`--spell-rules old`) and today, field-size books:
 
 @@REGRETTABLE@@
 
-### 14.5 The follow and spells stages
+### 15.5 The follow and spells stages
 
 **follow** (between `edge` and `spells`). Its rule is `stage_follow`'s docstring. In short: the score is the class's gap to its own oracle on its gap fights, on every world of the run. The oracle arm is paid once per class, table and seed. A candidate is the IAUS arm of the same fights with the value set, which is milliseconds. It is accepted when it closes the gap by more than 2 se with no world worse, holds on fresh gap fights, is not worse on the held-out places and books, passes the J rule as a fence (`judge(fence=True)`: the two lines that ask J to rise ask that it does not fall, every gate and the Knight floor unchanged) and the class card, and the gap did not rise when the oracle ran again on the new table. The oracle's own U shift is printed beside every accepted value. The order is the T1 rows, then the cells of the run. The joint gate and the generator read the table through `final_curves()` as before, which now includes this stage's values. Sight-driven knobs stay skipped.
 
@@ -1115,7 +1115,7 @@ The closable gap is the gap times the (a) share of the divergence cost. It is an
 
 **Validation** (6.4): `test_tune_driver.py ChoiceBatch` plants an improvement and a regression for each stage on a fixed set of results. The stage accepts the first and rejects the second, and rejects a value that fails only on fresh fights, only held out, or only because the gap rose when the oracle ran again.
 
-### 14.6 The SpellWorth skeleton (S11b), and what filling it needs
+### 15.6 The SpellWorth skeleton (S11b), and what filling it needs
 
 `native/iaus/SpellWorth.h` and `SpellWorth.cpp`: the named table `struct SpellWorth` (24 fields, each a labelled placeholder), `SetSpellWorthKnob` and `GetSpellWorthKnob` over one name table, and `Estimate::SpellWorthOn(entry, target, snapshot, table, in) -> {known, effect, seconds, magicka}` with one function per term (cast seconds, channel seconds, area, a DoT over the foe's expected life, control, buff, ward and summon in the same unit, magicka against the fight). Every body is a TODO that answers "not known". Nothing calls it. It is in `native/CMakeLists.txt` and in the sim's build. Engine-free: standard headers and `iaus/Snapshot.h`.
 
@@ -1123,14 +1123,14 @@ One departure from 7.5: the claim-to-fire seconds are per cast FAMILY, not per e
 
 What the Sonnet brief needs, precisely (the header's own list, items 1 to 5): the table as a member of `Tuning` and its names in `SetTuningScalar`. The names in `tuningfiles.py`, `Tune.h` and `SW_KNOBS`. The inputs the Snapshot lacks, each with its own reader: charge time, the DoT part apart from the direct part, the engine row, the summoned actor's base, what a buff adds and for how long, a ward's power, a foe's expected life, the fight's expected length. The call sites, all in `Generate.cpp Casts`. A harness batch that pins each term.
 
-### 14.7 The tune's world, the commands, the cost
+### 15.7 The tune's world, the commands, the cost
 
 @@COMMANDS@@
 
-### 14.8 Checks, and what was not run
+### 15.8 Checks, and what was not run
 
 @@CHECKS@@
 
-### 14.9 Open
+### 15.9 Open
 
 @@OPEN@@

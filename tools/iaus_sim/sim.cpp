@@ -754,7 +754,7 @@ namespace {
 // stderr joined to stdout; after the child exits the worker prints "@@END <exit code>". A forked child is the same program with the same
 // state a fresh process would have, except that LoadData of a preloaded path starts from its parsed JSON tree (Load.h PreloadedJson).
 static int RealMain(int argc, char** argv);
-// THE SPELL REGRET REPORT (sim v4 batch C, iaus-sim-v4.md 14; Oracle.h RegretLog). Per class: the machine lines (SPELLDEC / SPELLREG) and one table row.
+// THE SPELL REGRET REPORT (sim v4 batch C, iaus-sim-v4.md 15; Oracle.h RegretLog). Per class: the machine lines (SPELLDEC / SPELLREG) and one table row.
 // regU/f = spell regret summed per fight. any% = cast decisions with a regret. within / cross = the regret whose oracle spell is of IAUS's own
 // family / of another. The cause split is the share of the regret (Oracle.h). eps / epm = how much better per cast second (within his family, and
 // across the families with a number) and per magicka the best castable spell was than his pick, from the lab's world, as a share of the best.
@@ -952,6 +952,7 @@ static int RealMain(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--trace") && i + 1 < argc) trace = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--oracle-k") && i + 1 < argc) { oc.K = std::atoi(argv[++i]); }   // DIAGNOSTIC: a fixed ceiling of K streams instead of the stopping rule
         else if (!std::strcmp(argv[i], "--oracle-h") && i + 1 < argc) { oc.H = std::atof(argv[++i]); }   // DIAGNOSTIC below Fight::maxSec: a rollout is cut there
+        else if (!std::strcmp(argv[i], "--oracle-dump") && i + 1 < argc) { g_oracleDump = std::fopen(argv[++i], "a"); if (!g_oracleDump) { std::fprintf(stderr, "--oracle-dump: cannot open %s\n", argv[i]); return 2; } }   // DIAGNOSTIC: every option on every stream, per decision of the subject (Oracle.h g_oracleDump; oracle_replay.py)
         else if (!std::strcmp(argv[i], "--oracle-pair") && i + 1 < argc) oc.pair = std::atof(argv[++i]);   // the race's pairwise indifference width in U (Oracle.h OracleCfg::pair; < 0 = off, 0 = twins only)
         else if (!std::strcmp(argv[i], "--oracle-nmin") && i + 1 < argc) oc.nMin = std::max(2, std::atoi(argv[++i]));   // streams before the race's first look (8)
         else if (!std::strcmp(argv[i], "--oracle-ceiling") && i + 1 < argc) oc.ceiling = std::max(1, std::atoi(argv[++i]));   // the stopping rule's safety ceiling (Oracle.h OracleCfg)

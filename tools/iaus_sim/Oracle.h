@@ -295,7 +295,7 @@ namespace Sim {
         void Serve(Fight& F, int ci) override { if (ServiceRun(F, ci)) return; if (F.now < F.ctl[static_cast<std::size_t>(ci)].commitUntil) return; iaus.Serve(F, ci); }   // card G3's run is serviced every lap, committed or not
     };
 
-    // ── SPELL REGRET, ALTERNATE TABLES, EXACT PRUNING (sim v4 batch C, iaus-sim-v4.md 7.3 and 14) ──────────────────────────────────────────
+    // ── SPELL REGRET, ALTERNATE TABLES, EXACT PRUNING (sim v4 batch C, iaus-sim-v4.md 7.3 and 15) ──────────────────────────────────────────
     // Spell regret: at every decision of the subject where IAUS picked a cast or the oracle's best option is one, the oracle's PAIRED lead of
     // its best castable spell over IAUS's pick, in U, on the streams both ran. As for a gap divergence (review F1) only a pick the race DROPPED
     // has a regret: one still standing was not told apart from the best. Summed per fight (`SPELLFIGHT`), and clustered by IAUS's family, the
@@ -328,13 +328,21 @@ namespace Sim {
     //   OracleCfg::pair (`--oracle-pair <U>`, < 0 = off)   PAIRWISE INDIFFERENCE. After each look an option I is retired when another standing
     //                    option J exists that it is not better than by more than `pair` U, at the race's own p on their paired difference
     //                    (mean(J - I) > t * sd / sqrt(n) - pair), or, at any width, when J comes earlier (IAUS ranks it higher) and
-    //                    gave the SAME utility on every stream so far (a twin: the cast did the same thing in every future tried). The
+    //                    gave the SAME utility on every stream so far, from kTwinMin streams on (a twin: the cast did the same thing in
+    //                    every future tried. Measured: of the options that equal an earlier one on 8 streams, half differ on a later
+    //                    one, by under 0.1 U in the mean with one case of 0.5; from 16 streams on no such case was left). The
     //                    race then spends its streams on options that differ. Never retired this way: the best, IAUS's own pick, an
     //                    alternate table's pick, the action he is on, so the gap ledger and the spell regret keep their meaning. The loss
     //                    per decision is at most `pair` per link of a chain; measured, it is a few thousandths of a U (15.7).
     //   OracleCfg::nMin 4 (`--oracle-nmin 4`)   the first look after 4 streams instead of 8. The test at 4 streams is the same test with its
     //                    own (much wider) t; what it buys is that twins and near-twins leave after 4 rollouts instead of 8.
     inline int g_oraclePrune = 1;
+    inline constexpr int kTwinMin = 16;
+    // `--oracle-dump <file>` (DIAGNOSTIC, the proof of the cuts): after each race of the SUBJECT every option that could be applied is run on
+    // every stream up to the ceiling (about three times the fight's cost) and the decision is appended as one JSON line: the options (label,
+    // target, form, IAUS's pick, the spell's numbers and its factor on the foe) and their utility per stream. A stream's seed does not depend
+    // on which options stand, so tools/iaus_sim/oracle_replay.py can replay ANY race rule on the very rollouts the full race saw.
+    inline std::FILE* g_oracleDump = nullptr;
     struct AltTable { std::string sets; Tuning t; std::vector<Profile::WeightOverride> w; };
     inline std::vector<AltTable>& Alts() { static std::vector<AltTable> a; return a; }
     [[nodiscard]] inline bool CastFamily(Family f) { return f == Family::CastOffense || f == Family::CastControl || f == Family::CastHeal || f == Family::CastBuff || f == Family::CastSummon || f == Family::CastWard; }
@@ -527,10 +535,25 @@ namespace Sim {
                 if (cfg.pair >= 0.0 && n >= 2 && live > 1) for (std::size_t i = N; i-- > 0;) { if (!alive[i] || i == best || guard[i]) continue;
                     for (std::size_t j = 0; j < N; ++j) { if (j == i || !alive[j]) continue;
                         double sd = 0; const double d = lead(j, i, &sd);
-                        if (sd <= 0.0 ? (d >= 0.0 && j < i) : (cfg.pair > 0.0 && d > tc * sd / rn - cfg.pair && d > -0.5 * cfg.pair)) { alive[i] = 0; --live; ++retired; break; } } }
+                        if (sd <= 0.0 ? (d >= 0.0 && j < i && n >= kTwinMin) : (cfg.pair > 0.0 && d > tc * sd / rn - cfg.pair && d > -0.5 * cfg.pair)) { alive[i] = 0; --live; ++retired; break; } } }
                 if (live <= 1 || n >= ceil) break;
                 next = std::min(ceil, n * 2);
             }
+            if (g_oracleDump && subj) {
+                std::string o = "{\"t\":" + std::to_string(F.now) + ",\"n\":" + std::to_string(n) + ",\"best\":" + std::to_string(best) + ",\"last\":" + std::to_string([&] { if (c.hasLastKey) for (std::size_t i = 0; i < N; ++i) if (opt[i].k && opt[i].ext == Ext::None && KeyOf(*opt[i].k) == c.lastKey) return static_cast<int>(i); return -1; }()) + ",\"opts\":[";
+                for (std::size_t i = 0; i < N; ++i) { std::vector<double> full = U[i];
+                    if (!full.empty()) for (int k = static_cast<int>(full.size()); k < ceil; ++k) { Fight G = F; G.trace = nullptr; G.R.g.seed(s0 + 7919ULL * static_cast<std::uint64_t>(k)); if (cfg.split) { G.split = true; G.splitSeed = s0 + 7919ULL * static_cast<std::uint64_t>(k); G.xs.clear(); }
+                        if (!Apply(G, ci, opt[i], cfg.commit, cfg.every)) break; RolloutPolicy rp; RunFor(G, rp, until); full.push_back(Utility(G)); }
+                    const Candidate* k = opt[i].k; const int bi = k ? BookIndex(c, k->form) : -1; char buf[512]; buf[0] = 0;
+                    if (bi >= 0 && opt[i].ext == Ext::None) { const SimSpell& sp = c.build->spells[static_cast<std::size_t>(bi)]; const SpellEntry& e = c.book.entries[static_cast<std::size_t>(bi)]; const Body* tg = F.Find(k->target);
+                        float el = 0, mr = 0; if (tg) { el = std::clamp(F.ResistOf(*tg, sp.e.resistAv) / 100.0f, -1.0f, 1.0f); mr = std::clamp(F.ResistOf(*tg, kAvResistMagic) / 100.0f, -1.0f, 1.0f); }
+                        std::snprintf(buf, sizeof buf, ",\"sp\":{\"cost\":%.2f,\"sec\":%.3f,\"reach\":%.0f,\"dmg\":%.2f,\"dot\":%.2f,\"dotDur\":%.1f,\"mp\":%.1f,\"spd\":%.1f,\"stg\":%d,\"area\":%.0f,\"ak\":%d,\"row\":%d,\"av\":%d,\"conc\":%d,\"touch\":%d,\"self\":%d,\"src\":%d,\"ctrl\":%d,\"und\":%d,\"heal\":%.1f,\"armor\":%.1f,\"k\":%.4f}",
+                            e.cost, sp.castSec, e.reach, sp.dmg, sp.dot, sp.dotDur, sp.mpDmg, sp.spDmg, int(sp.stagger), e.areaUnits, sp.areaKind, sp.row, e.resistAv, int(e.concentration), int(e.touch), int(e.selfDelivery), int(e.source), int(sp.ctrl), int(e.undeadOnly), sp.heal, sp.armor, (1.0f - el) * (1.0f - mr)); }
+                    o += std::string(i ? "," : "") + "{\"l\":\"" + opt[i].Label() + "\",\"tg\":" + std::to_string(k ? k->target : opt[i].target) + ",\"form\":" + std::to_string(k ? k->form : 0u) + ",\"n0\":" + std::to_string(U[i].size())
+                        + ",\"iaus\":" + std::to_string(int(iausPick && k && opt[i].ext == Ext::None && KeyOf(*k) == KeyOf(*iausPick))) + buf + ",\"u\":[";
+                    for (std::size_t q = 0; q < full.size(); ++q) { char nb[32]; std::snprintf(nb, sizeof nb, "%s%.4f", q ? "," : "", full[q]); o += nb; }
+                    o += "]}"; }
+                o += "]}\n"; std::fputs(o.c_str(), g_oracleDump); std::fflush(g_oracleDump); }   // one fputs per decision: whole lines from every worker thread
             { OracleStats one; one.options = static_cast<long>(N); one.streams = n; one.decisions = 1; one.rollouts = st.rollouts - rollouts0; one.twins = retired;
               if (live > 1) { one.bound = 1; one.standing = static_cast<long>(live); double other = -1e9; for (std::size_t i = 0; i < N; ++i) if (alive[i] && i != best) other = std::max(other, u[i]); one.unresolved = one.unresolvedMax = u[best] - other; }
               const long r = one.rollouts; one.rollouts = 0; st.Merge(one); one.rollouts = r; if (ci == 0) stSubj.Merge(one); }

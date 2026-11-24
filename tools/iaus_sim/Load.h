@@ -223,7 +223,7 @@ namespace Sim {
     // generator drops it). Costs, magnitudes and perk multipliers are the list's (the loop below). Seeded by the fight's own stream.
     // `--books heldout`: the same rule over the OTHER half of the spell records (a record's half is a hash of its editor id: BookHalf), so a
     // tuning can be checked on spells it never saw. A world whose pool is smaller than the mix (the built-in fixtures) gives what it has.
-    // To change the mix or the size: this table. A real follower's dump becomes a book through tools/list_balance (not built here, section 14).
+    // To change the mix or the size: this table. A real follower's dump becomes a book through tools/list_balance (not built here, iaus-sim-v4.md 15.3).
     struct BookMix { Prune::Nature nature; int n; };
     inline constexpr BookMix kFieldBook[] = { { Prune::Nature::Offense, 74 }, { Prune::Nature::Control, 4 }, { Prune::Nature::Heal, 13 }, { Prune::Nature::Buff, 8 }, { Prune::Nature::Ward, 3 },
                                               { Prune::Nature::Summon, 6 } };   // the first five are Jesper's counts; Summon is an ASSUMPTION (his line holds none; a Conjurer's book needs them)

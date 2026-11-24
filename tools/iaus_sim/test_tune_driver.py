@@ -59,7 +59,7 @@ class World(unittest.TestCase):   # the driver always names the world (v4 by def
         self.assertEqual(T.DEFAULT_STAGES.split(",")[2:7], ["classes", "edge", "follow", "spells", "joint"])   # the gap is the score BEFORE the joint gate judges the table
 
 
-class ChoiceBatch(unittest.TestCase):   # sim v4 batch C (iaus-sim-v4.md 14): the follow stage, the spells stage, their readers
+class ChoiceBatch(unittest.TestCase):   # sim v4 batch C (iaus-sim-v4.md 15): the follow stage, the spells stage, their readers
     NAMES = ("all_knobs", "class_knobs", "final_curves", "follow_oracle", "follow_iaus", "judge", "card_potion_gate", "log", "save_summary", "regret_runs", "spell_knobs", "scope", "cells")
 
     def setUp(self):
