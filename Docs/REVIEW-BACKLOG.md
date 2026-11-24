@@ -3821,7 +3821,7 @@ Verbatim, choice review, raised on the batch C branch:
 
 ### MFO-B865 (OPEN, found by `feat/sim-v4-pretune`, 2026-11-24; NATIVE, not touched; needs marth's ruling on 1; iaus-sim-v4.md 16.6)
 1. `iaus/Prune.h:93` with `iaus/SpellBook.cpp:253`: a Target Location conjuration is dropped as Placement. Vanilla 14 of 14 taught conjurations, Tuxborn 307 of 311. A field log names one (Summon the Udefrykte Matron).
-2. `cast/Archetype.cpp:214 HasImpactHazard`: any IPCT hazard makes shape Wall, so Vanilla's Firebolt, Flames, Fireball, Frostbite, Ice Spike, Ice Storm, Incinerate, Expel / Banish Daedra are dropped. Masked where the spell also has a Script effect (Tuxborn, most of LoreRim).
+2. **CLOSED 2026-11-24 on `fix/impact-hazard-shape` (item 2 only; item 1 and the real-wall note stay OPEN).** Was: `cast/Archetype.cpp:214 HasImpactHazard`: any IPCT hazard makes shape Wall, so Vanilla's Firebolt, Flames, Fireball, Frostbite, Ice Spike, Ice Storm, Incinerate, Expel / Banish Daedra are dropped. Masked where the spell also has a Script effect (Tuxborn, most of LoreRim). Now: Wall = `Prune::IsWallShape` (concentration, non-Self, impact hazard with kDropToGround). Checked on Skyrim.esm: Firebolt / Flames / Frostbite impact hazards have flag 16 clear; only the Barrier* MGEFs (Fire, Frost, Shock walls) reach a flag-16 hazard.
 
 ## feat/sim-v4-pretune review (Opus 5.5, 2026-11-24, raised against 28c805e6; verbatim file)
 
@@ -3859,3 +3859,7 @@ Answers
 (4) One reader (spawned()), Classify for both, game data not in git (no json in the diff), offsets self-checked. Impact rule MODEL is fine for the WORLD; not for what IAUS is offered (P1).
 (5) Valid: --compare keys on metric names, the meta line is only the world guard. It is vacuous for hazards on fixtures (none exist); the list runs above cover that.
 (7) No list names or tables in logic. vanilla formIDs appear only as extractor self-checks.
+
+## fix/impact-hazard-shape (MFO-B865), Opus review @753b93e5
+SEV-4 FF Aimed/Touch spells with a kDropToGround impact hazard are kept (LoreRim 6 Aimed + 6 Touch, Tuxborn 29 + 9; mostly enemy spells; REQ_Destruction2_Arcane_AimedHazard, _BL_OppressiveBarrier). Many EFIT area 0, so splash_safe has no radius for the ground hazard they leave at the foe: a melee ally beside the foe may stand in it. BlastUnits could include the dropped hazard's radius. Ordinary bolt hazards (flag clear: FireLg/FireSm 4, IceHazard 0) are the engine's normal impact effects, same as a gambit cast or an enemy's. Not shown to hurt allies (not verified in engine).
+SEV-5 harness rows for MFO-B865 test the pure rule and the drop only; nothing tests the record reader (impactHazardDrops in cast/Archetype.cpp).
