@@ -57,7 +57,7 @@ def pass1(i):
                         world=K(c['world']), flags=dat[0] | (dat[1] << 8 if len(dat) > 1 else 0),
                         grid=struct.unpack_from('<ii', cl, 0) if cl and len(cl) >= 8 and not fl & P.F_PERSISTENT else None, persist=bool(fl & P.F_PERSISTENT),
                         water=struct.unpack('<f', d[b'XCLW'])[0] if b'XCLW' in d and len(d[b'XCLW']) >= 4 else None,
-                        quad=struct.unpack_from('<I', cl, 8)[0] if cl and len(cl) >= 12 and not fl & P.F_PERSISTENT else 0,      # XCLC flags: bits 0..3 force-hide the land quad (SW, SE, NW, NE)
+                        quad=struct.unpack_from('<I', cl, 8)[0] & 0xF if cl and len(cl) >= 12 and not fl & P.F_PERSISTENT else 0,      # XCLC flags, low nibble: bits 0..3 force-hide the land quad (SW, SE, NW, NE); the upper bytes of the u32 are junk in the data
                         edid=d.get(b'EDID', b'').split(b'\0')[0].decode('latin-1'), plugin=i,
                         owner=K(struct.unpack_from('<I', d[b'XOWN'], 0)[0]) if b'XOWN' in d and len(d[b'XOWN']) >= 4 else 0)))
                 elif sig == b'WRLD':

@@ -265,7 +265,7 @@ def export(sc, unit, groups, by, cls, feat, path, setname, win=1, name=None):
     for ck, c in sorted(cellinfo.items()):
         wh, src = water_height(sc, c)
         cell_meta.append(dict(id='%08X' % eid(ck), edid=c['edid'], interior=bool(c['flags'] & 1), gridX=c['grid'][0] if c['grid'] else None,
-                              gridY=c['grid'][1] if c['grid'] else None, flags=c['flags'], quadHide=c.get('quad', 0), waterHeight=wh, waterSource=src, owner=eid(c['owner']) if c.get('owner') else 0))
+                              gridY=c['grid'][1] if c['grid'] else None, flags=c['flags'], quadHide=c.get('quad', 0) & 0xF, waterHeight=wh, waterSource=src, owner=eid(c['owner']) if c.get('owner') else 0))
     world_meta = []
     for wk in sorted({u[1] for u in units if u[0] == 'x'}):
         wd = sc['worlds'].get(wk)

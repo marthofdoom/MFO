@@ -35,7 +35,7 @@ candidates to places where a mod supplied a navmesh.
 
 Round 5 (tool version 3, still format 2): TRIS flags `0x1000 << k` mark internal edge k as CUT (the game data had it one-way or not the swapped
 edge; `nb[k]` is -1 there, see "How the library is picked"); META gets `worlds[]` (`parent`, `parentFlags`, `useParentLand`) and `cells[].quadHide`
-(CELL XCLC flags: bit0 hides land quad SW, bit1 SE, bit2 NW, bit3 NE); DREF is joined by containing triangle (below). No struct changed.
+(CELL XCLC flags, low nibble only, the upper bytes of that u32 are junk in the data: bit0 hides land quad SW, bit1 SE, bit2 NW, bit3 NE; measured: 0 in 72858 of 72917 vanilla exterior cells, 15 in 46); DREF is joined by containing triangle (below). No struct changed.
 
 Round 4 added sections (DREF, SEAM, LAND) and used the `reserved` field of REFS and two new ref flag bits, all append-only: no struct changed, the
 version stays 2 and `envfile.h` still loads older v2 files (the three sections are optional; a file without them reports 0 rows).
@@ -202,29 +202,49 @@ then work anywhere.
 
 **1. Rejection.** A candidate (each interior cell with a navmesh that is reachable on foot from an exterior cell through load doors that do not
 start disabled and whose CELL carries the interior flag; each exterior 3x3 grid-cell window with 12.3M units^2 of walkable area and under 50
-percent water) is REJECTED if it has any of: `displaced_mesh` (a navmesh a plugin parked under the map, rules below), `doubtful_mesh` (flat
-within 100 units and more than 3000 under its neighbours' median: looks parked, not certain), `plugin_moved_refs` (a later plugin moved a ref
-into or out of one of its cells), `one_way_or_not_swapped_edges` (a neighbour pair that is not reciprocal or whose shared edge is not the swapped
-edge), `stale_or_broken_links` (a link to a triangle beyond the target mesh or to a mesh that does not exist), `owner_less_links`, `kind3_portals`
-(enable/disable portals), `small_main_component` (the largest walk component holds under `--min-main-share`, default 0.6, of the walkable area).
-`library` prints the count per reason, as the first reason hit and as any reason.
+percent water) is REJECTED if it has any of (limits in `coverage.py` LIMITS): `displaced_mesh` (a navmesh a plugin parked under the map, rules
+below), `doubtful_mesh` (flat within 100 units and more than 3000 under its neighbours' median: looks parked, not certain), `bad_edge_share`
+(more than 0.5 percent of its internal edges are one-way or not the swapped edge; below that the bad edges are CUT and MARKED, see below),
+`stale_or_broken_links` (a link to a triangle beyond the target mesh or to a mesh that does not exist), `owner_less_links`, `kind3_portals`
+(enable/disable portals), `small_main_component` (the largest walk component holds under 0.6 of the walkable area for an interior, 0.4 for an
+exterior window: islands and cliffs are normal outdoors), and for exterior windows `sparse_exterior` (fewer than 10 exported refs AND fewer than
+1500 triangles: filler strips) and `unreachable_exterior` (no teleport door in the window and no neighbouring window, touching it or one cell
+apart, that has content). `plugin_moved_refs` (a later plugin moved a ref into or out of one of its cells) is NOT a rejection since round 5: it
+rejected 92 percent of the big-city windows of a big list and says nothing about the place; it is kept as the feature `movedRefs` (0/1).
+`library` prints the count per reason (first hit / any) and a table of the REJECTED SHARE of the candidates per tag and per class, under the
+round-4 rule and the current one, so a bias against a kind of place shows (the same table is in `index.json`, `biasByTagAndClass`).
 
-**2. Coverage.** Each surviving place gets measured tags (`coverage.py` TAGS, one table; thresholds are the top quartile of the vanilla pool,
+CUT EDGES: an internal neighbour pair the game data has one-way (the neighbour has no edge back) or whose neighbour edge is not the same two points
+in the opposite direction has `nb` set to -1 in the file and TRIS flag `0x1000 << edge` set, so the consumer sees a wall there, never a fake
+passage; the same cut applies to the component and graph measures.
+
+**2. Coverage.** Each surviving place gets measured tags (`coverage.py` TAGS, one table; thresholds are the top quartile of the vanilla candidates,
 measured separately for interiors and exterior windows because they differ by an order of magnitude): `interior`, `exterior`, `slope_flat`
 (share of area under 15 degrees >= 0.85), `slope_gentle` (15-30), `slope_steep` (30-45), `slope_cliff` (45+), `stairs_run` / `stairs_long` (rise of
 the biggest connected run of triangles steeper than 25 degrees), `drops_low` / `drops_mid` / `drops_high` (kind 2 links by drop height: under 100,
 100-300, over 300 units), `narrow`, `doorway_portals` (3+ door triangles), `multi_floor` (layering), `large_open`, `clutter_dense` (small things
 to loot or bump into per million units^2), `occluders_dense` (large statics and trees), `cover_marked` (triangles with cover bits), `water_edge`,
-`water_large`, `islands` (walk components apart from the main one, 30+ triangles), `corridors` (path-like coarse graph), `dead_ends`, `loops`,
-`choke_points` (articulation points) from a coarse graph of 256-unit bins split into floors, `high_ground`, and the distance scale
-`scale_short` / `scale_mid` / `scale_long` (longest shortest path of that graph). A pool of up to `--pool` (default 1200) clean places, spread by the
-feature-space farthest-point rule, gets the expensive graph tags; the pick then takes, greedily, the place covering the most unmet needs until every
-tag and every COMMON tag pair (present together in at least `--pair-share`, default 3 percent, of the pool) is in the library at least
-`--coverage-n` (default 2) times or `--count` places are chosen; spare room is filled by farthest-point diversity. The table (pool count, library
-count, held-out count, status) and every unmet need are printed and stored in `index.json` (`coverage`, `unmetPairsLibrary`, `unmetTagsLibrary`).
+`water_large`, `islands` (walk components apart from the main one, 30+ triangles), `corridors` (path-like graph AND a high narrow-width share
+AND a low wide-width share), `dead_ends`, `loops`, `choke_points` (articulation points) from a coarse graph of 256-unit bins split into
+floors, `high_ground`, and the distance scale `scale_short` / `scale_mid` / `scale_long` (longest shortest path of that graph). The coarse graph
+is built from RASTERISED TRIANGLES: every 256-unit bin a walkable triangle touches is a node (a big flat triangle covers every bin under it; the
+round-4 graph used the centroid only, so a few huge triangles read as a thin path), nodes of one triangle connect along a 128-unit lattice, and
+triangles connect through their neighbours and links. It is computed for EVERY candidate (cached in `_scan/<set>.graph.pkl`, a few minutes per set)
+so the rejected-share table can tag rejected places too.
 
-**3. Held-out set.** Same procedure on the pool minus the library and every exterior window within 3 grid cells of a library window, written
-to `<set>/heldout/`, so a tuning can be checked on places it never saw.
+**3. One global split, library and held-out.** The unit is an interior cell, or an exterior BLOCK of 12 x 12 grid cells of one worldspace. An
+exterior window is a candidate only when its 3x3 cells lie inside one block (its centre is 1 to 10 cells inside), so windows of different
+blocks never overlap. A block's side is a hash (SHA-1) of its name-based id, plugin file name + local id of the worldspace + block
+coordinates (`coverage.py` BLOCK, HELD_PERCENT = 40), so it does not depend on a load order and the same place in two sets falls on the same
+side. Library places are picked only from 'lib' blocks and held-out places only from 'held' blocks, in EVERY set, so no library place of any set
+overlaps a held-out place of any set. `validate` (no argument) checks it over `index.json`: each place on the side its block hashes to, no window
+crossing a block edge, and 0 cells shared between library windows and held-out windows across all sets.
+Each side gets a pool of clean places (`--pool` library side, two thirds of it held-out side) spread by the feature-space farthest-point rule; the
+pick then takes, greedily, the place covering the most unmet needs until every tag and every COMMON tag pair (present together in at least
+`--pair-share`, default 3 percent, of the candidates) is in the picked set at least `--coverage-n` (default 2) times or the count is reached;
+spare room is filled by farthest-point diversity. Availability is judged on the whole candidate set. `envextract.py coverage` prints the tags
+and pairs unmet over all sets together. The table (pool count, library count, held-out count, status: ok / SHORT / NONE AVAILABLE) and every
+unmet need are printed and stored in `index.json` (`coverage`, `unmetPairsLibrary`, `unmetTagsLibrary`, `unmetTagsHeldout`).
 
 Class names in the files (`exterior_multilevel_statics`, ...) are the older measured classes (`classes.py`), kept for file names and for the pool
 spread. CAVEAT: a class name says what was MEASURED, not what the place is (a "multilevel statics" window is not necessarily a fort, "actors
@@ -277,17 +297,19 @@ geometrically adjacent) and a few cell-border seams. The 3 / 17 / 83 flag-only d
 There is no independent NVNM reader on this machine (no xEdit for Skyrim, no pyffi, no Mutagen), so the cross-check is the data's own
 redundancy: bytes consumed exactly, door bit vs door rows, link bits vs link rows, reciprocal neighbours with matching geometry,
 water bit vs water height, link kind pairs 1<->2 (2350 of 2351 in vanilla). `validate FILE.mfoenv` checks written environments (ranges,
-swapped-edge neighbours, door ref ids, bounds, component table); with no argument it checks every file in the cache. The unit tests
-(23) include the C++ reader under ASAN/UBSAN.
+swapped-edge neighbours, cut flags, door ref ids, bounds, component table); with no argument it checks every file in the cache and then the library / held-out split over `index.json`. The unit tests
+(39) include the C++ reader under ASAN/UBSAN, the split, the cut edges, the door join and the raster graph.
 
 
 ## Open items
 
 * DREF `openDefault` reads XACT bit 0x8 (community docs; one data point: 29 vanilla doors carry XACT 0x0D). Not observed in game.
-* Reject-everything-anomalous removes about half the candidate places of the big lists (mostly `plugin_moved_refs` and one-way edges): the library
-  shows no mod-heavy places that carry those. Retune `--min-main-share` or drop a reason in `coverage.py` if a list needs them.
+* The rejections still skip places a mod messed up (parked meshes, broken links, filler strips); `plugin_moved_refs` is no longer one. Check the
+  rejected-share table that `library` prints for a bias against a kind of place.
 * Coverage thresholds (`coverage.py` TAGS) are vanilla top quartiles; lists with small `--count` leave some tag pairs unmet (printed and stored).
-* The coarse graph (256-unit bins split by floor) is a proxy for dead ends, loops and choke points.
+* The coarse graph (256-unit bins split by floor, rasterised triangles) is a proxy for dead ends, loops and choke points.
+* DREF join, round 5 library (125 files): 806 door rows, 30 without a triangle (no triangle within 100 units in height, nearest point 200 horizontally).
+* The thresholds of the graph tags and `LIMITS` were set from the vanilla candidates; a big list's own distribution may differ (printed in the rejected-share table).
 
 * Link kinds 1/2/3 are decoded from data direction and the community enum only; no in-game observation backs them.
 * Triangle bits 0x10, 0x20, 0x40 are not measured.
