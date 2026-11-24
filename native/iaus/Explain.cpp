@@ -2,8 +2,11 @@
 // breakdown, the log pacing, and the board readout. PURE (iaus/Core.h): it builds strings, Engine.cpp logs them.
 #include "iaus/Iaus_internal.h"
 
+#include <algorithm>
 #include <cmath>
 #include <format>
+#include <utility>
+#include <vector>
 
 namespace MFO::Iaus {
 
@@ -83,6 +86,33 @@ namespace MFO::Iaus {
             }
         }
         if (d.vetoed || d.pruned) s += std::format(" veto={} pruned={}", d.vetoed, d.pruned);
+        {   // fix/spell-worth: which consideration did the vetoing (the per-name counts of this decision), the most numerous first
+            std::vector<std::pair<std::uint16_t, std::size_t>> by;
+            for (std::size_t i = 0; i < d.vetoByCons.size(); ++i)
+                if (d.vetoByCons[i] > 0) by.emplace_back(d.vetoByCons[i], i);
+            std::sort(by.begin(), by.end(), [](const auto& a, const auto& b) { return a.first != b.first ? a.first > b.first : a.second < b.second; });
+            if (!by.empty()) {
+                s += " vetoBy[";
+                for (std::size_t i = 0; i < by.size() && i < 6; ++i)
+                    s += std::format("{}{}={}", i ? " " : "", Name(static_cast<Cons>(by[i].second)), by[i].first);
+                s += "]";
+            }
+        }
+        {   // fix/spell-worth: the best offense spell by RAW expected damage on its foe (Facts::expDamage: measured, the foe's resists applied), where it stands
+            const Candidate* bestC = nullptr;
+            for (const Candidate& c : cands)
+                if (c.family == Family::CastOffense && c.f.expDamage > 0.0f && (!bestC || c.f.expDamage > bestC->f.expDamage)) bestC = &c;
+            if (bestC) {
+                const auto idx = static_cast<std::uint16_t>(bestC - cands.data());
+                std::size_t pos = 0;
+                bool found = false;
+                for (std::size_t i = 0; i < d.ranked.size(); ++i)
+                    if (d.ranked[i].idx == idx) { pos = i + 1; found = true; break; }
+                s += std::format(" bestDmg[{} dmg {:.1f} ({})", Label(*bestC), bestC->f.expDamage, bestC->f.effectRate > 0.0f ? "measured" : "placeholder");   // effectRate is 0 for an unmeasured spell
+                if (found) s += std::format(" score {:.3f} rank {}/{}]", d.ranked[pos - 1].score, pos, d.ranked.size());
+                else s += " not ranked (vetoed, pruned or under the floor)]";
+            }
+        }
         if (d.overCap) s += std::format(" OVER-CAP({} offered)", d.generated);
         if (d.badFacts) s += std::format(" BAD-FACTS={}", d.badFacts);
         s += std::format(" {:.3f}ms", ms);

@@ -72,6 +72,9 @@ namespace MFO::Iaus::Engine {
     // scan drains), never call them from there (REVIEW-BACKLOG MFO-B639). The epoch stays monotonic across Forget
     // and Clear (a new Mind starts above every epoch handed out so far).
     void EndDecision(RE::FormID a_actor);
+    // fix/spell-worth: true ONCE per fight per follower (false until EndDecision / Forget / Clear): the caller then logs the class and school weights
+    // he fights with. WORKER ONLY.
+    [[nodiscard]] bool NoteFightProfile(RE::FormID a_actor);
     void Forget(RE::FormID a_actor);
 
     // ── Card I6: what the scan's IAUS branch keeps per follower (WORKER ONLY, cleared by Clear) ───────────────

@@ -1317,22 +1317,24 @@ namespace {
             const Candidate* boltUndead = find(g, 0x12FCD, 0x3B601);
             const Candidate* noise = find(g, 0x2003C, 0x3B600);
             const Candidate* mystery = find(g, 0x2003D, 0x3B600);
-            Check(boltLiving && boltLiving->f.bestDamage == 25.0f,
+            Check(boltLiving && std::fabs(boltLiving->f.bestDamage - 25.0f / t.spellCastSec) < 1e-3f,
                   "B684: on a living foe the best is Firebolt (undead-only, out-of-reach, held-hand and unmeasured spells do not count)");
-            Check(boltUndead && boltUndead->f.bestDamage == 80.0f, "B684: on the undead foe the undead-only spell is the best");
-            Check(noise && noise->f.expDamage == 0.0f && mystery && mystery->f.expDamage < 0.0f,
-                  "B684: a measured 0 is 0, an unmeasured spell is 'not known' (< 0)");
+            Check(boltUndead && std::fabs(boltUndead->f.bestDamage - 80.0f / t.spellCastSec) < 1e-3f, "B684: on the undead foe the undead-only spell is the best");
+            // fix/spell-worth C2 (supersedes "unmeasured = < 0": that was a free pass): an unmeasured spell is a placeholder share of his best measured option
+            // (Tuning::unmeasuredDamage 0.5 x Firebolt's 25), strictly below it; < 0 stays only where NOTHING is measured on the foe (the all-unmeasured block below)
+            Check(noise && noise->f.expDamage == 0.0f && mystery && std::fabs(mystery->f.expDamage - 12.5f) < 1e-4f,
+                  "B684 / spell-worth C2: a measured 0 is 0, an unmeasured spell is the placeholder share of his best measured option (12.5 of 25)");
             if (noise && mystery && boltLiving) {
                 const float sNoise = ScoreOne(*noise, Mind{}, Profile{}, t, 1, 0, nullptr);
                 const float sMystery = ScoreOne(*mystery, Mind{}, Profile{}, t, 1, 0, nullptr);
-                Check(sMystery > sNoise && sNoise > 0.0f, "B684: the unmeasured spell is not scored down, the no-damage spell is (and is not vetoed)");
+                Check(sMystery > sNoise && sNoise > 0.0f, "B684: the unmeasured spell scores above the no-damage spell (and the no-damage one is not vetoed)");
             }
         }
         {
             const Snapshot s = build(false);   // both hands free: the two-hander counts
             const Generated g = Generate(s, mage, t);
             const Candidate* bolt = find(g, 0x12FCD, 0x3B600);
-            Check(bolt && bolt->f.bestDamage == 100.0f, "B684: with both hands free the two-handed spell is his best");
+            Check(bolt && std::fabs(bolt->f.bestDamage - 100.0f / t.spellCastSec) < 1e-3f, "B684: with both hands free the two-handed spell is his best");
         }
         {
             Snapshot s = build(false);
@@ -1364,6 +1366,218 @@ namespace {
                   "F5 / B687: the power attack reads the learned combo reach x the gate, and fMeleeReach while nothing is learned");
             Check(std::fabs(reachOf(Family::Attack) - 150.0f / Reach::kGate) < 0.01f && Estimate::StrikeDistance(s) == 400.0f,
                   "11-17: the attack's range test reads the learned combo reach (approach), the strike distance keeps fMeleeReach");
+        }
+    }
+}
+
+
+namespace {
+    // fix/spell-worth (field Jesper 11-23: IAUS had no damage number for ~62 of 74 offense spells, so they TIED and the cheapest won).
+    void SpellWorthRules() {
+        std::printf("\n== spell-worth: rider damage, resist once, unmeasured placeholder, level cap ==\n");
+        const Tuning& t = DefaultTuning();
+        ClassGate mage; mage.resolved = true; mage.spellsOnClass = true;
+        const auto find = [](const Generated& g, std::uint32_t form, std::uint32_t target) -> const Candidate* {
+            for (const Candidate& c : g.actions)
+                if (c.form == form && c.target == target) return &c;
+            return nullptr;
+        };
+        // C1: which spells are unmeasurable (the pure rule Fills.cpp MeasureSpell calls)
+        Check(!Estimate::DamageUnmeasurable(true, true, 30.0f), "C1: a rider bolt (an indirect effect AND direct damage) is MEASURED (its direct damage, a lower bound)");
+        Check(Estimate::DamageUnmeasurable(true, true, 0.0f), "C1: Wall of Flames (an indirect effect, no direct damage) stays UNMEASURED (MFO-B684)");
+        Check(!Estimate::DamageUnmeasurable(true, false, 0.0f) && !Estimate::DamageUnmeasurable(false, true, 0.0f),
+              "C1: a spell with no indirect effect, and a non-offense spell with one, are never marked unmeasurable");
+
+        // The named tie cases: Jesper's Ice Spike (23), Elemental Flare (69), Firebolt (25), one foe. BEFORE = no damage number on any of them (every
+        // rider discarded: nothing measured on the foe); AFTER = measured by their direct damage.
+        const auto book = [&](bool a_measured) {
+            Snapshot s;
+            s.self = Actor("Jesper", 0x14F00, 180, 200, 0, 0); s.self.mp = 400; s.self.mpMax = 400;
+            s.playerId = 0x14;
+            s.foes = { Actor("Bandit", 0x3B600, 100, 100, 600, 0) };
+            s.currentTargetId = 0x3B600; s.hasBook = true; s.combatSec = 3.0f;
+            const auto add = [&](const char* n, std::uint32_t id, float cost, float dmg) {
+                SpellEntry e = Spell(n, id, Prune::Nature::Offense, cost); e.damage = dmg; e.measured = a_measured; e.school = kDestruction; s.book.entries.push_back(e);
+            };
+            add("Ice Spike", 0x1CEAD, 30, 23.0f); add("Firebolt", 0x12FCD, 40, 25.0f); add("Elemental Flare", 0x2FF01, 60, 69.0f);
+            return s;
+        };
+        std::string orders[2];
+        for (int measured = 0; measured < 2; ++measured) {
+            const Snapshot s = book(measured != 0);
+            const Generated g = Generate(s, mage, t);
+            const Decision d = Decide(Mind{}, g.actions, Profile{}, t, Tick(3));
+            bool first = true;
+            for (const Scored& sc : d.ranked) {
+                const Candidate& c = g.actions[sc.idx];
+                if (c.family != Family::CastOffense) continue;
+                orders[measured] += std::format("{}{} {:.3f}", first ? "" : " > ", c.formName, sc.score);
+                first = false;
+            }
+            std::printf("  %s: %s\n", measured ? "AFTER  (measured by direct damage)" : "BEFORE (no damage number)         ", orders[measured].c_str());
+        }
+        Check(orders[0].rfind("Ice Spike", 0) == 0, "spell-worth: BEFORE, the three tie and the cheapest (Ice Spike) wins (the field bug)");
+        Check(orders[1].rfind("Elemental Flare", 0) == 0, "spell-worth: AFTER, the strongest measured spell (Elemental Flare 69) ranks first");
+
+        // C3: resist counted once. A foe with 50 magic resist, and 50 poison resist, and 50 fire resist.
+        {
+            Combatant foe = Actor("Mage", 0x3B700, 100, 100, 600, 0);
+            foe.magicResist = 50.0f;
+            foe.resists = { { Estimate::kAvResistMagic, 50.0f }, { Estimate::kAvPoisonResist, 50.0f }, { Prune::kAvResistFire, 50.0f } };
+            SpellEntry sp = Spell("Bolt", 0x1, Prune::Nature::Offense, 10, 2000.0f, Estimate::kAvResistMagic);
+            sp.damage = 100.0f; sp.measured = true;
+            Check(std::fabs(Estimate::SpellOn(sp, foe) - 50.0f) < 1e-3f, "C3: a spell keyed on ResistMagic is cut by it ONCE (100 x (1 - 50%) = 50, not 25)");
+            sp.resistAv = Prune::kAvResistFire;
+            Check(std::fabs(Estimate::SpellOn(sp, foe) - 25.0f) < 1e-3f, "C3: an element spell is cut by magic resist AND its element (50% x 50% = 25)");
+            sp.resistAv = Estimate::kAvPoisonResist; sp.poisonType = true; foe.magicResist = 80.0f;
+            Check(std::fabs(Estimate::SpellOn(sp, foe) - 50.0f) < 1e-3f, "C3: a poison-type spell reads the poison resist once (50 -> 50) and never the magic resist (80)");
+            sp.resistAv = Prune::kAvResistFire;
+            Check(std::fabs(Estimate::SpellOn(sp, foe) - 25.0f) < 1e-3f, "C3: a poison-type spell with an element: poison resist x element (50% x 50% = 25)");
+        }
+        // C3: exploit reads only the resist the damage does not carry
+        {
+            Snapshot s = book(true);
+            s.foes[0].resists = { { Prune::kAvResistFire, -50.0f }, { Prune::kAvResistFrost, 50.0f } };
+            s.book.entries[0].resistAv = Prune::kAvResistFrost;   // Ice Spike, measured
+            SpellEntry unk = Spell("Unknown Fire", 0x3000, Prune::Nature::Offense, 20, 2000.0f, Prune::kAvResistFire);   // not measured
+            SpellEntry ctl = Spell("Frost Calm", 0x3001, Prune::Nature::Control, 20, 2000.0f, Prune::kAvResistFrost); ctl.measured = true;
+            s.book.entries.push_back(unk); s.book.entries.push_back(ctl);
+            const Generated g = Generate(s, mage, t);
+            const Candidate* a = find(g, 0x1CEAD, 0x3B600); const Candidate* b = find(g, 0x3000, 0x3B600); const Candidate* c = find(g, 0x3001, 0x3B600);
+            Check(a && a->f.resist == 0.0f, "C3: a measured spell's damage carries the foe's frost resist, so exploit reads none for it");
+            Check(b && b->f.resist == 0.0f && c && c->f.resist == 50.0f, "C3 / F4: a control spell keeps the exploit read; an unmeasured spell with a yardstick gets NO weakness bonus (-50 reads 0)");
+            s.foes[0].resists = { { Prune::kAvResistFire, 60.0f } };
+            const Generated g2 = Generate(s, mage, t);
+            const Candidate* b2 = find(g2, 0x3000, 0x3B600);
+            Check(b2 && b2->f.resist == 60.0f, "F4: ... and the resist side stays (an unmeasured fire spell on a fire-resistant foe reads 60)");
+            Check(a && a->f.expDamage > 0.0f && std::fabs(a->f.expDamage - 23.0f * 0.5f) < 1e-3f, "C3: and the damage itself carries it (Ice Spike 23 x 50% = 11.5)");
+        }
+
+        // C2: unmeasured is below the best measured, named and settable; DamageValue / Overkill are not Off
+        {
+            Snapshot s = book(true);
+            SpellEntry unk = Spell("Unknown", 0x3000, Prune::Nature::Offense, 20); unk.measured = false; unk.damage = 900.0f; s.book.entries.push_back(unk);
+            Generated g = Generate(s, mage, t);
+            const Candidate* u = find(g, 0x3000, 0x3B600);
+            Check(u && std::fabs(u->f.bestDamage - 69.0f / t.spellCastSec) < 1e-3f && std::fabs(u->f.expDamage - 34.5f) < 1e-3f && std::fabs(u->f.expRate - 0.5f * u->f.bestDamage) < 1e-3f,
+                  "C2: an unmeasured spell is worth t.unmeasuredDamage (0.5) of the best measured (69) = 34.5, below it, whatever its record damage says");
+            bool dvOn = false, okOn = false;
+            if (u) {
+                std::vector<Term> terms;
+                (void)ScoreOne(*u, Mind{}, Profile{}, t, 1, 0, &terms);
+                for (const Term& tm : terms) {
+                    if (tm.cons == Cons::DamageValue && std::fabs(tm.x - 0.5f) < 1e-3f) dvOn = true;
+                    if (tm.cons == Cons::Overkill) okOn = true;
+                }
+            }
+            Check(dvOn && okOn, "C2: DamageValue reads 0.5 and Overkill reads a number for it (neither is 'not applicable')");
+            Tuning tt = t; std::string why;
+            Check(SetTuningScalar(tt, "t.unmeasuredDamage", 0.2f, &why) && tt.unmeasuredDamage == 0.2f, "C2: t.unmeasuredDamage is settable through SetTuningScalar");
+            const Candidate* u2 = find(Generate(s, mage, tt), 0x3000, 0x3B600);
+            Check(u2 && std::fabs(u2->f.expDamage - 13.8f) < 1e-3f, "C2: and the scalar moves the placeholder (0.2 x 69 = 13.8)");
+            SetTuningScalar(tt, "t.unmeasuredDamage", 5.0f, &why);
+            const Candidate* u3 = find(Generate(s, mage, tt), 0x3000, 0x3B600);
+            Check(u3 && u3->f.expDamage < 69.0f && u3->f.expRate < u3->f.bestDamage, "C2: a scalar of 5 still holds the placeholder strictly below the best measured");
+        }
+
+        // C5: a capped Turn on a foe above its cap is no candidate; Turn on a valid foe stays
+        {
+            Snapshot s;
+            s.self = Actor("Jesper", 0x14F00, 180, 200, 0, 0); s.self.mp = 400; s.self.mpMax = 400;
+            s.playerId = 0x14;
+            Combatant weak = Actor("Skeleton", 0x3B600, 100, 100, 600, 0, 8); weak.undead = true;
+            Combatant strong = Actor("Deathlord", 0x3B601, 100, 100, 650, 0, 30); strong.undead = true;
+            s.foes = { weak, strong };
+            s.currentTargetId = 0x3B600; s.hasBook = true; s.combatSec = 3.0f;
+            const std::uint32_t turns[3] = { 0x4D3F9, 0x4D3FA, 0x4D3FB };
+            const float caps[3] = { 12.0f, 20.0f, 28.0f };
+            for (int i = 0; i < 3; ++i) {
+                SpellEntry e = Spell("Turn", turns[i], Prune::Nature::Control, 30); e.undeadOnly = true; e.levelCap = caps[i]; e.measured = true;
+                s.book.entries.push_back(e);
+            }
+            const Generated g = Generate(s, mage, t);
+            Check(find(g, turns[0], 0x3B600) && find(g, turns[1], 0x3B600) && find(g, turns[2], 0x3B600), "C5: on a level-8 foe all three Turns are candidates (under every cap)");
+            Check(find(g, turns[0], 0x3B601) && find(g, turns[2], 0x3B601) && g.capQueued.size() == 3,
+                  "F2: with NO will-work answer yet the book's cap removes nothing (the three pairs on the level-30 foe stay one lap) and they are queued to be asked");
+            {
+                Snapshot s2 = s;
+                s2.willWork = { { turns[0], 0x3B601, Tri::No }, { turns[1], 0x3B601, Tri::No }, { turns[2], 0x3B601, Tri::Yes } };
+                const Generated g2 = Generate(s2, mage, t);
+                Check(!find(g2, turns[0], 0x3B601) && !find(g2, turns[1], 0x3B601) && find(g2, turns[2], 0x3B601) && g2.capQueued.empty(),
+                      "C5 / F2: a will-work No removes the pair on a foe above the cap, a Yes keeps it (the cap is a hint, WillWork decides), and nothing is queued");
+                Check(find(g2, turns[0], 0x3B600), "C5: Turn on the valid foe stays");
+            }
+            Check(Estimate::LevelCapBars(12.0f, 13) && !Estimate::LevelCapBars(12.0f, 12) && !Estimate::LevelCapBars(0.0f, 99), "C5: the bar is WillWork's own (level > cap; cap 0 = none)");
+            // and the capped spell does not count as the foe's best option
+            SpellEntry big = Spell("Capped Blast", 0x4000, Prune::Nature::Offense, 30); big.damage = 200.0f; big.measured = true; big.levelCap = 20.0f;
+            SpellEntry small = Spell("Plain Bolt", 0x4001, Prune::Nature::Offense, 30); small.damage = 20.0f; small.measured = true;
+            s.book.entries.push_back(big); s.book.entries.push_back(small);
+            s.willWork = { { 0x4000, 0x3B601, Tri::No } };
+            const Candidate* pb = find(Generate(s, mage, t), 0x4001, 0x3B601);
+            Check(pb && std::fabs(pb->f.bestDamage - 20.0f / t.spellCastSec) < 1e-3f, "F3: a spell WillWork refused on a foe is not that foe's best option (the denominator skips it)");
+        }
+
+        // F1: an immune foe loses the pair, it does not score at full
+        {
+            Snapshot s = book(true);
+            s.foes[0].resists = { { Prune::kAvResistFire, 100.0f }, { Prune::kAvResistFrost, 0.0f } };
+            s.book.entries[0].resistAv = Prune::kAvResistFrost;   // Ice Spike (frost)
+            s.book.entries[1].resistAv = Prune::kAvResistFire;    // Firebolt
+            s.book.entries[2].resistAv = Prune::kAvResistFire;    // Elemental Flare
+            Generated g = Generate(s, mage, t);
+            Check(!find(g, 0x12FCD, 0x3B600) && !find(g, 0x2FF01, 0x3B600) && find(g, 0x1CEAD, 0x3B600),
+                  "F1: a flame atronach (100 fire resist) is no target of the fire spells, and the frost spell stays");
+            s.book.entries.erase(s.book.entries.begin());   // no frost option left: nothing but fire
+            g = Generate(s, mage, t);
+            bool anyCast = false;
+            for (const Candidate& c : g.actions) if (c.family == Family::CastOffense) anyCast = true;
+            Check(!anyCast, "F1: with only fire in the book the immune foe gets no cast candidate (never scored at full)");
+        }
+        // F4: a score-level check, unmeasured never outranks the measured best (same cost and reach, a foe weak to the unmeasured spell's element)
+        {
+            Snapshot s = book(true);
+            s.foes[0].resists = { { Prune::kAvResistFire, -50.0f } };
+            for (auto& e : s.book.entries) e.cost = 40.0f;
+            SpellEntry unk = Spell("Unknown Fire", 0x3000, Prune::Nature::Offense, 40, 2000.0f, Prune::kAvResistFire); unk.school = kDestruction;
+            s.book.entries.push_back(unk);
+            const Generated g = Generate(s, mage, t);
+            const Candidate* u = find(g, 0x3000, 0x3B600); const Candidate* best = find(g, 0x2FF01, 0x3B600);
+            Check(u && best && ScoreOne(*u, Mind{}, Profile{}, t, 1, 0, nullptr) < ScoreOne(*best, Mind{}, Profile{}, t, 1, 0, nullptr),
+                  "F4: on a foe weak to its element an unmeasured spell still scores below the measured best (no weakness bonus)");
+        }
+        // F5: a stream, a bolt and a long DoT on one unit (effect per cast second)
+        {
+            Snapshot s;
+            s.self = Actor("Jesper", 0x14F00, 180, 200, 0, 0); s.self.mp = 400; s.self.mpMax = 400;
+            s.playerId = 0x14;
+            s.foes = { Actor("Bandit", 0x3B600, 100, 100, 600, 0) };
+            s.currentTargetId = 0x3B600; s.hasBook = true; s.combatSec = 3.0f;
+            SpellEntry bolt = Spell("Bolt", 0x5001, Prune::Nature::Offense, 30); bolt.damage = 30.0f; bolt.measured = true;
+            SpellEntry stream = Spell("Stream", 0x5002, Prune::Nature::Offense, 30); stream.damage = 25.0f; stream.measured = true; stream.concentration = true;   // per second
+            SpellEntry dot = Spell("Dot", 0x5003, Prune::Nature::Offense, 30); dot.damage = 60.0f; dot.measured = true;
+            s.book.entries = { bolt, stream, dot };
+            const Generated g = Generate(s, mage, t);
+            const Candidate* cb = find(g, 0x5001, 0x3B600); const Candidate* cs = find(g, 0x5002, 0x3B600); const Candidate* cd = find(g, 0x5003, 0x3B600);
+            const float bolt1 = 30.0f / t.spellCastSec, dot1 = 60.0f / t.spellCastSec;   // 20 and 40 per cast second; the stream 25 per second
+            Check(cb && cs && cd && std::fabs(cb->f.expRate - bolt1) < 1e-3f && std::fabs(cs->f.expRate - 25.0f) < 1e-3f && std::fabs(cd->f.expRate - dot1) < 1e-3f &&
+                  std::fabs(cb->f.bestDamage - dot1) < 1e-3f, "F5: bolt, stream and DoT read one unit (effect per cast second); the best is the DoT's 40");
+            Check(cb && cs && cd && cb->f.expDamage == 30.0f && cs->f.expDamage == 25.0f && cd->f.expDamage == 60.0f, "F5: the raw cast stays in expDamage (Overkill reads it)");
+        }
+
+        // logs: the per-decision veto counts by consideration name
+        {
+            Snapshot s = book(true);
+            Generated g = Generate(s, mage, t);
+            for (Candidate& c : g.actions) c.f.willWork = Tri::No;
+            const Decision d = Decide(Mind{}, g.actions, Profile{}, t, Tick(3));
+            Check(d.vetoByCons[static_cast<std::size_t>(Cons::WillWork)] == 3 && d.vetoed == 3,
+                  "log: Decision::vetoByCons counts the vetoes by the consideration that made them (will_work for the 3 casts; the attack is not vetoed)");
+            const std::string line = FormatDecision(d, g.actions, t, -1, {}, 0.0);
+            Check(line.find("vetoBy[will_work=") != std::string::npos, "log: the [iaus] line names them (vetoBy[will_work=N])");
+            const Generated g2 = Generate(s, mage, t);
+            const Decision d2 = Decide(Mind{}, g2.actions, Profile{}, t, Tick(3));
+            const std::string line2 = FormatDecision(d2, g2.actions, t, 0, {}, 0.0);
+            Check(line2.find("bestDmg[cast_offense") != std::string::npos && line2.find("Elemental Flare") != std::string::npos, "log: the [iaus] line names the best offense spell by raw expected damage with its score and rank");
         }
     }
 }
@@ -2644,6 +2858,7 @@ int main() {
     ReachLearning();
     ReachSequences();
     EngineFillRules();
+    SpellWorthRules();
     OcclusionHoldBound();
     HideHold();
     DisengageRules();

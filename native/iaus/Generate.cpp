@@ -756,7 +756,9 @@ namespace MFO::Iaus {
             // Without them a strong undead-only or out-of-reach spell shrank every offense score against a foe it can
             // never be cast on.
             constexpr float kRangeVeto = 1.15f;   // Cons::RangeSpell and RangeMelee veto above 1.15 x the reach (Catalogue.cpp)
-            std::vector<float> bestOn(x.top.size(), 0.0f);
+            // F5: in EffectRate's unit (effect per cast second) so a stream, a bolt and a long DoT compare fairly; bestRaw keeps the best RAW cast (the placeholder
+            // of an unmeasured spell is a share of it, and Overkill reads raw casts).
+            std::vector<float> bestOn(x.top.size(), 0.0f), bestRaw(x.top.size(), 0.0f);
             for (const SpellEntry& o : s.book.entries) {
                 if (o.source != SpellSource::Spell || o.drop != Prune::Drop::Keep || o.nature != Prune::Nature::Offense) continue;
                 if (!o.measured || !(o.damage > 0.0f)) continue;
@@ -768,8 +770,11 @@ namespace MFO::Iaus {
                 for (std::size_t ti = 0; ti < x.top.size(); ++ti) {
                     const Combatant& foe = *x.top[ti];
                     if (o.undeadOnly && !foe.undead) continue;
+                    if (Note(s.willWork, o.form, foe.id) == Tri::No) continue;   // F3 (and the level cap, F2): a pair WillWork refused is no option on that foe
                     if (oReach > 0.0f && Finite(foe.dist, 0.0f) > oReach * kRangeVeto) continue;
-                    bestOn[ti] = (std::max)(bestOn[ti], Estimate::SpellOn(o, foe));
+                    const float raw = Estimate::SpellOn(o, foe);
+                    bestRaw[ti] = (std::max)(bestRaw[ti], raw);
+                    bestOn[ti]  = (std::max)(bestOn[ti], EffectRate(x, o, raw));
                 }
             }
             for (const SpellEntry& e : s.book.entries) {
@@ -831,6 +836,19 @@ namespace MFO::Iaus {
                         // marth 2026-11-13 ("all effect spell detection"): a spell whose lingering effects would all merely replace ones live on
                         // THIS foe (same base MGEF, or a keyword dispel: SpellBook's FoeFx mirror) is invalid until they run out.
                         if (FxAllReplaced(e.lingerFx, foe->liveFx)) { ++x.out.droppedTarget; continue; }
+                        // fix/spell-worth C5 / F2: a level-capped effect (Calm / Frenzy / Demoralize / Rally / Turn Undead / Reanimate) cannot land on a foe above its
+                        // cap, but the BOOK's cap was asked once against his current target and the perks that move it can be target-conditioned: it may not remove a
+                        // pair on its own. The pair is skipped only when WillWork has answered No for it (its own per-foe verdict); while it has not answered, the
+                        // pair stays for this lap and is queued into the ask list (Generated::capQueued -> NoteDecision), so the next lap knows. The spell is never vetoed.
+                        if (Estimate::LevelCapBars(e.levelCap, foe->level)) {
+                            const Tri ww = Note(s.willWork, e.form, foe->id);
+                            if (ww == Tri::No) { ++x.out.droppedTarget; continue; }
+                            if (ww == Tri::Unknown) x.out.capQueued.push_back({ e.form, foe->id });
+                        }
+                        // F1: a MEASURED offense spell that does nothing to THIS foe (an immune one: SpellOn 0 at 100 points of resist) is no candidate on it. Exploit
+                        // used to veto it at resist 100; it no longer reads a resist the damage carries, so the veto is made here, and a fire book on a flame atronach
+                        // never scores at full.
+                        if (e.nature == Prune::Nature::Offense && e.measured && Estimate::Pos(e.damage) > 0.0f && !(Estimate::SpellOn(e, *foe) > 0.0f)) { ++x.out.droppedTarget; continue; }
                         Candidate c = base(foe);
                         x.Foe(c.f, *foe, true);
                         c.f.meleeRange = false;
@@ -839,9 +857,21 @@ namespace MFO::Iaus {
                         c.f.willWork = Note(s.willWork, e.form, foe->id);
                         if (e.undeadOnly) c.f.targetCond = Tri::Yes;
                         if (e.nature == Prune::Nature::Control && e.measured) c.f.controlSec = Estimate::Pos(e.controlSec);
-                        if (e.resistAv >= 0) c.f.resist = Finite(foe->Resist(e.resistAv), 0.0f);
+                        // EXPLOIT (the resist consideration) is for the resist the damage does NOT carry (fix/spell-worth C3): a measured offense spell's
+                        // SpellOn already read this foe's resists, so exploit reads none for it (0 = neutral); an unmeasured one and a control spell keep it.
+                        if (e.resistAv >= 0 && !Estimate::ResistCarriedByDamage(e.nature == Prune::Nature::Offense, e.measured, e.damage))
+                            c.f.resist = Finite(foe->Resist(e.resistAv), 0.0f);
                         if (e.nature == Prune::Nature::Offense) {   // what this cast does to THIS foe, against his best castable option on it
-                            c.f.expDamage = e.measured ? Estimate::SpellOn(e, *foe) : -1.0f;   // < 0: not measured (MFO-B684)
+                            // fix/spell-worth C2: an UNMEASURED spell is worth a labelled placeholder share of his best measured option on this foe (Tuning::unmeasuredDamage,
+                            // strictly below it), never a free pass: DamageValue and Overkill read a number instead of standing "not applicable". < 0 only when nothing
+                            // is measured on this foe (MFO-B684's old answer).
+                            c.f.expDamage = e.measured ? Estimate::SpellOn(e, *foe) : Estimate::UnmeasuredWorth(bestRaw[ti], x.t.unmeasuredDamage);
+                            // F5: DamageValue's numerator, in the unit of its denominator (effect per cast second); the placeholder is a share of the best RATE
+                            c.f.expRate = e.measured ? EffectRate(x, e, c.f.expDamage) : Estimate::UnmeasuredWorth(bestOn[ti], x.t.unmeasuredDamage);
+                            if (e.measured && !(c.f.expDamage > 0.0f)) c.f.expRate = 0.0f;   // a measured 0 is a real 0
+                            // F4: an unmeasured spell that has a yardstick gets NO weakness bonus (a placeholder is not a reason to prefer an element); the resist
+                            // and immune side stays (it can only lower the spell)
+                            if (!e.measured && c.f.expRate >= 0.0f) c.f.resist = (std::max)(c.f.resist, 0.0f);
                             c.f.effectRate = EffectRate(x, e, c.f.expDamage);   // 11-17b: the tie-break's first read
                             c.f.foeHealth = (std::max)(0.0f, Finite(foe->hp, 0.0f));
                             c.f.bestDamage = bestOn[ti];

@@ -146,6 +146,21 @@ namespace MFO::Actuation {
             return false;
         }
 
+        // fix/spell-worth SEV-4: a working HEALTH damage effect (hostile value modifier on health, not itself level-capped, conditions not false for the target).
+        // A spell that has one is a damage spell: a level-capped rider on it (Tuxborn puts one on nearly every Destruction spell) cannot make it "not work".
+        bool HasWorkingHealthDamage(RE::SpellItem* a_spell, RE::Actor* a_target, RE::Actor* a_caster) {
+            for (const auto* e : a_spell->effects) {
+                const auto* b = e ? e->baseEffect : nullptr;
+                if (!b || !b->IsHostile() || LevelCapped(b->GetArchetype())) continue;
+                const auto a = b->GetArchetype();
+                if (!(a == Arch::kValueModifier || a == Arch::kPeakValueModifier || a == Arch::kDualValueModifier)) continue;
+                if (b->data.primaryAV != RE::ActorValue::kHealth) continue;
+                if (CondFalse(e->conditions, a_target, a_caster) || CondFalse(b->conditions, a_target, a_caster)) continue;
+                return true;
+            }
+            return false;
+        }
+
         // MAIN THREAD ONLY. Returns the verdict and, for No, the reason.
         WillWorkResult Measure(RE::Actor* a_caster, RE::SpellItem* a_spell, RE::Actor* a_target) {
             WillWorkResult out;
@@ -156,18 +171,13 @@ namespace MFO::Actuation {
             // spell's caster row (Calm / Frenzy / Demoralize / Rally / Turn Undead / Reanimate are control effects). When ANY of
             // them cannot land the spell does not work, even though an uncapped companion effect (Turn Lesser Undead's second
             // effect, 0004D3F9, field 1119: Jesper at a level-30 Deathlord) would, and wherever the engine lists it.
+            const bool damageSpell = HasWorkingHealthDamage(a_spell, a_target, a_caster);   // exempt from the cap rule (a control spell, Turn Lesser Undead included, has none)
             for (const auto* e : a_spell->effects) {
+                if (damageSpell) break;
                 if (!e || !e->baseEffect) continue;
                 const auto* base = e->baseEffect;
                 if (!LevelCapped(base->GetArchetype())) continue;
-                float cap = e->effectItem.magnitude;
-                // ARITY IS PER ENTRY POINT: EP 0x1D (kModSpellMagnitude) is (owner, spell, TARGET REF, &value);
-                // cast/Summon.cpp's EP 0x44 is (owner, spell, &value). Disassembly: 1.6.1170 0x5abe68 / 0x5ac400 /
-                // 0x5ac414 pass r8=spell, r9=target, [rsp+0x20]=&magnitude (1.5.97 0x53dfa0 the same).
-                RE::BGSEntryPoint::HandleEntryPoint(RE::BGSEntryPoint::ENTRY_POINT::kModSpellMagnitude,
-                                                    a_caster, static_cast<RE::MagicItem*>(a_spell),
-                                                    static_cast<RE::TESObjectREFR*>(a_target), &cap);
-                cap += WillWorkClassLevelBonus(a_caster, a_spell, e);
+                const float cap = WillWorkLevelCap(a_caster, a_spell, e, a_target);
                 const auto lvl = a_target->GetLevel();
                 if (static_cast<float>(lvl) > cap) {
                     out.verdict = WillWorkVerdict::No;
@@ -274,6 +284,21 @@ namespace MFO::Actuation {
     // CARD C6 HOOK: class passives that add levels to a level-capped control spell (Warlock +8 and similar).
     // Returns the levels to ADD to the effect's cap. Deliberately 0 here: G10 does not implement passives.
     float WillWorkClassLevelBonus(RE::Actor*, RE::SpellItem*, const RE::Effect*) { return 0.0f; }
+
+    // See Actuation.h. The level a capped effect reaches: the ONE reader Measure (above) and iaus/Fills.cpp (generation) share.
+    bool LevelCappedEffect(const RE::Effect* a_effect) {
+        return a_effect && a_effect->baseEffect && LevelCapped(a_effect->baseEffect->GetArchetype());
+    }
+    float WillWorkLevelCap(RE::Actor* a_caster, RE::SpellItem* a_spell, const RE::Effect* a_effect, RE::Actor* a_target) {
+        float cap = a_effect->effectItem.magnitude;
+        // ARITY IS PER ENTRY POINT: EP 0x1D (kModSpellMagnitude) is (owner, spell, TARGET REF, &value);
+        // cast/Summon.cpp's EP 0x44 is (owner, spell, &value). Disassembly: 1.6.1170 0x5abe68 / 0x5ac400 /
+        // 0x5ac414 pass r8=spell, r9=target, [rsp+0x20]=&magnitude (1.5.97 0x53dfa0 the same).
+        if (a_target)   // a null target is not a proven argument of the entry point: the record magnitude stands (iaus/Fills.cpp, no combat target)
+            RE::BGSEntryPoint::HandleEntryPoint(RE::BGSEntryPoint::ENTRY_POINT::kModSpellMagnitude, a_caster,
+                                                static_cast<RE::MagicItem*>(a_spell), static_cast<RE::TESObjectREFR*>(a_target), &cap);
+        return cap + WillWorkClassLevelBonus(a_caster, a_spell, a_effect);
+    }
 
     // See Actuation.h. The same test the NoEffect reading uses. A right-hand weapon only (the engine's Disarm takes the right hand),
     // not bare hands, not cannot-drop, and an essential target is refused (review F5; AE 0x678BD0 is the engine's gate).
