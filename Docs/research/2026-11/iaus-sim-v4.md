@@ -1279,10 +1279,25 @@ Effect on the built-in baseline: the stream unit moves the casters (evoker, seed
 
 The field's failure was two things. Checked by the three counters, natural bracket, Tuxborn, seed 1 (a tiny run, and a CLI check pins it):
 
-@@FAILTABLE@@
+Share of the subject's spell laps, percent, `--world v3 --books field --seed 1`, natural fights. `unmTop` an unmeasured spell is on top, `tie` the top two spells score the same, `capTop` a level-capped control spell is on top.
+
+| World | Class | unmTop old | tie old | capTop old | unmTop today | tie today | capTop today |
+|---|---|---|---|---|---|---|---|
+| Tuxborn | evoker | 41.3 | 6.2 | 0 | 1.9 | 0 | 0 |
+| Tuxborn | mage | 28.2 | 2.2 | 0.2 | 0 | 0 | 0.2 |
+| Tuxborn | healer | 47.7 | 0 | 0.3 | 0 | 0 | 0.3 |
+| Tuxborn | conjurer | 24.8 | 5.6 | 0 | 0.2 | 0.2 | 0 |
+| Tuxborn | warlock | 14.3 | 0 | 0.2 | 0 | 0 | 0.2 |
+| LoreRim | evoker | 63.2 | 4.3 | 0.1 | 19.5 | 7.2 | 0 |
+| LoreRim | mage | 59.2 | 14.1 | 0 | 16.3 | 4.4 | 0 |
+| LoreRim | healer | 55.5 | 0 | 0.9 | 0 | 0 | 1.2 |
+| LoreRim | conjurer | 42.5 | 6.0 | 0 | 6.3 | 3.7 | 0 |
+| LoreRim | warlock | 75.9 | 0 | 0.7 | 40.1 | 1.3 | 1.3 |
+
+On Tuxborn today's rules end it. On LoreRim they do not: an unmeasured spell is still on top in 16 to 40 percent of an evoker's, a mage's and a warlock's spell laps, and two spells still tie. LoreRim's pool holds more spells with no direct damage (169 against 108), and with nothing measured to beat it the placeholder `t.unmeasuredDamage` wins. That number is the spells stage's first knob.
 
 - **Unmeasured spells on top, and tied.** Reproduced with `--spell-rules old`, gone today.
-- **A level-capped Turn on top.** NOT reproduced by the rules alone: the lab's will-work answers a capped pair No on the lap after it is asked, under both rules, so a capped control spell is on top in about one lap in a hundred either way. In the field the Turn also keyed a row no caster served (`--seats old` in the v4 world is that game). @@SEATSNOTE@@
+- **A level-capped Turn on top.** NOT reproduced by the rules alone: the lab's will-work answers a capped pair No on the lap after it is asked, under both rules, so a capped control spell is on top in about one lap in a hundred either way. In the field the Turn also keyed a row no caster served (`--seats old` in the v4 world is that game). Measured: under `--seats old` in the v4 world a capped control spell is on top in about 1 percent of laps too. So the capped Turn that held the top in the field is not in the lab. What the lab lacks is the game answering Yes, or nothing, for a capped pair. It is on the open list.
 
 ### 15.4 The regret report
 
@@ -1298,7 +1313,28 @@ Beside it, from the world and not from the estimate: how far his pick is under t
 
 The table, before (`--spell-rules old`) and today, field-size books:
 
-@@REGRETTABLE@@
+Six natural fights per class, seed 1, `--world v3 --books field`, subject only. `regU/f` is the regret in U per fight, `any` the share of cast decisions with a regret, then the cause split in percent of the regret. Six fights is a small table: read the cause columns and the size of the numbers, not a difference of a few U between two rows.
+
+| World | Class | regU/f old | regU/f today | any old | any today | old: fact / weight / gate | today: fact / weight / gate / sight |
+|---|---|---|---|---|---|---|---|
+| Tuxborn | mage | 0.38 | 0.42 | 13 | 15 | 0 / 27 / 73 | 0 / 25 / 75 / 0 |
+| Tuxborn | evoker | 2.02 | 0.81 | 50 | 29 | 6 / 10 / 84 | 0 / 27 / 73 / 0 |
+| Tuxborn | conjurer | 16.47 | 16.31 | 60 | 41 | 0 / 4 / 95 | 0 / 3 / 97 / 0 |
+| Tuxborn | healer | 31.97 | 58.56 | 54 | 52 | 13 / 9 / 78 | 0 / 13 / 87 / 0 |
+| Tuxborn | warlock | 6.54 | 5.90 | 60 | 59 | 76 / 8 / 16 | 0 / 9 / 91 / 0 |
+| LoreRim | mage | 6.76 | 6.72 | 24 | 41 | 0 / 58 / 41 | 0 / 57 / 37 / 6 |
+| LoreRim | evoker | 2.83 | 3.54 | 27 | 54 | 85 / 14 / 1 | 0 / 26 / 74 / 0 |
+| LoreRim | conjurer | 22.95 | 32.24 | 52 | 56 | 1 / 62 / 37 | 0 / 81 / 19 / 0 |
+| LoreRim | healer | 24.22 | 14.83 | 55 | 35 | 1 / 27 / 72 | 0 / 73 / 27 / 0 |
+| LoreRim | warlock | 16.41 | 8.89 | 40 | 41 | 2 / 56 / 43 | 0 / 24 / 76 / 0 |
+
+What it says:
+- **The fact cause is gone.** Under the old rules it was 76 percent of a Tuxborn warlock's regret and 85 percent of a LoreRim evoker's. Today it is 0 in every row. That is the fix/spell-worth mirror doing what it was written for.
+- **The regret itself did not fall.** What is left is gate and weight. On Tuxborn it is mostly gate and cross family: the oracle's best cast is a spell of another family that IAUS vetoed or scored under the floor, not a better bolt. On LoreRim weight leads for mage, conjurer and healer. The within-family part is under 2 U per fight for mage, evoker and warlock, and 7 to 22 U for healer and LoreRim's conjurer.
+- **The world's own numbers.** Today's pick is 13 to 39 percent under the best castable spell of its family in effect per cast second, and 22 to 79 percent under the best across families. Under the old rules 13 to 47 and 34 to 79. So the spell choice inside a family got a little better and is still not good. That is what the spells stage and the SpellWorth table are for.
+- Healer on Tuxborn reads worse today (32 to 59). One fight of the six carries most of it. Not a finding until the tune's four seeds say so.
+
+The hand and sight causes are 0 except one row. Each run costs what an oracle fight costs: 3,263 and 4,357 CPU seconds for the two Tuxborn tables, 10,627 and 8,067 for LoreRim's (30 fights each, the full race).
 
 ### 15.5 The follow and spells stages
 
