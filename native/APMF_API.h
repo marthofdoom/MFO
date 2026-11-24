@@ -90,10 +90,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v45, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v46, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 45;
+    inline constexpr std::uint32_t kABIVersion = 46;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -612,8 +612,11 @@ namespace APMF_API {
                                      //       player. A target that is not a loaded reference is found
                                      //       at Engage: the claim is ended (kApproachState_TargetLost).
                                      //
-                                     //       FIELD STATUS: built, CI-verified, NOT yet observed on a
-                                     //       deck (the "[ch.24]" heartbeat counts the seats).
+                                     //       FIELD STATUS: OBSERVED on a deck (1.6.1170, 2026-11-17 and
+                                     //       11-23), a reference and a point, with and without Hold:
+                                     //       the area carries the bound, the engine's Return To Combat
+                                     //       Area walks the actor in, and it holds inside R. Numbers:
+                                     //       Docs/FACETS.md ch.24 "Holding a spot".
         kIntent_CastGuard     = 25,  // ch.25 GUARD this actor's own casts (ABI v21). Mode: DENY at the cast
                                      //       gates (0x0A CheckCast on the two HAND casters, 0x06 CheckStartCast).
                                      //       Param: ival = CastGuardFlags (>= 1 known bit, no unknown bit); fval =
@@ -834,6 +837,16 @@ namespace APMF_API {
                                     //   the actor stays within R of X (moving tactically inside it)
                                     //   until the client releases it or another end condition fires.
                                     //   Without it the claim ENDS on arrival (kApproachState_Arrived).
+                                    //   HOLDING A SPOT = kApproach_Point | kApproach_Hold with a small R.
+                                    //   The actor is NOT frozen: inside R the engine's own movement
+                                    //   leaves still run, every destination clamped to the disc, so it
+                                    //   keeps moving in short steps and attacks, casts, shoots and blocks
+                                    //   as in any fight (measured at R 90 by the gait probe: 19 to 87
+                                    //   units from the point, forward, strafe and backpedal samples at 46
+                                    //   to 210 units/s, no leave-and-return after arrival; where it FACES
+                                    //   was not measured). One re-point in that run moved away from its
+                                    //   point and never arrived. No R below 90 has been run on a deck. A
+                                    //   true stand-still inside R is not part of this facet.
         kApproach_Point = 1u << 1,  // ABI v39. The centre is a WORLD POINT, param.pos, instead of a reference:
                                     //   "give ground to there". param.target MUST be 0 with this bit (so an APMF
                                     //   older than v39, which does not know the bit, REFUSES the claim for its
@@ -3297,11 +3310,15 @@ namespace APMF_API {
                                      //      one refused NoChannel (unknown / unserved), so it is no proof of service
         std::uint32_t offFacets;     // +20  those of `facets` on which the CALLER's priority is 0 (off)
         char          why[96];       // +24  the refusal's reason, NUL-terminated, truncated to fit ("" if none)
-        std::uint32_t reserved[2];   // +120
+        std::uint32_t castSeats;     // +120 ABI v46: CastSeatCoverage bits, what this install's cast seats cover
+                                     //      (every query, whatever its call). Was reserved[0]: an APMF under
+                                     //      v46 writes 0 here, so read it only when abiVersion >= 46
+        std::uint32_t reserved;      // +124 zero (was reserved[1])
     };
     static_assert(sizeof(APMF_ServeInfo) == 128, "APMF_ServeInfo is 128 bytes, byte-shared with clients");
     static_assert(offsetof(APMF_ServeInfo, why) == 24, "APMF_ServeInfo layout is frozen");
-    static_assert(offsetof(APMF_ServeInfo, reserved) == 120, "APMF_ServeInfo layout is frozen");
+    static_assert(offsetof(APMF_ServeInfo, castSeats) == 120, "APMF_ServeInfo layout is frozen");
+    static_assert(offsetof(APMF_ServeInfo, reserved) == 124, "APMF_ServeInfo layout is frozen");
     inline constexpr std::uint32_t kServeInfoV35Size = 128;
 
     // The v35 interface: APMF_API_v34's members verbatim (prefix EXTENSION), then ONE appended slot.
@@ -3847,6 +3864,56 @@ namespace APMF_API {
     };
     inline constexpr std::uint32_t kCombatStyleMaxClaims = 64;   // actors with a winning claim at once; more are
                                                                  //   inert and logged
+
+    // ---- ABI v46: CAST SEAT COVERAGE (which engine caster rows a kIntent_Cast claim can drive) -----------
+    // No new slot and no layout change: the interface object stays an APMF_API_v38 and `abiVersion` reports
+    // 46. CanServe (v35) now writes these bits into APMF_ServeInfo::castSeats (+120, was reserved[0]) on every
+    // query that fills the struct. They describe THIS install (which seats passed their self-check and were
+    // written at kDataLoaded), not an actor or a spell: a client maps its spell to the engine's caster row
+    // itself (the classify table, Docs/FACETS.md ch.8b) and reads the row's bit.
+    //
+    // A ROW BIT means the four caster seats answer a claim on that caster type: 0x06 CheckStartCast (WHETHER),
+    // 0x07 CheckStopCast (HOW LONG), 0x0A GetMagicTarget (WHERE) and, when armed, 0x0D SetupAimController.
+    // kCastSeat_Reanimate is the corpse seat (ABI v42), a different mechanism with the same meaning.
+    // The four rows v46 adds (Stagger, Disarm, TargetEffect, Paralyze) come with kCastSeat_TypeEquip: the
+    // row's own equip condition (the item's CheckShouldEquip: its cooldown, its distance, "the effect applies
+    // to this target", "the target holds a weapon") no longer refuses the claim's driven form on its own
+    // hand. Three engine reasons still stand there: the actor is fleeing, the spell's effect is already on
+    // the target (not asked for a concentration spell), and for a spell (not a staff) he cannot afford it.
+    // The bit is reported only with at least one of the four row bits, and an item is admitted only while
+    // its own row's bit is set.
+    // THE CLIENT'S PART once it claims such a spell (the engine no longer checks these for the claim): the
+    // row's keyed effect can land on the claimed target (the effect's conditions; for Turn Undead the level
+    // its magnitude allows), a Disarm target holds a weapon, and the target is in the spell's reach (the
+    // engine asked Stagger / Disarm 256 and Paralyze 384 units by its GMSTs).
+    // kCastSeat_SkillGate: the engine gives an NPC no combat item for a spell when one of its effects has a
+    // minimum skill (MGEF "Minimum Skill Level") above the NPC's skill; with this bit a live claim's driven
+    // form passes that test, so the claimed spell can be chosen at all.
+    // WHAT STAYS THE ENGINE'S on every row: magicka at the cast, hand readiness, the equip itself and its
+    // animation, and the world's reaction to the spell (an effect that cannot land on the target still does
+    // not land: the cast is made and spent). A bit is no promise a cast fires; GetClaimEndReason and the
+    // client's own never-fired release still apply.
+    // An APMF under v46 writes 0: the client then treats Stagger, Disarm, TargetEffect and Paralyze rows as
+    // not served, as before. APPEND-ONLY: never reuse or renumber a bit.
+    enum CastSeatCoverage : std::uint32_t {
+        kCastSeat_Restore      = 1u << 0,
+        kCastSeat_Offensive    = 1u << 1,
+        kCastSeat_Ward         = 1u << 2,
+        kCastSeat_Summon       = 1u << 3,
+        kCastSeat_Cloak        = 1u << 4,
+        kCastSeat_Light        = 1u << 5,
+        kCastSeat_Invisibility = 1u << 6,
+        kCastSeat_BoundItem    = 1u << 7,
+        kCastSeat_Armor        = 1u << 8,
+        kCastSeat_Script       = 1u << 9,    // also every rowless spell (served as Script)
+        kCastSeat_Stagger      = 1u << 10,   // v46
+        kCastSeat_Disarm       = 1u << 11,   // v46
+        kCastSeat_TargetEffect = 1u << 12,   // v46: Turn Undead, Banish, Command (CommandSummoned)
+        kCastSeat_Paralyze     = 1u << 13,   // v46
+        kCastSeat_Reanimate    = 1u << 14,   // the ABI v42 corpse seat is installed
+        kCastSeat_TypeEquip    = 1u << 16,   // v46: the equip-condition admission for bits 10..13 is installed
+        kCastSeat_SkillGate    = 1u << 17,   // v46: the minimum-skill admission is installed
+    };
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the
     // base type; a client that asked for ABI >= N checks p->abiVersion and casts up

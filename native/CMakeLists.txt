@@ -80,6 +80,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/SpellSupport.cpp
     cast/Archetype.cpp
     cast/WillWork.cpp
+    cast/NoEffect.cpp
     cast/Corpse.cpp
     cast/SummonProbe.cpp
     cast/Auto.cpp
