@@ -312,6 +312,12 @@ namespace Sim {
     inline constexpr const char* kFixtureNames[] = { "open-room", "corridor-l", "doorway", "doorway-open", "doorway-plain", "locked-door", "stair-tower", "ledge", "ridge", "u-corridor", "dead-end", "island", "pillars", "narrow", "seam", "trust-wall", "trust-one-way",
         "loot-room", "loot-backs", "loot-freeze", "loot-gate", "loot-town", "loot-shop", "loot-watch" };   // batch L: nopool, so no ordinary fight draws them and the pool hash is what it was
     inline bool LoadFixtures(EnvPool& P) { bool ok = true; for (const char* n : kFixtureNames) ok = P.Add(g_envDir + "/" + n + ".mfoenv", true) && ok; return ok; }
+    // HELD-OUT PLACES (sim v4 batch C): `--env-hold train|heldout` splits the library by a hash of each place's id, one in kEnvHoldEvery held out, so a
+    // tuning is checked on places it never saw. 0 = every place (the default, and what the baselines and the path gate read). The pool's hash is in
+    // the world tag, so a compare across the split is refused like any other change of places.
+    inline int g_envHold = 0;                       // 0 all | 1 train | 2 heldout
+    inline constexpr unsigned kEnvHoldEvery = 4;
+    [[nodiscard]] inline bool EnvHeldOut(const std::string& id) { std::uint32_t h = 2166136261u; for (unsigned char ch : id) { h ^= ch; h *= 16777619u; } return (h >> 5) % kEnvHoldEvery == 0; }
     // index.json of the library: every environment of a set (optionally one class). Returns the number loaded.
     // `<set>/heldout` (or `all/heldout`): the set's HELD-OUT places instead (tools/envextract: disjoint from every library place of every set).
     inline int LoadSet(EnvPool& P, const std::string& setArg, const std::string& cls) {
@@ -319,7 +325,7 @@ namespace Sim {
         const char* home = std::getenv("HOME"); const std::string root = std::string(std::getenv("MFO_ENV_CACHE") ? std::getenv("MFO_ENV_CACHE") : (std::string(home ? home : ".") + "/.cache/mfo-env"));
         std::ifstream in(root + "/index.json"); if (!in) return -1; std::stringstream ss; ss << in.rdbuf(); const std::string s = ss.str(); JP jp{ s }; const J j = jp.val();
         int n = 0; for (const auto& kv : j["sets"].o) { if (set != "all" && kv.first != set) continue;
-            for (const J& e : kv.second[held ? "heldout" : "envs"].a) { if (!cls.empty() && e["class"].s != cls) continue; if (P.Add(root + "/" + e["file"].s, true)) ++n; } }
+            for (const J& e : kv.second[held ? "heldout" : "envs"].a) { if (!cls.empty() && e["class"].s != cls) continue; if (!held && g_envHold != 0 && EnvHeldOut(e["id"].s) != (g_envHold == 2)) continue; if (P.Add(root + "/" + e["file"].s, true)) ++n; } }   // --env-hold splits the library's own places (batch C); `<set>/heldout` is envextract's disjoint list (batch L)
         return n;
     }
 

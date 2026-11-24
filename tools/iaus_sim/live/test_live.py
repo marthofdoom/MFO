@@ -329,6 +329,16 @@ class Runner(unittest.TestCase):
         rec = json.load(open(os.path.join(out, "round.json")))
         self.assertEqual(rec["driver_args"], ["--cells", "all"])                                             # the ORIGINAL arguments stay
         self.assertEqual(rec["history"][-1]["driver_args"], ["--cells", "15"])
+        # backlog (sim v4 slice 1, SEV-4): the accepted arguments are the ones in force. The same command resumes WITHOUT --new-args (it was refused,
+        # because the comparison was against the original for ever), adds no history row, and the original command now needs the flag.
+        n_hist = len(rec["history"])
+        self.assertEqual(subprocess.run(cmd[:-2] + ["--cells", "15"], env=env, capture_output=True).returncode, 0)
+        rec = json.load(open(os.path.join(out, "round.json")))
+        self.assertEqual((rec["driver_args"], rec["driver_args_now"], len(rec["history"])), (["--cells", "all"], ["--cells", "15"], n_hist))
+        r = subprocess.run(cmd, env=env, capture_output=True, text=True)                                     # back to the original: another change, refused
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("other driver arguments", r.stderr)
+        self.assertEqual(subprocess.run(cmd[:-3] + ["--new-args", "--", "--cells", "all"], env=env, capture_output=True).returncode, 0)
         open(binary, "a").write("# rebuilt\n")                                                              # another simulator binary
         r = subprocess.run(cmd, env=env, capture_output=True, text=True)
         self.assertNotEqual(r.returncode, 0)

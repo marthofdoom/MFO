@@ -1229,3 +1229,209 @@ The game fails the gate on every set: that is the report's point, not a lab fail
 | marth's rulings of 11-24 | `Rules::dibsNearEnough` and `Rules::gateEventsOnly`, default ON as native will become, `--loot-rule dibsNear=0` / `gateEvents=0` for today's native | scenarios `ruling-near-is-enough`, `ruling-gate-events-only` |
 
 The review's native verdicts: N2 and N3 are proven in the field logs of 11-18 and 11-23, N1 is proven in code, N6 is the `gateReadmitMoveU` 500 loop of the 11-18 log (item 000EA786). None is fixed here.
+
+## 15. Batch C as built (branch `feat/sim-v4-choice`, 2026-11-24)
+
+Slices S7, S11a, S11b (the skeleton only) and S11c, with the mirror of `fix/spell-worth` in front of them. The sim and the driver follow the oracle now. Native gained one unwired file pair.
+
+### 15.1 Where things are
+
+| What | Where | To change it |
+|---|---|---|
+| Which spells a follower can measure | `tools/iaus_sim/Data.h kIndirectArch`, `SimSpell::indirect`, `Policy.h SpellMeasured`, `FillSpellEstimate` | an archetype whose damage lives elsewhere: one value in `kIndirectArch`, after native's switch in `iaus/Fills.cpp MeasureSpell` |
+| The rules of the 11-23 field build, for the "before" column | `Data.h g_spellRules`, `Policy.h SimGenerate`, `--spell-rules today\|old\|all` | |
+| The ask list (a refused pair stays asked) | `Policy.h` `ServeWith`, native's own `NextAskList` | |
+| Field-size books | `Load.h kFieldBook`, `kFieldBookSize`, `kFieldBookHybrid`, `BookHalf`, `--books lab\|field\|heldout` | the mix or the size: that table |
+| Held-out places | `Env.h g_envHold`, `kEnvHoldEvery`, `--env-hold all\|train\|heldout` | |
+| Spell regret, its causes, the world's own numbers | `Oracle.h RegretLog`, `TrueSpell`, the block in `OraclePolicy::Serve`, `sim.cpp SpellRegretReport`, `--spell-regret` | a cause: the chain in `Serve`. A family's number: `TrueSpell` |
+| Alternate tables on one oracle fight | `Oracle.h AltTable`, `--regret-alt "<sets>"` | |
+| Exact pruning | `Oracle.h Dominates`, `--oracle-prune off` | a number the world reads for an offense cast: one more term in `Dominates` |
+| The IAUS arm of a gap fight alone | `sim.cpp` `--gap-arm iaus` (`GAPIAUS` lines) | |
+| The field's failure, counted without an oracle | `World.h Tally spTop`, metrics `sp.unmTop%`, `sp.tie%`, `sp.capTop%` | |
+| The follow stage | `tune_driver.py stage_follow`, `follow_class`, `follow_candidates` | sizes: `FULL follow_seeds`, `follow_knobs`, `follow_min_gap` |
+| The spells stage | `tune_driver.py stage_spells`, `spell_knobs`, `SPELL_FAMILIES`, `SPELL_CONS`, `SPELL_SCALARS`, `SW_KNOBS` | a shared number to search: a row of one of those lists |
+| The fence form of the J rule | `tune_driver.py judge(fence=True)` | |
+| The cost cuts | `tune_driver.py table_slice` (3 and 4), the size loop in `follow_class` (2) | |
+| The tune's world | `tune_driver.py V4_TRAIN`, `HOLD_FLAGS`, `world_flags`, `--world v4` (the default) | |
+| The spell-worth reader, SKELETON | `native/iaus/SpellWorth.h`, `SpellWorth.cpp` | see 15.6 |
+
+### 15.2 The mirror of fix/spell-worth
+
+Most of that fix needed no mirror: the lab compiles `native/iaus/Generate.cpp`, so the per-second comparison (`Facts::expRate` against `bestDamage`), the exploit term reading no resist the damage already carries, the immune pairs dropped and the placeholder for an unmeasured spell were in the lab the moment main had them. What the lab fills itself is the BOOK, and it filled `measured = true` for every spell. So the lab had no unmeasured spell and the placeholder could not be searched.
+
+**How the lab decides a spell is unmeasured.** From the world json's effect records, never from a name. `Data.h Classify` reads each effect's `archetype`. A spell is `indirect` when any effect's archetype is Script (1), Cloak (35), EnhanceWeapon (39) or SpawnHazard (40): native's own four, the damage of which lives in a hazard, a second spell, a script or a weapon enchantment. A spell is unmeasured when it is an offense spell, it is indirect, and its own hostile value-modifier effects on health sum to zero. That last test is `Estimate::DamageUnmeasurable`, native's function, called by the lab. A bolt with a rider keeps its direct damage, a lower bound. Counts in the taught pools: Tuxborn 108 hostile spells are indirect with no direct damage, 271 are riders with direct damage, 128 are plain. LoreRim 169, 287, 50.
+
+Mirrored with it:
+- **Units.** A concentration spell's entry holds one second of the stream (`Fills.cpp Total`). The lab's `SimSpell` holds its 2 s stream, so the entry is half of it. Before, a stream read twice as good per second as it is.
+- **The level cap.** `SpellEntry::levelCap` is the record's cap for Calm, Demoralize, Frenzy and Turn Undead. The pairs the generator queues (`Generated::capQueued`) join the ask list.
+- **The ask list.** `iaus/Candidates.cpp NoteDecision` keeps a refused pair on the list while its No is under 6 s old. The lab asked only the top pairs of the last decision, so a refused pair came back every other lap. The lab now runs native's `NextAskList`.
+- **`t.unmeasuredDamage`** is in `Tune.h kTuneScalars` and is a knob of the spells stage (`SPELL_SCALARS`).
+
+Not in the extract, so not mirrored: effect and MGEF conditions (native counts conditional damage effects once, by the largest. The lab sums every effect), the spell type (a poison-type spell reads poison resist first. The lab reads magic resist for all), and the hazard record. That last one matters: the lab's WORLD deals no damage for the hazard a spell spawns, so a Wall of Flames is worth nothing here and the oracle never picks it. A request to `tools/list_balance`: the three fields above, and the hazard's own spell.
+
+Effect on the built-in baseline: the stream unit moves the casters (evoker, seed 1, J 68.19 to 71.75). The three baselines were rewritten once, at the end of the batch.
+
+### 15.3 Field-size books, and the field's failure reproduced
+
+`--books field` gives a caster the mix of Jesper's book (74 offense, 4 control, 13 heal, 8 buff, 3 ward. Summon 6 is an ASSUMPTION, his line holds none) times a size drawn per follower between 60 and 120 percent, from the world's taught spell records of each nature that his skill allows, without replacement, seeded by the fight. A class off the Mage line holds 35 percent of it (ASSUMPTION). A spell he cannot pay for stays in the book, as in the field. Costs, magnitudes and perk multipliers are the list's own, as before. `--books heldout` draws from the other half of the records (a hash of the editor id), so a tuning is checked on spells no search saw. The built-in world has 17 spells and gives what it has: field-size books need a list world.
+
+`book_from_log.py` (a real follower's `[spellbook]` dump as a book) is not built. It needs the dump keyed by (plugin, local id) and the extract keyed the same way. Neither is today.
+
+The field's failure was two things. Checked by the three counters, natural bracket, Tuxborn, seed 1 (a tiny run, and a CLI check pins it):
+
+Share of the subject's spell laps, percent, `--world v3 --books field --seed 1`, natural fights. `unmTop` an unmeasured spell is on top, `tie` the top two spells score the same, `capTop` a level-capped control spell is on top.
+
+| World | Class | unmTop old | tie old | capTop old | unmTop today | tie today | capTop today |
+|---|---|---|---|---|---|---|---|
+| Tuxborn | evoker | 41.3 | 6.2 | 0 | 1.9 | 0 | 0 |
+| Tuxborn | mage | 28.2 | 2.2 | 0.2 | 0 | 0 | 0.2 |
+| Tuxborn | healer | 47.7 | 0 | 0.3 | 0 | 0 | 0.3 |
+| Tuxborn | conjurer | 24.8 | 5.6 | 0 | 0.2 | 0.2 | 0 |
+| Tuxborn | warlock | 14.3 | 0 | 0.2 | 0 | 0 | 0.2 |
+| LoreRim | evoker | 63.2 | 4.3 | 0.1 | 19.5 | 7.2 | 0 |
+| LoreRim | mage | 59.2 | 14.1 | 0 | 16.3 | 4.4 | 0 |
+| LoreRim | healer | 55.5 | 0 | 0.9 | 0 | 0 | 1.2 |
+| LoreRim | conjurer | 42.5 | 6.0 | 0 | 6.3 | 3.7 | 0 |
+| LoreRim | warlock | 75.9 | 0 | 0.7 | 40.1 | 1.3 | 1.3 |
+
+On Tuxborn today's rules end it. On LoreRim they do not: an unmeasured spell is still on top in 16 to 40 percent of an evoker's, a mage's and a warlock's spell laps, and two spells still tie. LoreRim's pool holds more spells with no direct damage (169 against 108), and with nothing measured to beat it the placeholder `t.unmeasuredDamage` wins. That number is the spells stage's first knob.
+
+- **Unmeasured spells on top, and tied.** Reproduced with `--spell-rules old`, gone today.
+- **A level-capped Turn on top.** NOT reproduced by the rules alone: the lab's will-work answers a capped pair No on the lap after it is asked, under both rules, so a capped control spell is on top in about one lap in a hundred either way. In the field the Turn also keyed a row no caster served (`--seats old` in the v4 world is that game). Measured: under `--seats old` in the v4 world a capped control spell is on top in about 1 percent of laps too. So the capped Turn that held the top in the field is not in the lab. What the lab lacks is the game answering Yes, or nothing, for a capped pair. It is on the open list.
+
+### 15.4 The regret report
+
+On the gap pass (`--class-oracle N --spell-regret`), so it costs no oracle fight of its own. Per decision of the subject where IAUS picked a cast or the oracle's best option is one: the oracle's paired lead of its best castable spell over IAUS's pick, in U, counted only when the race dropped IAUS's pick. The causes, in the order they are tested:
+
+- **gate**: IAUS vetoed the oracle's spell or scored it under the floor, or picked something the class's rulings forbid.
+- **sight**: that veto was the sight term, or the spell ranks lower while IAUS reads its target occluded.
+- **hand**: that veto was the hand term, or the spell ranks lower with a hand-lost share.
+- **fact**: ranked lower and an input is wrong or absent. Either spell is unmeasured in his book, or both are offense spells whose estimate orders them the other way round from what the world does per cast second.
+- **weight**: ranked lower with none of the above.
+
+Beside it, from the world and not from the estimate: how far his pick is under the best castable spell in effect per cast second (inside his pick's family, and across the families that have a number) and per magicka. The unit across families is health: removed, restored, or a controlled foe's seconds times that foe's damage rate. A buff, a ward and a summon have no number in the lab yet.
+
+The table, before (`--spell-rules old`) and today, field-size books:
+
+Six natural fights per class, seed 1, `--world v3 --books field`, subject only. `regU/f` is the regret in U per fight, `any` the share of cast decisions with a regret, then the cause split in percent of the regret. Six fights is a small table: read the cause columns and the size of the numbers, not a difference of a few U between two rows.
+
+| World | Class | regU/f old | regU/f today | any old | any today | old: fact / weight / gate | today: fact / weight / gate / sight |
+|---|---|---|---|---|---|---|---|
+| Tuxborn | mage | 0.38 | 0.42 | 13 | 15 | 0 / 27 / 73 | 0 / 25 / 75 / 0 |
+| Tuxborn | evoker | 2.02 | 0.81 | 50 | 29 | 6 / 10 / 84 | 0 / 27 / 73 / 0 |
+| Tuxborn | conjurer | 16.47 | 16.31 | 60 | 41 | 0 / 4 / 95 | 0 / 3 / 97 / 0 |
+| Tuxborn | healer | 31.97 | 58.56 | 54 | 52 | 13 / 9 / 78 | 0 / 13 / 87 / 0 |
+| Tuxborn | warlock | 6.54 | 5.90 | 60 | 59 | 76 / 8 / 16 | 0 / 9 / 91 / 0 |
+| LoreRim | mage | 6.76 | 6.72 | 24 | 41 | 0 / 58 / 41 | 0 / 57 / 37 / 6 |
+| LoreRim | evoker | 2.83 | 3.54 | 27 | 54 | 85 / 14 / 1 | 0 / 26 / 74 / 0 |
+| LoreRim | conjurer | 22.95 | 32.24 | 52 | 56 | 1 / 62 / 37 | 0 / 81 / 19 / 0 |
+| LoreRim | healer | 24.22 | 14.83 | 55 | 35 | 1 / 27 / 72 | 0 / 73 / 27 / 0 |
+| LoreRim | warlock | 16.41 | 8.89 | 40 | 41 | 2 / 56 / 43 | 0 / 24 / 76 / 0 |
+
+What it says:
+- **The fact cause is gone.** Under the old rules it was 76 percent of a Tuxborn warlock's regret and 85 percent of a LoreRim evoker's. Today it is 0 in every row. That is the fix/spell-worth mirror doing what it was written for.
+- **The regret itself did not fall.** What is left is gate and weight. On Tuxborn it is mostly gate and cross family: the oracle's best cast is a spell of another family that IAUS vetoed or scored under the floor, not a better bolt. On LoreRim weight leads for mage, conjurer and healer. The within-family part is under 2 U per fight for mage, evoker and warlock, and 7 to 22 U for healer and LoreRim's conjurer.
+- **The world's own numbers.** Today's pick is 13 to 39 percent under the best castable spell of its family in effect per cast second, and 22 to 79 percent under the best across families. Under the old rules 13 to 47 and 34 to 79. So the spell choice inside a family got a little better and is still not good. That is what the spells stage and the SpellWorth table are for.
+- Healer on Tuxborn reads worse today (32 to 59). One fight of the six carries most of it. Not a finding until the tune's four seeds say so.
+
+The hand and sight causes are 0 except one row. Each run costs what an oracle fight costs: 3,263 and 4,357 CPU seconds for the two Tuxborn tables, 10,627 and 8,067 for LoreRim's (30 fights each, the full race).
+
+### 15.5 The follow and spells stages
+
+**follow** (between `edge` and `spells`). Its rule is `stage_follow`'s docstring. In short: the score is the class's gap to its own oracle on its gap fights, on every world of the run. The oracle arm is paid once per class, table and seed. A candidate is the IAUS arm of the same fights with the value set, which is milliseconds. It is accepted when it closes the gap by more than 2 se with no world worse, holds on fresh gap fights, is not worse on the held-out places and books, passes the J rule as a fence (`judge(fence=True)`: the two lines that ask J to rise ask that it does not fall, every gate and the Knight floor unchanged) and the class card, and the gap did not rise when the oracle ran again on the new table. The oracle's own U shift is printed beside every accepted value. The order is the T1 rows, then the cells of the run. The joint gate and the generator read the table through `final_curves()` as before, which now includes this stage's values. Sight-driven knobs stay skipped.
+
+The closable gap is the gap times the (a) share of the divergence cost. It is an ESTIMATE and a report line, since the cluster costs are an ordering and not an additive share.
+
+**spells** (after `follow`). Its rule is `stage_spells`'s docstring. Shared numbers only: `t.unmeasuredDamage`, each cast family's action weight, and for `damage`, `exploit`, `overkill`, `variety` and `control_worth` the shared curve and each cast family's weight on it. A class's own rows on those considerations are the follow stage's. The score is the spell regret pooled over the cells that cast, on the list worlds. One oracle run prices every candidate value as an alternate table: the oracle's option values are read for what the other table would have picked on the same snapshot. That is a screen, because the rollouts ran under the base table, so the winner is then measured as the table on fresh fights, priced on the held-out places and books, and fenced by J over every cell. The `sw.*` table joins the knob list when native reads it (`SW_KNOBS`. Until then a test holds every field in `SW_NOT_SEARCHED`).
+
+**The cuts of 6.2.** Built: 2 (a cell's seed count grows only while its gap is not measured well enough, from 6), 3 and 4 (`table_slice`: a gap fight's command and cache key hold only its own class's values and the T1 rows', so one class's accepted value re-runs one class, and a class that took nothing replays the shipped measurement). Not built: 1 (bands subject-only) changes what the bands mean and waits for marth. 5 is marth's call by the standing rule. 6 was batch W's.
+
+**Validation** (6.4): `test_tune_driver.py ChoiceBatch` plants an improvement and a regression for each stage on a fixed set of results. The stage accepts the first and rejects the second, and rejects a value that fails only on fresh fights, only held out, or only because the gap rose when the oracle ran again.
+
+### 15.6 The SpellWorth skeleton (S11b), and what filling it needs
+
+`native/iaus/SpellWorth.h` and `SpellWorth.cpp`: the named table `struct SpellWorth` (24 fields, each a labelled placeholder), `SetSpellWorthKnob` and `GetSpellWorthKnob` over one name table, and `Estimate::SpellWorthOn(entry, target, snapshot, table, in) -> {known, effect, seconds, magicka}` with one function per term (cast seconds, channel seconds, area, a DoT over the foe's expected life, control, buff, ward and summon in the same unit, magicka against the fight). Every body is a TODO that answers "not known". Nothing calls it. It is in `native/CMakeLists.txt` and in the sim's build. Engine-free: standard headers and `iaus/Snapshot.h`.
+
+One departure from 7.5: the claim-to-fire seconds are per cast FAMILY, not per engine row, because the pure code does not hold the row. `SpellEntry::engineRow` is on the list below.
+
+What the Sonnet brief needs, precisely (the header's own list, items 1 to 5): the table as a member of `Tuning` and its names in `SetTuningScalar`. The names in `tuningfiles.py`, `Tune.h` and `SW_KNOBS`. The inputs the Snapshot lacks, each with its own reader: charge time, the DoT part apart from the direct part, the engine row, the summoned actor's base, what a buff adds and for how long, a ward's power, a foe's expected life, the fight's expected length. The call sites, all in `Generate.cpp Casts`. A harness batch that pins each term.
+
+### 15.7 The tune's world, the commands, the cost
+
+**The world.** `tune_driver.py --world v4` is the default: the library's train places (`--env-set all --env-hold train`), field-size books (`--books field`), and the held-out places and books for every held-out check (`HOLD_FLAGS`).
+
+**What an oracle fight costs there, and why.** With a field-size book a caster has 60 to 100 options at a decision, most of them offense spells on the same foe. Profiled (gprof and callgrind, one evoker fight): a rollout is 3.5 to 7 ms, 55 to 60 percent of it native's own scoring (`Score`, `Input`, `Casts`, `Eval`), 12 to 15 percent the place's sight and path queries, 4 percent allocation. Nothing in `tools/iaus_sim` makes a rollout cheaper without changing what it computes, and `-O3`, `-march=native` and LTO bought nothing (11.3 to 12.8 s on a 12 s fight, noise). The cost is the NUMBER of rollouts. At the first decision of an evoker's fight 58 offense options (29 spells on 2 foes) stood to the ceiling within 1 U of each other, 62 options times 128 streams. Of all options, 27 percent gave the very same utility as an earlier option on each of the first 8 streams.
+
+**The cuts** (`Oracle.h`, the block above `g_oraclePrune`). The ceiling stays 128, a rollout runs to the fight's end, every decision point and every candidate stay. Off in the simulator unless asked for, on in every oracle run of the driver (`tune_driver.py ORACLE_CUTS`, `--oracle-cuts ""` takes them off):
+
+- **A, `--oracle-prune target`.** The dominance test reads what a spell does to THIS foe (damage times the foe's own resist factors), so two bolts of different elements are compared on the foe they are thrown at. A spell with an area keeps the same-element test.
+- **B and C, `--oracle-pair 0.10`.** Pairwise indifference. After each look an option is retired when another standing option exists that it is not better than by more than 0.10 U, at the race's own p on their paired difference. An option that gave the same utility as an earlier one on every stream is retired from 16 streams on (a twin. At 8 streams half of the twins still differ later, one of them by 0.5 U). Never retired this way: the best, IAUS's own pick, an alternate table's pick, the action he is on. So a divergence and a regret mean what they meant.
+- **D, `--oracle-nmin 4`.** The first look after 4 streams instead of 8.
+
+**The proof.** `--oracle-dump <file>` makes the full race run every option on every stream and writes the table per decision. A stream's seed does not depend on which options stand, so `tools/iaus_sim/oracle_replay.py` replays any rule on the very rollouts the full race saw (`--check`: its copy of the race reproduces the dump's own picks and rollout counts, 74 of 74). 74 decisions of evoker, healer and nightblade fights, Tuxborn, the tune's world, 97 options a decision. Loss is the 128-stream mean of the best option minus that of the pick, in U per decision. The full race's own loss is 0.005.
+
+| Rule | Rollouts a decision | Fewer by | Same pick as the full race | Loss added, U a decision (se) | Largest loss |
+|---|---|---|---|---|---|
+| the full race | 3,311 | | | | 0.16 |
+| A alone | 2,883 | 1.15 | 100 % | 0 | 0.16 |
+| B alone (twins) | 2,688 | 1.23 | 100 % | 0 | 0.16 |
+| C alone (pair 0.10, twins in it) | 1,717 | 1.93 | 95.9 % | 0.0010 (0.0007) | 0.16 |
+| D alone | 3,192 | 1.04 | 100 % | 0 | 0.16 |
+| A + C + D, the tune's setting | 1,398 | 2.37 | 97.3 % | 0.0026 (0.0020) | 0.16 |
+| the same with pair 0.25 | 1,147 | 2.89 | 93.2 % | 0.0047 (0.0027) | 0.16 |
+| for scale: ceiling 64 | 2,064 | 1.60 | 89.2 % | 0.056 (0.029) | 1.89 |
+| for scale: ceiling 32 | 1,173 | 2.82 | 78.4 % | 0.230 (0.109) | 5.53 |
+
+A, B and D give the same pick every time. The tune's setting changes the pick in 2 of 74 decisions, 0.19 U worse over the two together. In J: a caster decides 10 to 20 times a fight, so 0.03 to 0.05 U a fight, against gaps of several U and a divergence floor of 1 U. Lowering the ceiling to 32 costs 90 times that for about the same saving, which is the measured reason the ceiling is not the lever.
+
+**End to end**, the same 12 fights played twice (mage, evoker, healer, 4 natural fights each, Tuxborn, the tune's world, seed 1): 6,344 CPU seconds with the full race, 2,653 with the cuts, 2.39 times less. Rollouts a decision: mage 6,540 to 1,476, evoker 3,701 to 1,110, healer 3,120 to 1,619. The oracle's U per fight 95.33 and 95.70, paired difference +0.36 (se 0.20) for the cut race: no loss to see, and 8 of the 12 fights end within 0.1 U of each other. The IAUS arm is the same number in every fight, as it must be. A fight's own decisions differ after the first changed pick, so this is the sanity check and the replay is the proof.
+
+The default pruning (`--oracle-prune on`) against `off`, the identity check: evoker, Tuxborn, `--world v3 --books field`, 2 fights. The same 14 decisions, the same picks, the same gap and the same regret in every line, 116 options not raced, 147 against 150 CPU seconds.
+
+**What is NOT cut, and what it would take.** A blade's oracle is not helped (a knight has 12 options: 287 against 303 CPU seconds for 4 fights). Shared rollouts between near-twins beyond the pair rule, and cached sight or path answers inside a rollout, were looked at and not built: the first is what the pair rule already takes, the second is at most the 12 to 15 percent above and would have to be proven exact.
+
+**CPU for a full round, 38 cells, four worlds. ESTIMATE.** Measured with the cuts, the tune's world, CPU seconds an oracle fight, subject only: mage, evoker and healer 221 (12 fights, Tuxborn), conjurer 24, warlock 3, nightblade under 1 (2 fights each: a fight that ends fast is cheap, so these are too few to trust), LoreRim's evoker and healer 16 (4 fights), knight 72 (4), archer 62 (2), thief 3 (2). Pooled: about 140 a caster fight, about 40 a fight of the others. Fights, counted from the driver's rules at five fights a run: follow's first measure 38 x 4 x 6 seeds, grown where the gap is noisy, about 7,000. Each accepted follow value three more oracle sets (fresh, held out, the oracle again), at 1.5 values a cell about 20,000. Spells, 15 caster cells on 3 list worlds, two rounds, about 6,000. The gap stage about 6,000 not already cached. So about 39,000 oracle fights, 19,000 of them a caster's: **about 1,000 CPU hours for the oracle stages, between 700 and 1,500** given how few fights the per-fight figures stand on. Without the cuts the caster half is about 2.4 times that, so the round would be near 2,200. The search stages (classes, edge, joint, globals and the rest) were 90 to 130 CPU hours on the v3 world (6.1) and a v4 IAUS fight costs about 2.5 times a v3 one (13): 250 to 300. **The round: about 1,250 CPU hours, between 950 and 1,800.** On 16 cores at idle priority with the machine quiet that is 3 to 5 days. The 1,000 hour target is inside the range and is not the middle of it.
+
+The knobs, in the order I would use them, none of which touches how hard the oracle thinks:
+1. **Cells per round.** `--cells 15` (Beta 1) first is about 40 percent of the round. The 23 parked classes follow as a second round on the same `--out` pattern.
+2. **Worlds.** Every oracle stage is linear in them. `--worlds builtin,LoreRim,Tuxborn` saves about a quarter. The built-in world has no field-size pool, so it is the cheapest to keep and the least like the field.
+3. **`follow_knobs`** (12 values a class at most) and **`gap_seeds`** (12): the accepted-value loop is half the fights. 6 and 6 saves about a quarter and searches less.
+4. **`--oracle-cuts "--oracle-prune target --oracle-pair 0.25 --oracle-nmin 4"`**: about 1.2 times fewer caster rollouts for 0.002 U a decision more.
+5. **Smaller books in the rollouts, the full book at the decision.** Not built. It changes the base policy the oracle plans against, so it needs its own replay proof.
+6. **The ceiling** is marth's call by the standing rule. The table above is what it costs.
+
+**Before the tune, once, on this world** (9.6 and 10.3 item 3. `B` is the round's simulator, `<out>/bin/sim` after the first start, or a `SIM_OUT` build. `W` is `--world v4 --env-set all --env-hold train --books field`, `C` is `--oracle-prune target --oracle-pair 0.10 --oracle-nmin 4`):
+
+1. The oracle-relative bounds of `Playstyles.h`, then rewrite the rows from the `ORCSURV` and `ORCHEAL` lines. 960 fights with every follower planned: ESTIMATE 80 to 150 CPU hours.
+   `taskset -c 0-7 nice -n 19 $B --no-json --threads 8 $W $C --seed 1 --fights 1 --rating 0 --class-oracle 160 --gap-scenarios 0 --classes mage,evoker,conjurer,warlock,healer,priest --parked > /mnt/gaming/modlists/Projects/_tuning/pre-v4/bounds.txt`
+2. The potion-worth tables: the driver's `prep` stage measures each list's own. The built-in header: `python3 tools/iaus_sim/potion_worth.py --header`, then rebuild.
+3. Heal timing under pressure (v3 15.6): the command of item 1 with `--class-oracle 24 --gap-bracket strong2 --classes healer,priest,mage`.
+4. The pathing gate's bounds (`kPathBounds`): `$B --no-json --threads 8 $W --classes beta1 --seeds 1,2,3 --path-oracle 8`, then the rows from the `ORCPATH` lines.
+5. The regret table of 15.4 in the v4 world, as the "before" of the spells stage: `$B --no-json --threads 8 $W $C --seed 1 --fights 1 --rating 0 --gap-scenarios 0 --gap-dump --oracle-subject-only --spell-regret --classes mage,evoker,conjurer,healer,warlock --class-oracle 6 --list ~/.cache/mfo-list-balance/Tuxborn.sim.json --potion-worth legacy` (and LoreRim). The driver's `spells` stage prints the same table on its own base, so this one is optional.
+
+**The tune.** Idle priority is the default, stop and resume are the same command:
+
+`python3 tools/iaus_sim/live/run_round.py --out /mnt/gaming/modlists/Projects/_tuning/r3-v4 --label "sim v4: follow the oracle, spell choice" -- --cells all --worlds builtin,LoreRim,Tuxborn,Vanilla`
+
+`--world v4` and the cuts are the driver's defaults, so they are not on the line. The Beta 1 cells first: `--cells 15` on its own `--out`.
+
+### 15.8 Checks, and what was not run
+
+Run on the merged tree (main at 85854ecc with batch L in it):
+- The simulator builds. `SIM_CLITEST=1 run.sh` once: CLI-CHECKS PASS, one check skipped (`calib_damage.py`, no field logs on this path). `--loot-test`: 15 scenarios pass.
+- The baselines, rewritten once after the merge: the v2 and v3 files came out byte-identical, so batch L moved nothing there and the three J pins of `run.sh` stand (69.13, 79.62, 80.17). The v4 file is new (batch L's places with this batch's mirror, 1,540 metrics against batch L's own file). Each compares with 0 changes at 8 threads and at 1.
+- `test_tune_driver.py` and `live/test_live.py` pass. The first has a case for the cut switches: on every oracle run, on no IAUS arm, off with one switch.
+- `oracle_replay.py --check`: 74 of 74 decisions replay to the dump's own pick and rollout count.
+- The local MSVC build of `SpellWorth.cpp` was green at 954ccf60. The file did not change since.
+
+Not run: a driver smoke on the merged tree with the cuts (the smoke of 954ccf60 ran follow and spells end to end without them. The cuts change one command line and its cache key). The pre-tune measurements above. The regret table in the v4 world.
+
+### 15.9 Open
+
+- **LoreRim still puts unmeasured spells on top** under today's rules (15.3). `t.unmeasuredDamage` is the knob. If the spells stage cannot close it the placeholder is the wrong shape and the SpellWorth table has to carry it.
+- **The capped Turn is not in the lab** (15.3): the lab's will-work answers a capped pair No on the next lap.
+- **The lab's world deals no damage for a hazard a spell spawns** (15.2), so walls and runes are worth nothing to the oracle. Needs three fields from `tools/list_balance`.
+- **The cost estimate stands on few fights.** An oracle fight costs between 1 and 400 CPU seconds depending on how the fight goes. The first night of the round gives the real figure: `progress.log` holds every run's time.
+- **The pair rule's width is a number somebody chose** (0.10 U, under the 0.3 U the oracle itself calls not worth dithering over). The replay is how to move it.
+- **The stealthy-caster term of the on-foe dominance is not in the replay** (no stealthy caster in the dump). It only makes the test stricter.
+- `book_from_log.py`, the bands subject-only (6.2 item 1), smaller books in the rollouts: not built.

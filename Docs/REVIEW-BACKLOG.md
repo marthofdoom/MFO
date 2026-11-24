@@ -3711,7 +3711,7 @@ Author's notes, open after the slice (none above SEV-3 known to the author):
 - SEV-5 D: SeatRows::NeedMet has no game caller (WillWork inlines it), its harness rows prove nothing; HoldLedger and Actuation.h comments still describe the one-reading hold.
 
 ### feat/tune-app-priority (author note 2026-11-24, b179c001)
-- SEV-4, tools/iaus_sim/live/run_round.py: driver_args is written once and compared on every resume even after --new-args was accepted (driver_args_now is kept apart), so every later resume needs --new-args again.
+- SEV-4, tools/iaus_sim/live/run_round.py: driver_args is written once and compared on every resume even after --new-args was accepted (driver_args_now is kept apart), so every later resume needs --new-args again. **FIXED 2026-11-24 on feat/sim-v4-choice** (the resume is compared with the arguments in force, `driver_args_now`; `test_live.py` covers it). The same shape is still open for the BINARY: `bin_sha` is compared with the original after `--new-bin` was accepted (`bin_sha_now` is kept apart), not fixed there (outside that ruling).
 - SEV-5: a real Stop of a wrapper-led round from the app was not re-run end to end after the fix round.
 ## feat/sim-v4-world (Fable author, 2026-11-23 and 11-24, tools/iaus_sim + the pure native/iaus EnvQuery / PathSearch files + docs; record: Docs/research/2026-11/iaus-sim-v4.md section 13)
 

@@ -12,8 +12,10 @@ usage: run_round.py --out <round dir> [--priority idle|low|normal|high] [--bin <
 WHAT IT DOES, IN ORDER
   0. ONE RUNNER PER ROUND. <out>/round.lock is held (flock) for the life of this process. A second run_round.py on the same --out exits
      at once with code 3 and touches NOTHING: not round.json, not round-status.json, not the unit. This holds with and without systemd.
-  1. <out>/round.json holds the round's ORIGINAL driver arguments and the simulator's sha256. A resume with OTHER arguments is refused
-     (a round is one question): use a new --out, or --new-args to say the change is meant (the original is kept under "history").
+  1. <out>/round.json holds the round's ORIGINAL driver arguments and the simulator's sha256. A resume with OTHER arguments than the ones in
+     force is refused (a round is one question): use a new --out, or --new-args to say the change is meant. The accepted arguments are then
+     the ones in force ("driver_args_now": the same command resumes without the flag), the original stays in "driver_args", and every
+     accepted change is a "history" row.
      A resume with ANOTHER SIMULATOR BINARY is refused too (--new-bin to mean it): the driver's cache is keyed by the binary's hash, so
      nothing of the stopped round would be reused, and the driver then carries nothing over from the old summary (tune_driver.carry_over).
   2. The simulator: --bin, or <out>/bin/sim, built ONCE by tools/iaus_sim/run.sh (delete <out>/bin to rebuild on purpose).
@@ -168,9 +170,13 @@ def main(argv):
         except ValueError:
             rec = {}
     old, old_sha = rec.get("driver_args"), rec.get("bin_sha")
-    if old is not None and old != drv and not a.new_args:
-        raise SystemExit("run_round: %s was started with other driver arguments:\n  then: %s\n  now:  %s\nResume with the same command, use a new --out, or pass --new-args."
-                         % (out, " ".join(old), " ".join(drv)))
+    # The arguments IN FORCE: the original ones, or the ones a --new-args resume was accepted with (driver_args_now). A resume is compared with
+    # these, so the command that --new-args accepted resumes afterwards without the flag, and going back to the original needs the flag again.
+    # round.json "driver_args" stays the ORIGINAL (the round's first question); every accepted change is a "history" row.
+    cur = rec.get("driver_args_now", old)
+    if old is not None and cur != drv and not a.new_args:
+        raise SystemExit("run_round: %s runs with other driver arguments:\n  then: %s\n  now:  %s\nResume with the same command, use a new --out, or pass --new-args."
+                         % (out, " ".join(cur), " ".join(drv)))
     if old_sha and old_sha != bin_sha and not a.new_bin:
         raise SystemExit("run_round: %s was started with another simulator binary (sha256 %s, now %s). Its cached results cannot be reused. "
                          "Resume with the same binary, use a new --out, or pass --new-bin." % (out, old_sha, bin_sha))
@@ -179,8 +185,8 @@ def main(argv):
     if old is None:
         rec = {"driver_args": drv, "bin_sha": bin_sha, "started": now, "history": hist}
     else:
-        if old != drv or (old_sha and old_sha != bin_sha):
-            hist.append({"at": now, "driver_args": drv, "bin_sha": bin_sha, "why": "--new-args" if old != drv else "--new-bin"})
+        if cur != drv or (old_sha and old_sha != bin_sha):
+            hist.append({"at": now, "driver_args": drv, "bin_sha": bin_sha, "why": "--new-args" if cur != drv else "--new-bin"})
         rec.update({"history": hist, "last_resumed": now, "bin_sha_now": bin_sha, "driver_args_now": drv})
         rec.setdefault("bin_sha", bin_sha)
     write_json(rj, rec)

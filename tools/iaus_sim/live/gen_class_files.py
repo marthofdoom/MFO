@@ -118,7 +118,7 @@ def log_accepted_knobs(out):
 def shared_not_written(S):
     """Accepted SHARED values the round holds that no class file carries (worth / loot tables, Tuning globals): named in the manifest."""
     st, out = S.get("stages", {}), []
-    for stage in ("worth", "loot"):
+    for stage in ("spells", "worth", "loot"):   # spells: sim v4 batch C (shared spell-worth numbers, tune_driver.py stage_spells)
         v = st.get(stage, {})
         out += ["%s: %s" % (stage, k) for k in (v.get("kept", []) if isinstance(v, dict) else [])]
     for r in st.get("globals", []) if isinstance(st.get("globals"), list) else []:

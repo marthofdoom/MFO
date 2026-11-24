@@ -70,7 +70,7 @@ namespace {
             S(pathLegs); S(pathUnreach); S(pathBlocked); S(pathReblock); S(pathStuckLegs); S(pathOsc); S(pathDrops); S(pathDoors); S(pathPlans); S(detourN); for (int k = 0; k < 16; ++k) S(detourHist[k]);
             S(pathStuckSec); S(pathHoldUnreachSec); S(pathWalked); S(detourSum); S(envBad); S(envStuckForever); S(pathAwaySec); S(pathCorneredSec); S(castHeldTurns); S(pathHoldSec); S(pathRepeat); S(castZeroFires); S(castZeroHeld);
             S(castUnseated); S(castNeverShort); S(castNeverLong); S(castHeldOff); S(castInterrupted); S(foeCastInterrupted); S(castOccRelease); S(neverSec); S(apprDrops); S(apprBlocked);
-            S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined); S(scrollsUsed); S(extActions); S(moveOrderSec);
+            S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined); S(spTop); S(spTie); S(spUnmTop); S(spCapTop); S(scrollsUsed); S(extActions); S(moveOrderSec);
 #undef S
             // kill order: a priority foe (healer / caster / archer) that dies before every grunt is "good"
             bool gruntDead = false; for (const std::string& k : t.killOrder) { if (k == "grunt" || k == "boss") gruntDead = true; else (gruntDead ? s.killOrderBad : s.killOrderGood)++; }
@@ -111,7 +111,7 @@ namespace {
         m["down%"] = 100.0 * double(a.fightsWithDown) / n; m["takenPerFoe"] = a.foes ? s.dmgTaken / double(a.foes) : -1;
         m["U"] = a.uSum / n; m["pMinHp%"] = 100.0 * a.pMinSum / n; m["mpAtLate%"] = a.mpLateN ? 100.0 * a.mpLateSum / double(a.mpLateN) : -1; m["splashHits/f"] = double(s.splashAllyHits) / n;
         m["ctlFocus%"] = pct(double(s.hitsOnControlled), double(s.hitsWhileCtl)); m["retreat%"] = 100.0 * s.retreatSec / secs;
-        m["wwDecl/min"] = double(s.wwDeclined) / mins; m["ext/f"] = double(s.extActions) / n; m["scroll/f"] = double(s.scrollsUsed) / n; m["move%"] = 100.0 * s.moveOrderSec / secs;
+        m["wwDecl/min"] = double(s.wwDeclined) / mins; m["sp.tie%"] = s.spTop ? 100.0 * double(s.spTie) / double(s.spTop) : -1.0; m["sp.unmTop%"] = s.spTop ? 100.0 * double(s.spUnmTop) / double(s.spTop) : -1.0; m["sp.capTop%"] = s.spTop ? 100.0 * double(s.spCapTop) / double(s.spTop) : -1.0; m["ext/f"] = double(s.extActions) / n; m["scroll/f"] = double(s.scrollsUsed) / n; m["move%"] = 100.0 * s.moveOrderSec / secs;
         // the class playstyle lab: stealth, position, the class rules (iaus-classes.md "Metrics")
         { const double up = std::max(1e-9, s.upSec);
           m["sneak%"] = 100.0 * s.sneakSec / up; m["hidden%"] = 100.0 * s.hiddenSec / up; m["sneakAtk%"] = pct(double(s.sneakHits), double(s.wpnHits)); m["sneakDmg%"] = pct(s.sneakDmg, s.dmgDone);
@@ -172,7 +172,7 @@ namespace {
         char b[300]; if (oc.K > 0) std::snprintf(b, sizeof b, "DIAGNOSTIC fixed K=%d", oc.K); else std::snprintf(b, sizeof b, "streams until separated at p=%g, from %d, ceiling %d", oc.pOne, oc.nMin, oc.ceiling);
         std::string d = b; if (oc.H >= 150.0) d += ", rollouts to the fight's end"; else { std::snprintf(b, sizeof b, ", DIAGNOSTIC rollouts cut at %.0f s", oc.H); d += b; }
         if (oc.every > 0.0) { std::snprintf(b, sizeof b, ", DIAGNOSTIC a decision every %.2f s", oc.every); d += b; } else d += ", every decision point";
-        d += ", every candidate"; if (!oc.split) d += ", DIAGNOSTIC one shared random stream"; if (!g_classRulings) d += ", DIAGNOSTIC class rulings OFF"; return d; }
+        d += ", every candidate"; if (oc.pair >= 0.0) { std::snprintf(b, sizeof b, ", pairwise indifference %.2f U", oc.pair); d += b; } if (g_oraclePrune == 2) d += ", dominance on the foe"; if (!oc.split) d += ", DIAGNOSTIC one shared random stream"; if (!g_classRulings) d += ", DIAGNOSTIC class rulings OFF"; return d; }
     int OracleKOf(const OracleCfg& oc) { return oc.K > 0 ? oc.K : oc.ceiling; }   // the results file's "k": the most streams an option can get
 
     // What the oracle's search did (Oracle.h OracleStats), one line: sizes per decision, and how often the safety ceiling ended a race.
@@ -180,7 +180,8 @@ namespace {
         const double d = std::max<double>(1, double(s.decisions)); char b[400];
         std::snprintf(b, sizeof b, "decisions %ld  options/dec %.1f  streams/dec %.1f  rollouts/dec %.0f  ceiling bound %ld (%.2f%%)  standing there %.1f  unresolved lead mean %.3f max %.3f U", s.decisions, double(s.options) / d, double(s.streams) / d, double(s.rollouts) / d,
                       s.bound, 100.0 * double(s.bound) / d, s.bound ? double(s.standing) / double(s.bound) : 0.0, s.bound ? s.unresolved / double(s.bound) : 0.0, s.unresolvedMax);
-        return b; }
+        std::string o = b; if (s.twins > 0) { std::snprintf(b, sizeof b, "  retired by the pair rule %.1f", double(s.twins) / d); o += b; }
+        return o; }
 
     // ── the named scenarios: IAUS, and (with --oracle) the expert oracle on the SAME fights ──
     int RunScenarios(const Data& D, const std::vector<SimClass>& classes, const std::string& which, std::uint64_t seed, int fights, int threads, bool oracle, const OracleCfg& oc, bool g10Sticky, int trace, Results& out, bool estimates, bool scrollRoad) {
@@ -262,7 +263,7 @@ namespace {
             if (!d.empty()) o += "[" + d + "]"; if (g_v4.env) { char hx[24]; std::snprintf(hx, sizeof hx, "#%08llx", static_cast<unsigned long long>(g_envPool.Hash() & 0xFFFFFFFFull)); o += "+env=" + g_envLabel + hx; } if (g_seats != "today") o += "+seats=" + g_seats; if (g_seatImmunitySeen) o += "+immunity=seen"; o += g_sightTag; } std::string off; for (const V3Flag& f : kV3Flags) if (!(g_v3.*(f.m))) off += std::string(off.empty() ? "" : ",") + f.name + "=off";
         if (!off.empty()) o += "(" + off + ")";
         if (g_v3.chase && g_waiver != 2) o += g_waiver == 1 ? "+waiver=self" : "+waiver=none"; if (g_v3.delivery && g_deliveryOld) o += "+delivery=old";
-        if (!g_mirror) o += "+mirror=off"; if (g_v3.chase && g_engageOnSight) o += "+engage-on-sight"; if (g_v3.delivery && g_deliverSec[0] >= 0.0f) o += "+deliver-sec"; if (g_v3.delivery && g_deliverSec[0] < 0.0f && g_deliverUnfired != 1.0f) o += "+deliver-unfired"; if (g_v3.blockdir && g_blockArc != 180.0f) o += "+block-arc"; if (g_v3.sidestep && g_sideStep == 2) o += "+side-step=away"; if (g_casterPressure) o += "+caster-pressure";
+        if (!g_mirror) o += "+mirror=off"; if (g_spellRules == 1) o += "+spell-rules=old"; else if (g_spellRules == 2) o += "+spell-rules=all"; if (g_books == 1) o += "+books=field"; else if (g_books == 2) o += "+books=heldout"; if (g_envHold == 1) o += "+places=train"; else if (g_envHold == 2) o += "+places=heldout"; if (g_v3.chase && g_engageOnSight) o += "+engage-on-sight"; if (g_v3.delivery && g_deliverSec[0] >= 0.0f) o += "+deliver-sec"; if (g_v3.delivery && g_deliverSec[0] < 0.0f && g_deliverUnfired != 1.0f) o += "+deliver-unfired"; if (g_v3.blockdir && g_blockArc != 180.0f) o += "+block-arc"; if (g_v3.sidestep && g_sideStep == 2) o += "+side-step=away"; if (g_casterPressure) o += "+caster-pressure";
         return o;
     }
     std::string g_potTag;
@@ -754,6 +755,27 @@ namespace {
 // stderr joined to stdout; after the child exits the worker prints "@@END <exit code>". A forked child is the same program with the same
 // state a fresh process would have, except that LoadData of a preloaded path starts from its parsed JSON tree (Load.h PreloadedJson).
 static int RealMain(int argc, char** argv);
+// THE SPELL REGRET REPORT (sim v4 batch C, iaus-sim-v4.md 15; Oracle.h RegretLog). Per class: the machine lines (SPELLDEC / SPELLREG) and one table row.
+// regU/f = spell regret summed per fight. any% = cast decisions with a regret. within / cross = the regret whose oracle spell is of IAUS's own
+// family / of another. The cause split is the share of the regret (Oracle.h). eps / epm = how much better per cast second (within his family, and
+// across the families with a number) and per magicka the best castable spell was than his pick, from the lab's world, as a share of the best.
+template <class GetLog, class GetFights> static void SpellRegretReport(const std::vector<SimClass>& classes, GetLog log, GetFights fights) {
+    static const char* kCause[] = { "fact", "weight", "gate", "hand", "sight" };
+    std::printf("\nSPELL REGRET (rules %s, books %s; U per fight; cause = share of the regret)\n%-17s %6s %7s %7s %6s %7s %7s  %5s %6s %5s %5s %5s  %6s %6s %6s %7s\n", g_spellRules == 1 ? "old" : g_spellRules == 2 ? "all" : "today", g_books == 1 ? "field" : g_books == 2 ? "heldout" : "lab",
+                "class", "fights", "cast/f", "regU/f", "any%", "within", "cross", "fact", "weight", "gate", "hand", "sight", "epsW%", "epsX%", "epm%", "pruned/f");
+    for (std::size_t c = 0; c < classes.size(); ++c) { const RegretLog& r = log(static_cast<int>(c)); const double nf = static_cast<double>(std::max(1L, fights(static_cast<int>(c)))); const char* cn = classes[c].name.c_str();
+        std::printf("SPELLDEC %s %ld %ld %ld\n", cn, r.decisions, r.castDecisions, r.pruned);
+        double within = 0, cross = 0, by[5] = { 0, 0, 0, 0, 0 }, ew = 0, ex = 0, em = 0; long nReg = 0, nEps = 0;
+        for (const auto& kv : r.rows) { const RegRec& q = kv.second; const auto p1 = kv.first.find('|'), p2 = kv.first.find('|', p1 + 1); std::string fi = kv.first.substr(0, p1); const std::string fo = kv.first.substr(p1 + 1, p2 - p1 - 1), cause = kv.first.substr(p2 + 1);
+            std::printf("SPELLREG %s %s %s %s %ld %ld %.4f %ld %.4f %.4f %.4f\n", cn, fi.c_str(), fo.c_str(), cause.c_str(), q.n, q.nReg, q.regU, q.nEps, q.epsW, q.epsX, q.epm);
+            if (!fi.empty() && fi.back() == '!') fi.pop_back(); (fi == fo ? within : cross) += q.regU; nReg += q.nReg; nEps += q.nEps; ew += q.epsW; ex += q.epsX; em += q.epm;
+            for (int k = 0; k < 5; ++k) if (cause == kCause[k]) by[k] += q.regU; }
+        if (r.castDecisions == 0) { std::printf("%-17s %6.0f %7s\n", cn, nf, "no cast"); continue; }
+        const double tot = std::max(1e-9, r.regU), ne = static_cast<double>(std::max(1L, nEps));
+        std::printf("%-17s %6.0f %7.1f %7.3f %6.1f %7.3f %7.3f  %5.0f %6.0f %5.0f %5.0f %5.0f  %6.1f %6.1f %6.1f %7.1f\n", cn, nf, static_cast<double>(r.castDecisions) / nf, r.regU / nf, 100.0 * static_cast<double>(nReg) / static_cast<double>(r.castDecisions), within / nf, cross / nf,
+                    100.0 * by[0] / tot, 100.0 * by[1] / tot, 100.0 * by[2] / tot, 100.0 * by[3] / tot, 100.0 * by[4] / tot, 100.0 * ew / ne, 100.0 * ex / ne, 100.0 * em / ne, static_cast<double>(r.pruned) / nf); }
+}
+
 int main(int argc, char** argv) {
     int at = -1; for (int i = 1; i < argc; ++i) if (!std::strcmp(argv[i], "--serve")) { at = i; break; }
     if (at < 0) return RealMain(argc, argv);
@@ -781,7 +803,7 @@ static int RealMain(int argc, char** argv) {
     std::string envFile, envSet, envClass; bool envTest = false, envList = false, pathGate = false; int pathReport = 0, pathOracle = 0, soloWalk = 0;   // SIM V4
     std::vector<std::string> curveSpecs;
     int potCalibN = 0; std::string potWorthPath;
-    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, listUses = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = -1, gapScen = 2, ratingN = -1; bool ratingOnly = false, gapDump = false; int logiN = 0, logiK = 8; std::string logiPolicy = "baseline"; std::string logiUses; bool logiScore = false; int declineN = 0, damageN = 0;
+    const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, listUses = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = -1, gapScen = 2, ratingN = -1; bool ratingOnly = false, gapDump = false, spellRegret = false, gapIausOnly = false; std::vector<std::string> altSets; int logiN = 0, logiK = 8; std::string logiPolicy = "baseline"; std::string logiUses; bool logiScore = false; int declineN = 0, damageN = 0;
     for (int i = 1; i < argc; ++i) {
         // T2 batch S (section 31): `--<road> off|on` per road, `--t2 off` = every road off and the feet stop (the lab of section 30)
         bool t2Arg = false;
@@ -836,6 +858,13 @@ static int RealMain(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--waiver") && i + 1 < argc) { const char* v = argv[++i]; g_waiver = !std::strcmp(v, "none") ? 0 : !std::strcmp(v, "self") ? 1 : !std::strcmp(v, "player") ? 2 : -1; if (g_waiver < 0) { std::fprintf(stderr, "--waiver none|self|player\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--delivery") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "old")) g_deliveryOld = true; else if (!std::strcmp(v, "main")) g_deliveryOld = false; else { std::fprintf(stderr, "--delivery main|old\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--deliver-sec") && i + 1 < argc) { if (std::sscanf(argv[++i], "%f,%f", &g_deliverSec[0], &g_deliverSec[1]) != 2 || g_deliverSec[0] < 0 || g_deliverSec[1] < 0) { std::fprintf(stderr, "--deliver-sec <offense>,<heal> (seconds)\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--spell-rules") && i + 1 < argc) { const char* v = argv[++i]; g_spellRules = !std::strcmp(v, "today") ? 0 : !std::strcmp(v, "old") ? 1 : !std::strcmp(v, "all") ? 2 : -1; if (g_spellRules < 0) { std::fprintf(stderr, "--spell-rules today|old|all\n"); return 2; } }   // batch C: the spell-worth reader (Data.h g_spellRules)
+        else if (!std::strcmp(argv[i], "--books") && i + 1 < argc) { const char* v = argv[++i]; g_books = !std::strcmp(v, "lab") ? 0 : !std::strcmp(v, "field") ? 1 : !std::strcmp(v, "heldout") ? 2 : -1; if (g_books < 0) { std::fprintf(stderr, "--books lab|field|heldout\n"); return 2; } }   // batch C: field-size books (Load.h kFieldBook)
+        else if (!std::strcmp(argv[i], "--env-hold") && i + 1 < argc) { const char* v = argv[++i]; g_envHold = !std::strcmp(v, "all") ? 0 : !std::strcmp(v, "train") ? 1 : !std::strcmp(v, "heldout") ? 2 : -1; if (g_envHold < 0) { std::fprintf(stderr, "--env-hold all|train|heldout\n"); return 2; } }   // batch C: the held-out places of the library (Env.h g_envHold)
+        else if (!std::strcmp(argv[i], "--spell-regret")) spellRegret = true;                  // batch C: the gap pass also prints the subject's spell regret (SPELLFIGHT / SPELLREG / SPELLDEC, Oracle.h RegretLog) and its table
+        else if (!std::strcmp(argv[i], "--regret-alt") && i + 1 < argc) altSets.push_back(argv[++i]);   // batch C: an alternate table (a --set list) priced on the same oracle decisions; repeatable
+        else if (!std::strcmp(argv[i], "--oracle-prune") && i + 1 < argc) { const std::string v = argv[++i]; if (v != "on" && v != "off" && v != "target") { std::fprintf(stderr, "--oracle-prune on|off|target\n"); return 2; } g_oraclePrune = v == "target" ? 2 : v == "on" ? 1 : 0; }   // DIAGNOSTIC off: dominated offense spells are raced too. target: dominance on the foe's own resists (Oracle.h, the cost cuts)
+        else if (!std::strcmp(argv[i], "--gap-arm") && i + 1 < argc) { const std::string v = argv[++i]; if (v != "both" && v != "iaus") { std::fprintf(stderr, "--gap-arm both|iaus\n"); return 2; } gapIausOnly = v == "iaus"; }   // batch C: iaus = the gap pass plays its fights with IAUS only and prints GAPIAUS lines (tune_driver.py stage follow)
         else if (!std::strcmp(argv[i], "--engage-on-sight")) g_engageOnSight = true;   // ch.21 EngageOnSight modelled in every fight (ships OFF)
         else if (!std::strcmp(argv[i], "--mirror") && i + 1 < argc) { const char* v = argv[++i]; if (!std::strcmp(v, "off")) g_mirror = false; else if (!std::strcmp(v, "on")) g_mirror = true; else { std::fprintf(stderr, "--mirror on|off\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--deliver-unfired") && i + 1 < argc) { g_deliverUnfired = static_cast<float>(std::atof(argv[++i])); if (!(g_deliverUnfired >= 0.0f)) { std::fprintf(stderr, "--deliver-unfired <k >= 0> (scales the measured unfired share of every claim; 0 = every claim fires)\n"); return 2; } }
@@ -941,6 +970,9 @@ static int RealMain(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--trace") && i + 1 < argc) trace = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--oracle-k") && i + 1 < argc) { oc.K = std::atoi(argv[++i]); }   // DIAGNOSTIC: a fixed ceiling of K streams instead of the stopping rule
         else if (!std::strcmp(argv[i], "--oracle-h") && i + 1 < argc) { oc.H = std::atof(argv[++i]); }   // DIAGNOSTIC below Fight::maxSec: a rollout is cut there
+        else if (!std::strcmp(argv[i], "--oracle-dump") && i + 1 < argc) { g_oracleDump = std::fopen(argv[++i], "a"); if (!g_oracleDump) { std::fprintf(stderr, "--oracle-dump: cannot open %s\n", argv[i]); return 2; } }   // DIAGNOSTIC: every option on every stream, per decision of the subject (Oracle.h g_oracleDump; oracle_replay.py)
+        else if (!std::strcmp(argv[i], "--oracle-pair") && i + 1 < argc) oc.pair = std::atof(argv[++i]);   // the race's pairwise indifference width in U (Oracle.h OracleCfg::pair; < 0 = off, 0 = twins only)
+        else if (!std::strcmp(argv[i], "--oracle-nmin") && i + 1 < argc) oc.nMin = std::max(2, std::atoi(argv[++i]));   // streams before the race's first look (8)
         else if (!std::strcmp(argv[i], "--oracle-ceiling") && i + 1 < argc) oc.ceiling = std::max(1, std::atoi(argv[++i]));   // the stopping rule's safety ceiling (Oracle.h OracleCfg)
         else if (!std::strcmp(argv[i], "--damage-report") && i + 1 < argc) damageN = std::max(1, std::atoi(argv[++i]));   // incoming damage on followers in the field logs' terms (DamageReport; calib_damage.py reads the field side)
         else if (!std::strcmp(argv[i], "--gap-bracket") && i + 1 < argc) { const char* v = argv[++i]; bool ok = false; for (std::size_t b = 0; b < std::size(kBrackets); ++b) if (!std::strcmp(v, kBrackets[b].name)) { g_gapBracket = static_cast<int>(b); ok = true; } if (!ok) { std::fprintf(stderr, "unknown --gap-bracket '%s'\n", v); return 2; } }
@@ -963,6 +995,8 @@ static int RealMain(int argc, char** argv) {
         // A per-class override is a COPY of the shared curve taken when the spec is applied: a search over the shared curve of the same
         // consideration would not move that class, and its result would read as if it had. Refused, never silently half-applied.
         for (std::size_t ci : g_curveConsEdited) { const std::string tag = "c." + std::to_string(ci) + "."; if (("," + opt).find("," + tag) != std::string::npos) { std::fprintf(stderr, "--opt %s* together with a --curve on consideration %zu is refused: the per-class override is a copy of the shared curve, so the search would not move it\n", tag.c_str(), ci); return 2; } } }
+    for (const std::string& a : altSets) { AltTable x; x.sets = a; const TuneState saved = Tune(); if (!ParseSets(a.c_str())) return 2; x.t = Tune().t; x.w = Tune().weights; Tune() = saved; Alts().push_back(std::move(x)); }   // batch C: each alternate = the base table plus its own --set list
+    if (!altSets.empty() && !spellRegret) { std::fprintf(stderr, "--regret-alt needs --spell-regret\n"); return 2; }
     if (logiN > 0 && listPath) { std::fprintf(stderr, "--logistics with --list is REFUSED: the list extracts (tools/list_balance) hold no containers, no gold, MISC, gems or ingredients, no vendor chests or gold, and no armor or potion weights (iaus-sim-v2.md 34.6). The logistics world is the built-in fixture until the extractor carries them.\n"); return 2; }
     if (logiN > 0 && logiPolicy != "baseline" && logiPolicy != "iaus") { std::fprintf(stderr, "--logi-policy %s: baseline | iaus\n", logiPolicy.c_str()); return 2; }
     if (logiScore && logiPolicy != "iaus") { std::fprintf(stderr, "--logi-score needs --logi-policy iaus\n"); return 2; }
@@ -1107,7 +1141,7 @@ static int RealMain(int argc, char** argv) {
     if (classOracle > 0) {   // THE GAP PASS: per class, the SAME fights played by IAUS and by the oracle held to the class's rulings: its natural fights and its own named scenarios
         const std::vector<Scenario> hs = HeadlineScenarios(); std::vector<std::pair<int, int>> sj;   // (headline scenario index, class index in `classes`)
         if (gapScen > 0) { Rng R0; R0.g.seed(1); for (std::size_t i = 0; i < hs.size(); ++i) { FightSpec fs = hs[i].make(D, allClasses, R0); for (int c = 0; c < nc; ++c) if (classes[static_cast<std::size_t>(c)].name == fs.cls->name) sj.push_back({ static_cast<int>(i), c }); } }
-        struct CO { double uI = 0, uO = 0; Agg orc, iaus; std::vector<double> d; double sI = 0, sO = 0; long sN = 0; std::map<std::string, SitRec> sit; std::array<long, kFamilies> gen{}; long dec = 0; OracleStats st; }; std::vector<CO> co(static_cast<std::size_t>(nc));
+        struct CO { double uI = 0, uO = 0; Agg orc, iaus; std::vector<double> d; double sI = 0, sO = 0; long sN = 0; std::map<std::string, SitRec> sit; std::array<long, kFamilies> gen{}; long dec = 0; OracleStats st; RegretLog reg; }; std::vector<CO> co(static_cast<std::size_t>(nc));
         struct SO { double uI = 0, uO = 0; Agg iaus, orc; }; std::vector<SO> so(sj.size());
         std::vector<int> gidx(static_cast<std::size_t>(nc), 0); for (int c = 0; c < nc; ++c) for (std::size_t i = 0; i < allClasses.size(); ++i) if (allClasses[i].name == classes[static_cast<std::size_t>(c)].name) gidx[static_cast<std::size_t>(c)] = static_cast<int>(i);
         std::atomic<int> nx{ 0 }; const int natJobs = nc * classOracle, jobs = natJobs + static_cast<int>(sj.size()) * gapScen;
@@ -1118,14 +1152,19 @@ static int RealMain(int argc, char** argv) {
             else { sidx = (job - natJobs) / gapScen; const int f = (job - natJobs) % gapScen, si = sj[static_cast<std::size_t>(sidx)].first; c = sj[static_cast<std::size_t>(sidx)].second;
                 R.g.seed(seed * 2654435761ULL + std::uint64_t(si) * 97 + std::uint64_t(f) * 7919); FightSpec fs = hs[static_cast<std::size_t>(si)].make(D, allClasses, R); fs.seed = R.g(); fs.rank = g_forceRank ? g_forceRank : 1 + f % 5; F = BuildFight(D, fs, t1); }
             F.tauntVisible = tauntVisible; F.engineCasts = engineCasts; F.estimates = estimates; F.scrollRoad = scrollRoad; Fight Gf = F;
-            RunMode(F); OraclePolicy O; O.cfg = oc; O.cfg.allFollowers = !g_oracleSubjectOnly; std::map<std::string, SitRec> sl; std::array<long, kFamilies> gn{}; if (gapDump) { O.sit = &sl; O.gen = &gn; }
+            RunMode(F);
+            if (gapIausOnly) { std::scoped_lock lk(mx); std::printf("GAPIAUS %s %s %d %.4f\n", classes[static_cast<std::size_t>(c)].name.c_str(), sidx < 0 ? "nat" : hs[static_cast<std::size_t>(sj[static_cast<std::size_t>(sidx)].first)].name, job, Utility(F)); continue; }   // the IAUS arm alone: the same fight, the same seed, no oracle
+            RegretLog rl; OraclePolicy O; if (spellRegret) O.reg = &rl; O.cfg = oc; O.cfg.allFollowers = !g_oracleSubjectOnly; std::map<std::string, SitRec> sl; std::array<long, kFamilies> gn{}; if (gapDump) { O.sit = &sl; O.gen = &gn; }
             RunFight(Gf, O); const double uI = Utility(F), uO = Utility(Gf);
-            std::scoped_lock lk(mx); CO& r = co[static_cast<std::size_t>(c)]; r.d.push_back(uO - uI); r.st.Merge(O.stSubj);   // the SUBJECT's search only (review F-C): with --oracle-subject-only it is all of it
+            std::scoped_lock lk(mx); CO& r = co[static_cast<std::size_t>(c)]; r.d.push_back(uO - uI); r.st.Merge(O.stSubj);
+            if (spellRegret) { r.reg.Merge(rl); std::printf("SPELLFIGHT %s %s %d %ld %.4f", classes[static_cast<std::size_t>(c)].name.c_str(), sidx < 0 ? "nat" : hs[static_cast<std::size_t>(sj[static_cast<std::size_t>(sidx)].first)].name, job, rl.castDecisions, rl.regU);
+                for (std::size_t a = 0; a < Alts().size(); ++a) std::printf(" %.4f", a < rl.alt.size() ? rl.alt[a] : 0.0); std::printf("\n"); }   // the SUBJECT's search only (review F-C): with --oracle-subject-only it is all of it
             if (gapDump) { std::printf("GAPFIGHT %s %s %d %.4f %.4f\n", classes[static_cast<std::size_t>(c)].name.c_str(), sidx < 0 ? "nat" : hs[static_cast<std::size_t>(sj[static_cast<std::size_t>(sidx)].first)].name, job, uI, uO);
                 for (const auto& kv : sl) { SitRec& q = r.sit[kv.first]; q.n += kv.second.n; q.dU += kv.second.dU; } for (std::size_t f = 0; f < kFamilies; ++f) r.gen[f] += gn[f]; r.dec += O.subjDec; }
             if (sidx < 0) { r.uI += uI; r.uO += uO; r.orc.uSum += uO; r.orc.Add(Gf.t, false); r.iaus.uSum += uI; r.iaus.Add(F.t, false); }
             else { r.sI += uI; r.sO += uO; ++r.sN; SO& q = so[static_cast<std::size_t>(sidx)]; q.uI += uI; q.uO += uO; q.iaus.uSum += uI; q.iaus.Add(F.t, false); q.orc.uSum += uO; q.orc.Add(Gf.t, false); } } };
         { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(w2); for (auto& x : th) x.join(); }
+        if (!gapIausOnly) {
         if (g_gapBracket != 0) std::printf("\nGAP BRACKET %s: the fights below called natural are drawn in the %s strength bracket\n", kBrackets[g_gapBracket].name, kBrackets[g_gapBracket].name);
         std::printf("\nCLASS ORACLE GAP (%d natural fights per class + %d of each of its own scenarios, class rulings %s; %s)\n%-17s %7s %7s %7s  %7s %7s  %7s %5s %6s   (gap = oracle U - IAUS U over all of the class's gap fights; persona: the oracle's own play against the class signature)\n", classOracle, gapScen, g_classRulings ? "IN FORCE" : "off", OracleDesc(oc).c_str(), "class", "IAUS U", "orc U", "nat gap", "pers.I", "pers.O", "GAP", "se", "fights");
         R.oracleKind = std::string("rollout over IAUS, class-bound extended action set") + (g_classRulings ? ", class rulings in force" : "") + (g_oracleSubjectOnly ? ", subject only" : "") + "; " + OracleDesc(oc); R.oracleK = OracleKOf(oc); R.oracleH = oc.H;
@@ -1148,6 +1187,8 @@ static int RealMain(int argc, char** argv) {
             std::printf("GAPDEC %s %ld\n", cn, r.dec);
             for (std::size_t f = 0; f < kFamilies; ++f) std::printf("GAPGEN %s %s %ld\n", cn, std::string(MFO::Iaus::Name(static_cast<Family>(f))).c_str(), r.gen[f]);
             for (const auto& kv : r.sit) std::printf("GAPSIT %s %s %ld %.4f\n", cn, kv.first.c_str(), kv.second.n, kv.second.dU); }
+        if (spellRegret) SpellRegretReport(classes, [&](int c) -> const RegretLog& { return co[static_cast<std::size_t>(c)].reg; }, [&](int c) { return static_cast<long>(co[static_cast<std::size_t>(c)].d.size()); });
+        }
     }
     if (!noJson) R.Write(jsonPath);
     auto G = [](const std::map<std::string, double>& m, const char* k) { auto i = m.find(k); return i == m.end() ? 0.0 : i->second; };
