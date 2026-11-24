@@ -113,11 +113,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 FULL = dict(probe_seeds=6, train=64, hold=64, confirm=96, max_knobs=250, passes=2, min_probe=0.0, global_seeds=96, list_global_seeds=48,
             const_seeds=48, floor_seeds=36, rating_seeds=6, calib_seeds=24, calib_fights=400, list_calib_seeds=12, force=False,
-            gap_seeds=12, gap_max_seeds=48, gap_nat=4, gap_scen=1, gap_families=3, gap_knobs=12, logi_seeds=12, logi_eps=8, loot_eps=6, card_seeds=3, card_fights=48,
+            gap_seeds=12, gap_max_seeds=48, gap_nat=4, gap_scen=1, gap_families=3, gap_knobs=12, logi_seeds=12, logi_eps=8, loot_eps=6, loot_gate_seeds=16, card_seeds=3, card_fights=48,
             follow_seeds=6, follow_knobs=12, follow_min_gap=0.5, spell_seeds=4, spell_rounds=4)
 SMOKE = dict(probe_seeds=2, train=4, hold=4, confirm=4, max_knobs=4, passes=1, min_probe=0.0, global_seeds=4, list_global_seeds=2,
              const_seeds=2, floor_seeds=2, rating_seeds=1, calib_seeds=2, calib_fights=40, list_calib_seeds=1, force=True,
-             gap_seeds=1, gap_max_seeds=2, gap_nat=1, gap_scen=1, gap_families=1, gap_knobs=1, logi_seeds=1, logi_eps=1, loot_eps=1, card_seeds=1, card_fights=8,
+             gap_seeds=1, gap_max_seeds=2, gap_nat=1, gap_scen=1, gap_families=1, gap_knobs=1, logi_seeds=1, logi_eps=1, loot_eps=1, loot_gate_seeds=2, card_seeds=1, card_fights=8,
              follow_seeds=1, follow_knobs=1, follow_min_gap=0.0, spell_seeds=1, spell_rounds=1)
 
 A = None            # parsed arguments
@@ -161,7 +161,7 @@ def ident(world, binary=None):
     measured on another binary, another list extract or another potion table is never replayed as this one's."""
     out = ["bin:" + sha(binary or A.bin)]
     if getattr(A, "world", "") == "v4":   # the library of places is test input like a list: another library is another world
-        out.append("env:" + sha(env_index()))
+        out.append("env:" + env_ident())
     if world == "builtin":
         if A.builtin_worth:
             out.append("worth:" + sha(A.builtin_worth))
@@ -169,6 +169,18 @@ def ident(world, binary=None):
         check_world(world)
         out += ["sim:" + sha(CACHE_DIR + world + ".sim.json"), "mods:" + sha(CACHE_DIR + world + ".combatmods.json"), "worth:" + sha(os.path.join(A.out, "potworth-%s.txt" % world))]
     return "|".join(out)
+
+
+_SPAWNS = {}
+
+
+def stale_spawns(path):
+    """Bundle A: a compiled list with Summon effects (archetype 18) and no actor for any of them. Read as text (the file is 12 MB), once per file version."""
+    k = (path, os.stat(path).st_mtime_ns)
+    if k not in _SPAWNS:
+        t = open(path, encoding="utf-8").read()
+        _SPAWNS[k] = bool(re.search(r'"archetype":\s*18\b', t)) and not re.search(r'"summon":\s*\[\s*\d', t)
+    return _SPAWNS[k]
 
 
 def check_world(world, need_worth=True):
@@ -180,6 +192,8 @@ def check_world(world, need_worth=True):
     for f in (CACHE_DIR + world + ".sim.json", CACHE_DIR + world + ".combatmods.json"):
         if not os.path.exists(f):
             raise SystemExit("missing %s (tools/list_balance/compile_world.py / extract_combat_mods.py): a list is never run without its companion files" % f)
+    if stale_spawns(CACHE_DIR + world + ".sim.json"):
+        raise SystemExit("%s was compiled before sim bundle A: no Summon effect names its actor, every summon would silently be the generic creature. Run extract.py, extract_world.py and compile_world.py again" % (CACHE_DIR + world + ".sim.json"))
     if need_worth and not os.path.exists(os.path.join(A.out, "potworth-%s.txt" % world)):
         raise SystemExit("missing %s: run the prep stage on this --out first (it measures each list's potion worth)" % os.path.join(A.out, "potworth-%s.txt" % world))
 
@@ -210,6 +224,23 @@ HOLD_FLAGS = ["--env-hold", "heldout", "--books", "heldout"]                 # t
 # indifference 0.10 U with twins retired, a first look at 4 streams. The ceiling, the rollouts, the decision points and the candidates are
 # the full oracle's. `--oracle-cuts ""` runs the race without them (about 3 to 4 times the oracle stages' cost on a caster cell).
 ORACLE_CUTS = "--oracle-prune target --oracle-pair 0.10 --oracle-nmin 4"
+
+
+_ENV_IDENT = {}
+
+
+def env_ident():
+    """The library of places as test input: index.json AND every .mfoenv under it (choice review: the index alone does not see a place file
+    rewritten in place). Read once per run (125 files, 21 MB today)."""
+    root = os.path.dirname(env_index())
+    if root not in _ENV_IDENT:
+        h = hashlib.sha256(sha(env_index()).encode())
+        for d, _, files in sorted(os.walk(root)):
+            for f in sorted(files):
+                if f.endswith(".mfoenv"):
+                    h.update(("%s:%s\n" % (os.path.relpath(os.path.join(d, f), root), sha(os.path.join(d, f)))).encode())
+        _ENV_IDENT[root] = h.hexdigest()[:16]
+    return _ENV_IDENT[root]
 
 
 def env_index():
@@ -453,6 +484,8 @@ RULES = {   # kind -> the rule that replaces asking marth (the text is also in D
     "oracle": "report-only: a ledger row (b-d divergences are not tunable); never a blocker",
     "joint": "the final table must pass the joint gate and the card + potion gates against the shipped table; a failing table is withheld (summary.json ship)",
     "withheld": "a value that loses on re-measure is withheld from the table (summary.json ship.withheld)",
+    "held-out set": "an accepted set (a class's follow values, the spells stage's values, the whole table at the joint gate) is played start against final on the held-out places and books, on seeds nothing else read; a set worse beyond HOLD_SET_SE se, or with one cell worse beyond the many-comparisons bar, is dropped whole",
+    "loot gate": "a kept loot table is rejected whole when it commits one more crime or guard-seen take than the shipped table, or when leftRR, goldLeftRR, roadLeft% or dibsNear is worse beyond noise, paired per seed (LOOT_ROW_SE)",
     "note": "report-only: nothing is written from it; never a blocker",
 }
 CARDS = {}
@@ -494,13 +527,15 @@ def band_scale(lo, hi):
     return max(5.0, 0.5 * abs(lo if lo > -INF else hi))   # BandCredit: the credit falls to 0 at half the bound (or 5)
 
 
-def play_metrics(cls, curves):
+def play_metrics(cls, curves, sets=None):
     """{metric: (mean, se)} of the class's natural bracket in the built-in world over CFG card_seeds single-seed runs (-1 = no sample, skipped)."""
     def one(sd):
         cmd = [A.bin, "--no-json", "--threads", "2", "--classes", cls, "--seed", str(sd), "--fights", str(CFG["card_fights"]), "--rating", "0", "--baseline", "/dev/stdout"] + world_args("builtin")
         for c in curves:
             cmd += ["--curve", c]
-        t = text_run("card:%s:%d:%d:%s" % (cls, sd, CFG["card_fights"], " ".join(curves)), cmd, "builtin")
+        if sets:
+            cmd += ["--set", sets]
+        t = text_run("card:%s:%d:%d:%s%s" % (cls, sd, CFG["card_fights"], " ".join(curves), "|set:" + sets if sets else ""), cmd, "builtin")
         return {m.group(1): float(m.group(2)) for m in re.finditer(r"^%s\|natural\|([^=]+)=([-0-9.e+]+)" % re.escape(cls), t, re.M)}
     runs = list(POOL.map(one, range(1, CFG["card_seeds"] + 1)))
     out = {}
@@ -533,11 +568,11 @@ def drink_rate(m, d=None, dur=None, at=None):
     return (d[0] * k, d[1] * k)
 
 
-def card_potion_gate(cls, anchor, new):
+def card_potion_gate(cls, anchor, new, new_sets=None):
     """The two gates every automatic acceptance passes: CLASS IDENTITY (the class's bands, measured on `new`, may not end further outside
     their bounds than on `anchor`, the class's start table) and POTIONS (no spam; non-restore potions emergency only). Returns
     {"ok", "fails", "card", "potion", "card_line"}; every number is kept for summary.json."""
-    a, n = play_metrics(cls, anchor), play_metrics(cls, new)
+    a, n = play_metrics(cls, anchor), play_metrics(cls, new, new_sets)   # new_sets: the shared --set table `new` is played with (the joint gate: the whole shipped table)
     card = load_cards().get(CARD_ALIAS.get(cls, cls))
     if card is None:   # a class with no card row would pass with nothing checked
         raise RuntimeError("card_potion_gate: class %s (%s) has no row in Playstyles.h: its identity cannot be gated" % (cls, CARD_ALIAS.get(cls, cls)))
@@ -1163,14 +1198,14 @@ def stage_joint():
     table that existed when it was searched, and the companions' rows (T1) move everyone's fights. On the 128 train + holdout seeds, at
     the default roads, with stealth off and as shipped: no cell may be worse (the all-cells-at-once bar), no pooled mean may be worse. And
     each T1 value is left out in turn: the table without it must not be better than the table with it."""
-    curves = final_curves()
-    st = {"table": curves, "cells": {}, "pooled": {}, "leave_one_out": [], "verdict": "no accepted value: nothing to gate"}
-    if curves:
+    curves, fsets = final_curves(), final_sets()   # THE WHOLE SHIPPED TABLE (choice review R2): the class rows AND the accepted shared values (spells, worth) are graded together
+    st = {"table": curves, "sets": fsets, "cells": {}, "pooled": {}, "leave_one_out": [], "verdict": "no accepted value: nothing to gate"}
+    if curves or fsets:
         seeds = list(range(1, CFG["train"] + 1)) + list(range(1001, 1001 + CFG["hold"]))
         fails = []
 
-        def table_vs(a, b):   # per cell and config, and pooled over the cells: b - a
-            res = jmany([req("builtin", c, g, x, seeds) for c in cells() for g in CONFIGS for x in (a, b)])
+        def table_vs(a, b, a_sets=fsets):   # per cell and config, and pooled over the cells: b - a. b is always played with the accepted shared values
+            res = jmany([req("builtin", c, g, x, seeds, sets=xs) for c in cells() for g in CONFIGS for x, xs in ((a, a_sets), (b, fsets))])
             per, pooled, i = {}, {}, 0
             for c in cells():
                 for g in CONFIGS:
@@ -1183,7 +1218,7 @@ def stage_joint():
                 d = sum(dd) / len(dd)
                 out[g] = (d, math.sqrt(sum((x - d) ** 2 for x in dd) / (len(dd) - 1) / len(dd)) if len(dd) > 1 else 0.0)
             return per, out
-        per, pooled = table_vs([], curves)
+        per, pooled = table_vs([], curves, None)   # the shipped table has no accepted shared value
         for k, (d, se) in per.items():
             st["cells"][k] = [round(d, 3), round(se, 3)]
             if worse(d, se, True) or out_of_band(k.split("/")[0], d, se):
@@ -1201,9 +1236,13 @@ def stage_joint():
         if A.decisions == "auto":   # CLASS IDENTITY + POTIONS of every cell in the final table, against the shipped one
             st["card_potion"] = {}
             for c in cells():
-                g = card_potion_gate(c, [], curves)
+                g = card_potion_gate(c, [], curves, fsets)
                 st["card_potion"][c] = g
                 fails += ["%s: %s" % (c, f) for f in g["fails"]]
+        ho = held_out_check([], curves, cells(), None, fsets)   # THE HONEST FINAL CHECK (choice review R3): start against final, places and books no search saw, seeds nothing read
+        st["held_out"] = ho
+        if not ho["ok"]:
+            fails.append("held-out places and books, the whole table against the shipped one: " + ho["why"])
         st["verdict"] = "PASS" if not fails else "FAIL: " + "; ".join(fails)
         log("joint: %d values, pooled g3 %+.2f (se %.2f) off %+.2f shipped %+.2f  %s" % (len(curves), pooled["g3"][0], pooled["g3"][1], pooled["off"][0], pooled["shipped"][0], st["verdict"]))
         if fails:
@@ -1487,10 +1526,10 @@ def gap_parse(txt, cls, seed):
 
 
 def gap_runs(tasks):
-    """tasks: (world, cls, curves, seed, subject_only[, hold]). All at once on the pool; each run is a cached text run (resumable)."""
+    """tasks: (world, cls, curves, seed, subject_only[, hold[, sets]]). All at once on the pool; each run is a cached text run (resumable)."""
     def one(t):
         w, cls, curves, seed, so = t[:5]
-        cmd = gap_cmd(w, cls, curves, seed, so, hold=len(t) > 5 and t[5])
+        cmd = gap_cmd(w, cls, curves, seed, so, hold=len(t) > 5 and t[5], sets=t[6] if len(t) > 6 else None)
         return gap_parse(text_run("gap:" + json.dumps(cmd[1:]), cmd, w, check=lambda t: gap_parse(t, cls, seed)), cls, seed)
     return list(POOL.map(one, tasks))
 
@@ -1554,16 +1593,17 @@ def stage_gap():
     keep = lambda part: {k: v for k, v in old.get(part, {}).items() if k.split("/")[0] not in order}
     if scope():
         SUMMARY["stages"]["gap"] = {"kept": keep("kept")}   # the other classes' accepted values stay in final_curves
-    shipped, final = [], final_curves()
+    shipped, final, fsets = [], final_curves(), final_sets()   # the final arm is the table that ships: class rows and the accepted shared values (choice review R2)
     tables = {"shipped": shipped, "final": final}
-    st = {"rule": stage_gap.__doc__[stage_gap.__doc__.index("RULE"):], "tables": {"final": final}, "cells": keep("cells"), "clusters": keep("clusters"), "kept": keep("kept"), "search": keep("search")}
+    moved = bool(final or fsets)
+    st = {"rule": stage_gap.__doc__[stage_gap.__doc__.index("RULE"):], "tables": {"final": final, "final_sets": fsets}, "cells": keep("cells"), "clusters": keep("clusters"), "kept": keep("kept"), "search": keep("search")}
     nseeds = {(w, c): CFG["gap_seeds"] for w in A.worlds for c in order}
     data = {}
     while True:   # measure; then grow only the cells whose se is too wide, up to the cap
-        tasks = [(w, c, tables[t], s, True) for (w, c), n in nseeds.items() for t in ("shipped", "final") for s in range(GAP_SEEDS0, GAP_SEEDS0 + n) if t == "final" or final]
+        tasks = [(w, c, tables[t], s, True, False, fsets if t == "final" else None) for (w, c), n in nseeds.items() for t in ("shipped", "final") for s in range(GAP_SEEDS0, GAP_SEEDS0 + n) if t == "final" or moved]
         res = gap_runs(tasks)
         for t, r in zip(tasks, res):
-            data[(t[0], t[1], "final" if t[2] is final else "shipped", t[3])] = r
+            data[(t[0], t[1], "final" if t[2] is final else "shipped", t[3])] = r   # identity, not equality: with no class value both tables are [] and the two arms differ by fsets alone
         grow = []
         for (w, c), n in nseeds.items():
             fin = gap_merge([data[(w, c, "final", s)] for s in range(GAP_SEEDS0, GAP_SEEDS0 + n)])
@@ -1575,13 +1615,13 @@ def stage_gap():
         for k in grow:
             nseeds[k] = min(CFG["gap_max_seeds"], nseeds[k] + CFG["gap_seeds"])
         log("gap: %d cell(s) get more seeds (se too wide): %s" % (len(grow), ", ".join("%s/%s->%d" % (w, c, nseeds[(w, c)]) for w, c in grow)))
-    allf = gap_runs([("builtin", c, final, s, False) for c in order for s in range(GAP_SEEDS0, GAP_SEEDS0 + CFG["gap_seeds"])]) if "builtin" in A.worlds else []
+    allf = gap_runs([("builtin", c, final, s, False, False, fsets) for c in order for s in range(GAP_SEEDS0, GAP_SEEDS0 + CFG["gap_seeds"])]) if "builtin" in A.worlds else []
     for c in order:
         pooled = []
         for w in A.worlds:
             n = nseeds[(w, c)]
             fin = gap_merge([data[(w, c, "final", s)] for s in range(GAP_SEEDS0, GAP_SEEDS0 + n)])
-            shp = gap_merge([data[(w, c, "final" if not final else "shipped", s)] for s in range(GAP_SEEDS0, GAP_SEEDS0 + n)])
+            shp = gap_merge([data[(w, c, "shipped" if moved else "final", s)] for s in range(GAP_SEEDS0, GAP_SEEDS0 + n)])
             df = {(s, j): uo - ui for s, j, _, ui, uo in fin["fights"]}
             ds = {(s, j): uo - ui for s, j, _, ui, uo in shp["fights"]}
             g, se = mse(list(df.values()))
@@ -1689,6 +1729,39 @@ def follow_iaus(cls, table, seeds, hold=False):
     return out
 
 
+HOLD_FINAL0 = 7601   # the set checks' own seeds: nothing searched, confirmed or fenced reads them (7001.. + gap_max_seeds ends under it)
+HOLD_SET_SE = 1.5    # PLACEHOLDER (the review's number): a set is worse held out when its pooled IAUS U is lower by more than this many se
+
+
+def held_out_check(a, b, who, a_sets=None, b_sets=None):
+    """THE HONEST FINAL CHECK (choice review R3). Table b against table a (each: class rows + a shared --set table) on the HELD-OUT places and
+    books, on seeds no acceptance read, IAUS arm only (milliseconds a fight), the cells of `who`, every world of the run. Paired per fight,
+    the worlds of a cell pooled, the cells weighted equally. WORSE = the pooled mean is lower by more than HOLD_SET_SE se, or one cell is
+    lower beyond the many-comparisons bar (`worse(.., many=True)`). Returns {"ok", "why", "pooled": [d, se], "cells": {cell: [d, se]}, "seeds"}."""
+    seeds = list(range(HOLD_FINAL0, HOLD_FINAL0 + max(CFG["follow_seeds"], CFG["spell_seeds"])))
+    res = gapi_runs([(w, c, t, s, ts, True) for c in who for w in A.worlds for t, ts in ((a, a_sets), (b, b_sets)) for s in seeds])
+    n, per, i = len(seeds), {}, 0
+    for c in who:
+        per[c] = []
+        for _ in A.worlds:
+            ua, ub = {}, {}
+            for r in res[i:i + n]:
+                ua.update(r)
+            for r in res[i + n:i + 2 * n]:
+                ub.update(r)
+            per[c] += [ub[k] - ua[k] for k in ua if k in ub]
+            i += 2 * n
+    d, se = cells_mean(per)
+    cellv = {c: mse(v) for c, v in per.items() if v}
+    bad = sorted(c for c, (cd, cse) in cellv.items() if worse(cd, cse, True))
+    why = []
+    if d < -HOLD_SET_SE * se and d < 0:
+        why.append("the %d-cell mean is %+.2f U (se %.2f)" % (len(cellv), d, se))
+    if bad:
+        why.append("worse beyond noise: " + ", ".join("%s %+.2f (se %.2f)" % (c, cellv[c][0], cellv[c][1]) for c in bad))
+    return {"ok": not why, "why": "; ".join(why), "pooled": [round(d, 3), round(se, 3)], "cells": {c: [round(x, 3) for x in v] for c, v in cellv.items()}, "seeds": [seeds[0], seeds[-1]]}
+
+
 def u_of(orc, which):
     """{world: {(seed, job): U}} of one arm of follow_oracle's result (which: 3 = IAUS, 4 = oracle)."""
     return {w: {(f[0], f[1]): f[which] for f in m["fights"]} for w, m in orc.items()}
@@ -1723,7 +1796,8 @@ def stage_follow():
       then     the other candidates are measured again on the new table. At most follow_knobs values per class.
       closable the gap times the (a) share of his divergence cost is reported as an ESTIMATE of what a tune can close ((b) to (d) need
                code); it is a report, not a bound.
-    Sight-driven knobs stay skipped (all_knobs). The joint gate after this stage judges the whole table as before."""
+    Sight-driven knobs stay skipped (all_knobs). The joint gate after this stage judges the whole table as before.
+    SET CHECK (added with sim bundle A): what was accepted is then played as one set on held-out places and books (held_out_check), and dropped whole when worse."""
     old = SUMMARY["stages"].pop("follow", {})
     order0 = scope() or cells()
     order = [c for c in sorted(T1) if c in order0] + [c for c in order0 if c not in T1]
@@ -1738,7 +1812,7 @@ def stage_follow():
 
 
 def follow_class(cls, knobs, st):
-    base = final_curves()
+    base = base0 = final_curves()
     n = CFG["follow_seeds"]
     while True:   # cost cut 2: stop a cell when its gap is measured well enough, not at a fixed count
         seeds = list(range(GAP_SEEDS0, GAP_SEEDS0 + n))
@@ -1780,7 +1854,7 @@ def follow_class(cls, knobs, st):
                     st["rows"][cls].append(row)
                     continue
             fails = []
-            _, fd, fse = world_delta(u_of(follow_oracle(cls, base, fresh), 3), follow_iaus(cls, base + [spec], fresh))
+            _, fd, fse = world_delta(follow_iaus(cls, base, fresh), follow_iaus(cls, base + [spec], fresh))   # the IAUS arm alone on both sides (choice review R5): the same number as the oracle run's IAUS column (run.sh "the IAUS arm alone is the gap fight's own IAUS fight"), without paying an oracle set to read it
             row["fresh"] = [round(fd, 3), round(fse, 3)]
             if not fd > 1.5 * fse:
                 fails.append("fresh gap fights: not confirmed")
@@ -1822,12 +1896,24 @@ def follow_class(cls, knobs, st):
         cands = [x for x in cands if x[2].split("=")[0] != took]
         save_summary()
     cell["verdict"] = "%d value(s) accepted" % len(kept)
+    if kept:   # THE SET, start against final, held out (choice review R3): each value only had to be "not worse" there, and up to follow_knobs of them add up
+        ho = held_out_check(base0, base, cells() if cls in T1 else [cls])   # a T1 row is every cell's companion; another class's values are read by his own fights only (table_slice)
+        cell["held_out_set"] = ho
+        log("follow %s: the accepted set held out, start against final: %+.2f (se %.2f) %s" % (cls, ho["pooled"][0], ho["pooled"][1], "holds" if ho["ok"] else "WORSE: the set is dropped"))
+        if not ho["ok"]:
+            auto_decision("held-out set", "%s: the follow set %s" % (cls, " ".join(kept)), "rejected", "worse on held-out places and books as a set: " + ho["why"], cls=cls)
+            for row in st["rows"][cls]:
+                if row.get("accepted"):
+                    row["accepted"], row["why"] = False, "DROPPED with the class's set: worse held out as a set (%s)" % ho["why"]
+            del kept[:]
+            cell.pop("gap_after", None)
+            cell["verdict"] = "0 value(s) accepted: the set was worse on held-out places and books (%s)" % ho["why"]
 
 
 # ── the spells stage (iaus-sim-v4.md 7.5, 14): the shared spell-worth numbers against the spell regret ────────────────────────────────
 SPELL_FAMILIES = ("cast_offense", "cast_control", "cast_heal", "cast_buff", "cast_summon", "cast_ward")
 SPELL_CONS = ("damage", "exploit", "overkill", "variety", "control_worth")
-SPELL_SCALARS = [("t.unmeasuredDamage", 0.5, [0.25, 0.35, 0.65, 0.8])]   # fix/spell-worth C2's placeholder (iaus/Core.h Tuning::unmeasuredDamage)
+SPELL_SCALARS = [("t.unmeasuredDamage", 0.5, [0.0, 0.1, 0.25, 0.35, 0.65, 0.8])]   # fix/spell-worth C2's placeholder (iaus/Core.h Tuning::unmeasuredDamage)
 # native iaus/SpellWorth.h `struct SpellWorth` (S11b): one row per field once Estimate-side code reads it, as ("sw.<field>", shipped, [values]).
 # Until then every field is listed in SW_NOT_SEARCHED with the reason, and test_tune_driver.py checks the two lists cover the struct.
 SW_KNOBS = []
@@ -1890,7 +1976,8 @@ def stage_spells():
                the new table. One value per round, at most spell_rounds rounds.
       report   per cell and world, on the base table (and on the final one when a value was accepted): regret U per fight, the share of
                cast decisions with a regret, within / cross family, the cause split (fact, weight, gate, hand, sight) and the world's
-               effect per cast second / per magicka shortfalls. A report row is never a gate."""
+               effect per cast second / per magicka shortfalls. A report row is never a gate.
+    SET CHECK (added with sim bundle A): what was accepted is then played as one set on held-out places and books (held_out_check), and dropped whole when worse."""
     worlds = [w for w in A.worlds if w != "builtin"] or ["builtin"]
     seeds = list(range(GAP_SEEDS0, GAP_SEEDS0 + CFG["spell_seeds"]))
     fresh = list(range(FOLLOW_FRESH0, FOLLOW_FRESH0 + CFG["spell_seeds"]))
@@ -1958,6 +2045,17 @@ def stage_spells():
         save_summary()
         if not took:
             break
+    if kept:   # THE SET, held out, by IAUS's own U on every cell (choice review R3, R4): the regret prices cast decisions only, and a held-out price was only ever an alternate
+        ho = held_out_check(curves, curves, order, None, ",".join(kept))
+        st["held_out_set"] = ho
+        log("spells: the accepted set held out, start against final: %+.2f (se %.2f) %s" % (ho["pooled"][0], ho["pooled"][1], "holds" if ho["ok"] else "WORSE: the set is dropped"))
+        if not ho["ok"]:
+            auto_decision("held-out set", "the spells set %s" % " ".join(kept), "rejected", "worse on held-out places and books as a set: " + ho["why"])
+            for row in st["rows"]:
+                if row.get("accepted"):
+                    row["accepted"], row["why"] = False, "DROPPED with the set: IAUS U worse held out (%s)" % ho["why"]
+            kept = []
+            st["kept"] = kept
     if kept:
         fin = measure(",".join(kept), (), seeds, who=casters)
         st["report_final"] = {"%s/%s" % k: regret_table(parts) for k, parts in fin.items()}
@@ -2164,7 +2262,7 @@ LOOT_KNOBS = [("loot.takeThreshold", 0.5, [0.25, 0.375, 0.667, 0.8]), ("loot.nee
 # "no timer" ruling, and the gate rows wait until the lab blocks as often as the field does. Searched on EPISODES only.
 LOOT_EPISODE_KNOBS = [("loot.batchHoldMinSec", 3.0, [0.0, 1.5, 6.0])]
 _GUARD_WHY = "a guard rule's timer: a safety rule, not a value trade. A value search would only ever shorten the caution (review S2). The loot world reads it (scenarios guard-bar-1117, pending-1117c); marth sets it"
-_GATE_WHY = "read by the loot world, NOT searched yet: the field blocks 2 to 5 times as often as the lab (the lab's world is the navmesh alone), so a value found here says nothing about the game (review S6). Searchable once the lab's block rate matches a field log"
+_GATE_WHY = "read by the loot world, NOT searched: the lab's block rate is not the field's (0.20 to 0.68 blocks per follower-minute in the field builds of 11-17 and 11-18 against the lab's 0.19 under those builds' rules, 1 to 3.5 times; no field log exists yet under the events-and-pass rule of 2026-11-24), and the gate knobs are inert or within noise on every set of places, so a value found here says nothing about the game (reviews S6, R7). Searchable once the lab's block rate matches a field log"
 _PASS_WHY = "marth's ruling 2026-11-24 (a gate lifts on real events or the player moving through), a rule and not a value trade: gatePassU is the geometric tolerance of \"through the block point\" and gatePassRunU the physical bound that tells a walk from a teleport. Neither is a number a loot value can price"
 LOOT_NOT_SEARCHED = {"loot.stealNeedMin": "the theft road exists in the loot world (scenario `thief`), but an ordinary episode holds no owned loose item a Thief needs: no signal to search on. PLACEHOLDER",
                      "loot.stealRiskWeight": "as stealNeedMin: PLACEHOLDER", "loot.stealBountyPerGold": "as stealNeedMin: PLACEHOLDER",
@@ -2337,35 +2435,59 @@ def stage_loot():
 def loot_report(sets, heldout):
     """One --loot-report run of every cell on the loot world's places (or the set's held-out places): the value per episode and the gate rows that fail."""
     cmd = [A.bin, "--no-json", "--threads", str(max(1, min(8, os.cpu_count() or 1))), "--loot-report", str(CFG["loot_eps"]), "--classes", ",".join(CELLS),
-           "--seeds", ",".join(str(x) for x in range(9501, 9501 + max(2, CFG["hold"] // 8)))] + loot_world_args(heldout) + (["--set", sets] if sets else [])
+           "--seeds", ",".join(str(x) for x in range(9501, 9501 + CFG["loot_gate_seeds"]))] + loot_world_args(heldout) + (["--set", sets] if sets else [])
     def chk(t):
         if "LOOT-REPORT" not in t:
             raise RuntimeError("no LOOT-REPORT line:\n%s" % t[-400:])
     t = text_run("lootrep:" + json.dumps(cmd[1:]), cmd, "builtin", check=chk)
     m = re.search(r"value/ep with gold ([-0-9.]+), without ([-0-9.]+) .*gate rows failing: ALL (\d+)", t)
     rows = {r.group(1): [float(r.group(2)), r.group(3) == "FAIL"] for r in re.finditer(r"^LOOTGATE ALL\s+(.+?)\s+([-0-9.]+)\s+<=\s+[-0-9.]+\s+(ok|FAIL)$", t, re.M)}
-    return {"value": float(m.group(1)), "value_no_gold": float(m.group(2)), "gate": rows, "gate_failing": sorted(k for k, v in rows.items() if v[1])}
+    seeds = {}   # row -> {seed: value}: the paired test's input (LootCli.h LOOTSEED)
+    for r in re.finditer(r"^LOOTSEED (\d+) ([-0-9.]+) (.+)$", t, re.M):
+        seeds.setdefault(r.group(3), {})[int(r.group(1))] = float(r.group(2))
+    return {"value": float(m.group(1)), "value_no_gold": float(m.group(2)), "gate": rows, "gate_failing": sorted(k for k, v in rows.items() if v[1]), "seeds": seeds}
 
 
 LOOT_HARD_ROWS = ("crimes", "guardSeenTakes")   # more of either rejects the table outright (followers never commit detected crimes)
 
 
+LOOT_REJECT_ROWS = ("leftRR/ep", "goldLeftRR/ep", "roadLeft%", "dibsNear/ep")   # worse beyond noise rejects it too: what "takes less" looks like (loot review R1, R2)
+LOOT_ROW_SE = 2.0   # PLACEHOLDER: a row is worse when the kept table's paired per-seed difference is above this many se
+
+
 def loot_gate_check(name, shipped, kept_rep):
-    """EVERY gate row is a number that must not get worse (every row of kLootBounds is 'at most'): a row the kept table makes worse than the shipped one is an
-    open decision whether or not it crosses its bound, and more crimes or guard-seen takes rejects the table (returns the reason)."""
-    worse = ["%s %.3f -> %.3f" % (k, shipped["gate"][k][0], v[0]) for k, v in sorted(kept_rep["gate"].items()) if k in shipped["gate"] and v[0] > shipped["gate"][k][0] + 1e-9]
-    if worse:
-        open_decision("loot table makes gate rows worse than the shipped table (%s places)" % name, "; ".join(worse))
-    hard = [w for w in worse if w.split(" ")[0] in LOOT_HARD_ROWS]
-    return ("%s places: %s" % (name, "; ".join(hard))) if hard else None
+    """EVERY gate row is a number that must not get worse (every row of kLootBounds is 'at most'). The test is PAIRED PER SEED (loot review R2: one take in 480
+    episodes used to flip a row, so every searched table was flagged and the flag meant nothing): d = kept - shipped per seed, worse = mean d > LOOT_ROW_SE se
+    and > 0. A REJECT row worse beyond noise rejects the table, and so does ONE more crime or guard-seen take in total (no noise band: a crime is not a
+    trade). Any other row worse beyond noise is a note. Returns (reason or None, {row: [shipped, kept, d, se, verdict]})."""
+    out, rej, notes = {}, [], []
+    for k, v in sorted(kept_rep["gate"].items()):
+        if k not in shipped["gate"]:
+            continue
+        a, b = shipped["seeds"].get(k, {}), kept_rep["seeds"].get(k, {})
+        d, se = mse([b[s] - a[s] for s in sorted(a) if s in b])
+        verdict = "ok"
+        if k in LOOT_HARD_ROWS:
+            if v[0] > shipped["gate"][k][0] + 1e-9:
+                verdict = "REJECT"
+        elif d > LOOT_ROW_SE * se and d > 1e-9:
+            verdict = "REJECT" if k in LOOT_REJECT_ROWS else "worse"
+        out[k] = [shipped["gate"][k][0], v[0], round(d, 4), round(se, 4), verdict]
+        if verdict != "ok":
+            (rej if verdict == "REJECT" else notes).append("%s %.3f -> %.3f (per seed %+.3f, se %.3f)" % (k, shipped["gate"][k][0], v[0], d, se))
+    if notes:
+        open_decision("loot table makes gate rows worse than the shipped table beyond noise (%s places)" % name, "; ".join(notes))
+    return ("%s places: %s" % (name, "; ".join(rej))) if rej else None, out
 
 
 def stage_loot_episodes():
     """THE IAUS LOOT TABLE in the loot world (sim v4 batch L, Loot.h: looting in the fight's own place, on the fight's own clock). The 16 score rows
     of LOOT_KNOBS and the batch hold (LOOT_EPISODE_KNOBS) are searched on the mean episode value (LootLab.h Score: fights + potion worth + GoldJ x
-    gold + the museum term, less 1000 per crime or guard-seen take, so no step can buy value with one). Then the kept table is CHECKED on the gate
-    (LootLab.h kLootBounds) and, with --loot-places, on that set's HELD-OUT places: ANY gate row worse than the shipped table's is an open decision,
-    more crimes or guard-seen takes REJECTS the table (kept is emptied, the reason recorded), and a table that loses value held-out is an open decision.
+    gold + the museum term, less 1000 per crime or guard-seen take BEYOND what the shipped table commits in the same episode, LootLab.h ScoreOver: no
+    step can buy value with one, and none is paid for taking less). Then the kept table is CHECKED on the gate (LootLab.h kLootBounds) and, with
+    --loot-places, on that set's HELD-OUT places, paired per seed against the shipped table (loot_gate_check): one more crime or guard-seen take, or
+    leftRR / goldLeftRR / roadLeft% / dibsNear worse beyond noise, REJECTS the table (kept is emptied, the reason recorded); another row worse beyond
+    noise is a note; and a table that loses value held-out is an open decision.
     What is "wanted" in those rows is the shipped table's verdict on the starting bag, and roadLeft% counts what any road could take: a table that takes
     less cannot read better.
     KNOWN TIE (review): loot.gold and loot.valuables are not independent. native's Valuables road takes coin too (LootTake.cpp), so with valuables in
@@ -2379,15 +2501,15 @@ def stage_loot_episodes():
     for name, held in (("train", False),) + ((("heldout", True),) if getattr(A, "loot_places", "") else ()):
         b, k = loot_report(None, held), loot_report(",".join(kept) or None, held)
         st[name] = {"shipped": b, "kept": k}
-        why = loot_gate_check(name, b, k)
+        why, st[name]["rows"] = loot_gate_check(name, b, k)
         if why:
-            st["rejected"] = why
+            st["rejected"] = "; ".join(x for x in (st.get("rejected"), why) if x)
         if held and kept and k["value"] < b["value"]:
             open_decision("loot table loses value on the held-out places", "%.3f against %.3f shipped: the kept values are not confirmed off the places they were searched on" % (k["value"], b["value"]))
     if not getattr(A, "loot_places", ""):
         open_decision("loot table not checked on held-out places", "the episodes ran on the hand-made fixtures; run with --loot-places <set> (needs ~/.cache/mfo-env and <set>.loot.json)")
     if st.get("rejected"):
-        open_decision("loot table REJECTED: more crimes or guard-seen takes than the shipped table", st["rejected"])
+        open_decision("loot table REJECTED: more crimes or guard-seen takes than the shipped table, or it leaves more of what is wanted (leftRR, goldLeftRR, roadLeft%, dibsNear) beyond noise", st["rejected"], kind="loot gate", verdict="rejected")
         SUMMARY["stages"]["loot"]["kept_before_reject"] = list(kept)
         SUMMARY["stages"]["loot"]["kept"] = []
         SUMMARY["stages"]["loot"]["rejected"] = st["rejected"]
@@ -2553,7 +2675,7 @@ def stage_recalib():
         for spec in curves:
             cls = spec.split(":")[0]
             rest = [c for c in curves if c != spec]
-            b, v = jmany([req("builtin", cls, "g3", rest, seeds), req("builtin", cls, "g3", curves, seeds)])
+            b, v = jmany([req("builtin", cls, "g3", rest, seeds, sets=final_sets()), req("builtin", cls, "g3", curves, seeds, sets=final_sets())])   # both arms in the table that ships (choice review R2)
             d, se = paired(b, v)
             ok = not worse(d, se)
             st["rows"].append({"spec": spec, "d": round(d, 3), "se": round(se, 3), "holds": ok})

@@ -45,7 +45,7 @@ namespace Sim {
         for (const auto& kv : root["gmst"].o) b.gmst[kv.first] = kv.second.num();
         ApplyRules(b);
         for (const J& s : root["foeSpells"].a) { SimSpell x; Classify(s, x); b.foeSpells.push_back(std::move(x)); }
-        for (const J& s : root["specs"].a) {
+        auto readSpec = [&](const J& s) {   // ONE builder: the foes and what a spell summons
             ActorSpec a; a.name = s["name"].s; a.race = s["race"].s; a.level = static_cast<int>(s["level"].num(1));
             a.hp = static_cast<float>(s["hp"].num(50)); a.mp = static_cast<float>(s["mp"].num()); a.sp = static_cast<float>(s["sp"].num());
             a.hpR = static_cast<float>(s["hpR"].num()); a.mpR = static_cast<float>(s["mpR"].num()); a.spR = static_cast<float>(s["spR"].num());
@@ -69,8 +69,10 @@ namespace Sim {
             a.mass = static_cast<float>(s["mass"].num(1)); if (a.mass <= 0) a.mass = 1;
             a.undead = s["undead"].yes(); a.dragon = s["dragon"].yes(); a.daedra = s["daedra"].yes(); a.animal = s["animal"].yes(); a.creature = s["creature"].yes(); a.immunePar = s["immunePar"].yes();
             a.atkMult = static_cast<float>(s["atkMult"].num(1)); a.powMult = static_cast<float>(s["powMult"].num(1));
-            b.specs.push_back(std::move(a));
-        }
+            return a;
+        };
+        for (const J& s : root["specs"].a) b.specs.push_back(readSpec(s));
+        for (const J& s : root["summonSpecs"].a) b.summonSpecs.push_back(readSpec(s));   // absent in a file compiled before sim bundle A: the generic creature
         for (const auto& kv : root["named"].o) for (const auto& lv : kv.second.o) b.named[kv.first].push_back({ std::atoi(lv.first.c_str()), static_cast<int>(lv.second.num(-1)) });
         for (const J& bk : root["buckets"].a) b.buckets.push_back(static_cast<int>(bk.num()));
         for (const J& e : root["encounters"].a) {
@@ -98,6 +100,7 @@ namespace Sim {
         for (const auto& kv : pt["power"].o) b.pPower[kv.first] = ReadThr(kv.second);
         for (const auto& kv : pt["spellMag"].o) b.pSpellMag[kv.first] = ReadThr(kv.second);
         for (const auto& kv : pt["spellCost"].o) b.pSpellCost[kv.first] = ReadThr(kv.second);
+        for (const J& r : pt["summonLimit"]["Conjuration"].a) b.summonLimitRows.push_back({ static_cast<float>(r[0].num()), static_cast<float>(r[1].num()), static_cast<float>(r[2].num(2)) });
         for (const auto& kv : pt["armor"].o) b.pArmor[kv.first] = ReadThr(kv.second);
         { const J& st = pt["stealth"];   // absent in a sim.json compiled before the class lab: the stealth perks are then none
           auto rd = [](const J& a) { std::vector<StealthRow> v; for (const J& p : a.a) { StealthRow r; r.av = static_cast<int>(p[0].num(15)); r.thr = static_cast<float>(p[1].num()); r.v = static_cast<float>(p[2].num(1)); r.chain = p[3].s; v.push_back(std::move(r)); } return v; };
@@ -321,7 +324,8 @@ namespace Sim {
                 for (std::size_t i = 0; want > 0 && i < cnd.size(); ++i, --want) { std::swap(cnd[i], cnd[static_cast<std::size_t>(R.I(static_cast<int>(i), static_cast<int>(cnd.size()) - 1))]); fb.spells.push_back(*cnd[i]); }
             }
             bool heal = false; for (const SimSpell& s : fb.spells) heal |= s.e.nature == Prune::Nature::Heal && costOf(s) <= a.mp;   // as the lab's draw: one heal he can pay for, when the list has one
-            if (!heal) { std::vector<const SimSpell*> cnd; for (auto* s : afford) if (s->e.nature == Prune::Nature::Heal) cnd.push_back(s); if (!cnd.empty()) fb.spells.push_back(*cnd[static_cast<std::size_t>(R.I(0, static_cast<int>(cnd.size()) - 1))]); }
+            if (!heal) { std::vector<const SimSpell*> cnd; const int half = g_books == 2 ? 1 : 0;   // from the book's OWN half of the records (choice review: the fallback leaked one heal across train / held out). A half with no heal he can pay for gives none
+                for (auto* s : afford) if (s->e.nature == Prune::Nature::Heal && BookHalf(s->e.name) == half) cnd.push_back(s); if (!cnd.empty()) fb.spells.push_back(*cnd[static_cast<std::size_t>(R.I(0, static_cast<int>(cnd.size()) - 1))]); }
         } else if (fam == Cls::Mage && casts) {
             for (auto nat : { Prune::Nature::Offense, Prune::Nature::Heal, Prune::Nature::Buff, Prune::Nature::Control, Prune::Nature::Ward }) {   // a ward too when the list has one (card I6)
                 std::vector<const SimSpell*> cnd; for (auto* s : afford) if (s->e.nature == nat) cnd.push_back(s);
