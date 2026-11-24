@@ -1754,7 +1754,15 @@ namespace {
             { P p; p.tlBurst = p.targetLocationDelivery = true; Check(Prune::IsPlacement(p), "placed L1: a location burst is a placement"); }
             { P p; p.selfBlast = true; Check(Prune::IsPlacement(p), "placed L1: a self blast is a placement (interim)"); }
             { P p; p.summon = true; Check(!Prune::IsPlacement(p), "placed L1: a Self summon is not a placement"); }
-            { P p; p.summon = p.targetLocationDelivery = true; Check(Prune::IsPlacement(p), "placed L1: Conjure Familiar (target location summon) is a placement until M1"); }
+            { P p; p.summon = p.targetLocationDelivery = true; Check(!Prune::IsPlacement(p), "placed M1: Conjure Familiar (target location summon) is kept"); }
+            { P p; p.summon = p.targetLocationDelivery = p.rune = p.wall = p.tlBurst = p.selfBlast = true; Check(!Prune::IsPlacement(p), "placed M1: summon wins over every placed kind"); }
+            {
+                Prune::StaticIn in; in.nature = Prune::Nature::Summon;
+                P p; p.summon = p.targetLocationDelivery = true; in.targetLocation = Prune::IsPlacement(p);
+                Check(Prune::StaticDrop(in) == Prune::Drop::Keep, "placed M1: a target location summon is an IAUS candidate");
+                in.roadUnsupported = true;
+                Check(Prune::StaticDrop(in) == Prune::Drop::Unanimated, "placed M1: the animation rule still goes first");
+            }
         }
         // ---- item 4: the block family ----
         ClassGate knight; knight.resolved = true; knight.treeOn = true; knight.block = true;

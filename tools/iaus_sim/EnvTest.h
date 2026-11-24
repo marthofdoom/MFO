@@ -305,6 +305,7 @@ namespace Sim {
             { const SimSpell s = V("Aimed", "FireAndForget", "\"proj\":true,\"impact\":true", hurt); ok(s.e.drop == D::Keep, "placed: a bolt with an impact hazard is kept"); }
             { const SimSpell s = V("Aimed", "Concentration", "\"proj\":true,\"impact\":true,\"drops\":true", hurt); ok(s.e.drop == D::Placement && s.foeDrop == D::Keep, "placed: a wall is no IAUS candidate, a foe keeps it"); }
             { const SimSpell s = V("TargetLocation", "FireAndForget", "\"proj\":true", hurt); ok(s.e.drop == D::Placement && s.foeDrop == D::Placement, "placed: a rune is dropped"); }
+            { const SimSpell s = V("TargetLocation", "FireAndForget", "", "\"archetype\":18,\"av\":-1,\"area\":0"); ok(s.e.drop == D::Keep && s.e.nature == Prune::Nature::Summon && s.foeDrop == D::Keep, "placed: a target location summon is kept (M1)"); }
             { const SimSpell s = V("Self", "FireAndForget", "\"impact\":true", hurtArea); ok(s.e.drop != D::Keep && s.foeDrop == D::Keep, "placed: a self blast with an impact hazard is blocked, a foe keeps it"); }
           }
           g_v4 = keep; }

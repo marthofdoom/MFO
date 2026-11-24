@@ -46,7 +46,7 @@ def verdict(s):
     else: n = 4
     area = any(e['area'] > 0 for e in fx) or p['payload'] > 0
     blast = self_ and not conc and n == 1 and p['impact']
-    placed = tl or shape == 'wall'
+    placed = (tl or shape == 'wall') and SUMMON not in ar   # M1: a summon is kept
     if s['castType'] == 'ConstantEffect': d = 'not castable'
     elif kind == 'buff' and not (conc and not self_) and shape not in ('summon', 'reanimate') and LIGHT in ar and s['delivery'] in ('Aimed', 'TargetLocation'): d = 'unanimated road only'
     elif blast or placed: d = 'target location'

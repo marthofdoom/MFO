@@ -71,7 +71,10 @@ namespace MFO::Iaus::Prune {
         bool selfBlast = false;                // IsSelfBlastPlacement (interim)
         bool summon = false;                   // any Summon Creature effect
     };
+    // M1 (marth's end state: no static drop): a SUMMON is kept whatever its delivery. The engine places the creature itself (plan 2.2), so there is no
+    // point to choose, and the claim road (cast/BuffRoad.cpp, target 0) animates it.
     [[nodiscard]] inline bool IsPlacement(const PlacementIn& a_in) {
+        if (a_in.summon) return false;
         return a_in.targetLocationDelivery || a_in.rune || a_in.wall || a_in.tlBurst || a_in.selfBlast;
     }
 
