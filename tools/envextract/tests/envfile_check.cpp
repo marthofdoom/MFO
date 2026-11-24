@@ -16,6 +16,9 @@ static unsigned long traverse(const mfoenv::Env& e) {
         for (uint32_t k = 0; k < m.linkCount; ++k) { const auto& l = e.links(m)[k]; if (l.targetMeshIdx >= 0 && !(l.flags & mfoenv::kStaleTarget)) h += e.tris(e.mesh(l.targetMeshIdx))[l.targetTri].flags; }
         for (uint32_t k = 0; k < m.doorCount; ++k) { const auto& d = e.doors(m)[k]; h += t[d.tri].flags; if (d.refIdx >= 0) h += e.ref(d.refIdx).kind; }
     }
+    for (uint32_t i = 0; i < e.doorRefCount(); ++i) { const auto& d = e.doorRef(i); h += d.refIdx; if (d.tri >= 0) h += e.tris(e.mesh(d.meshIdx))[d.tri].flags; }
+    for (uint32_t i = 0; i < e.seamCount(); ++i) h += e.links(e.mesh(e.link(e.seam(i).linkIdx).meshIdx)) != nullptr;
+    for (uint32_t i = 0; i < e.landCount(); ++i) h += e.land(i).h[1088] > 0.0f;
     for (uint32_t i = 0; i < e.refCount(); ++i) { const auto& r = e.ref(i); h += std::strlen(e.str(r.baseNameOff)) + std::strlen(e.str(r.modelOff)) + std::strlen(e.pluginName(r.id)); }
     return h + e.metaJson().size();
 }

@@ -10,7 +10,9 @@ numpy (installed here, 2.5.3; the raster features use it). Nothing is installed 
 ## Commands
 
     envextract.py scan     --set Vanilla|LoreRim|Tuxborn        # read plugins -> ~/.cache/mfo-env/_scan/<set>.pkl
-    envextract.py library  --set NAME [--count N] [--seed S] [--changed-only]   # classify + select + write .mfoenv + index.json
+    envextract.py library  --set NAME [--count N] [--heldout-count M] [--coverage-n N] [--seed S] [--changed-only]
+                                                                # reject anomalies, split, coverage pick, write library + held-out + index.json
+    envextract.py coverage [--coverage-n N]                     # tag / pair coverage of ALL sets together (reads index.json)
     envextract.py sample   --set NAME --class C --seed S --count K   # draw MORE environments of a class (seeded, deterministic)
     envextract.py svg      FILE.mfoenv [OUT.svg]                # top-down picture to eyeball
     envextract.py validate [--set NAME | FILE ...]              # NVNM self-check over every navmesh / env files
@@ -18,17 +20,25 @@ numpy (installed here, 2.5.3; the raster features use it). Nothing is installed 
 
 Sets: `Vanilla` = the five base ESMs of the LoreRim Stock Game Data folder. Lists are resolved from the list's own
 `ModOrganizer.ini` (`gamePath`) and `profiles/<profile>/{plugins,modlist}.txt` (no filesystem-wide search).
-`library` rewrites a set's folder (stale files of an older library are deleted); `--changed-only` limits candidates
-to places where a mod supplied a navmesh.
+`library` rewrites a set's folder and its `heldout/` folder (stale files of an older library are deleted); `--changed-only` limits
+candidates to places where a mod supplied a navmesh.
 
 ## Output layout
 
     ~/.cache/mfo-env/index.json                       all sets, every environment, class, size, features
     ~/.cache/mfo-env/<set>/<set>.<class>.<id>.mfoenv  one environment each (id = plugin name + local id + grid, load-order independent)
+    ~/.cache/mfo-env/<set>/heldout/                    the held-out places: same coverage; disjoint from every library place of EVERY set (one global hash split)
     ~/.cache/mfo-env/<set>/sample-<class>-<seed>/      what `sample` drew
     ~/.cache/mfo-env/_scan/<set>.pkl                  scan cache (tool-internal)
 
 ## File format `MFOENV` v2 (little endian, 4-byte aligned, no dependencies)
+
+Round 5 (tool version 3, still format 2): TRIS flags `0x1000 << k` mark internal edge k as CUT (the game data had it one-way or not the swapped
+edge; `nb[k]` is -1 there, see "How the library is picked"); META gets `worlds[]` (`parent`, `parentFlags`, `useParentLand`) and `cells[].quadHide`
+(CELL XCLC flags, low nibble only, the upper bytes of that u32 are junk in the data: bit0 hides land quad SW, bit1 SE, bit2 NW, bit3 NE; measured: 0 in 72858 of 72917 vanilla exterior cells, 15 in 46); DREF is joined by containing triangle (below). No struct changed.
+
+Round 4 added sections (DREF, SEAM, LAND) and used the `reserved` field of REFS and two new ref flag bits, all append-only: no struct changed, the
+version stays 2 and `envfile.h` still loads older v2 files (the three sections are optional; a file without them reports 0 rows).
 
     u8  magic[8]   = "MFOENV\0\0"
     u32 version    = 2
@@ -60,6 +70,9 @@ space. Rotation: radians as stored in the REFR.
 | DOOR | 20 | door triangles |
 | REFS | 128 | placed references |
 | TCMP | 4 | per triangle (same order as TRIS) `u16 walk, u16 weak` component ids |
+| DREF | 24 | APPENDED: every door ref joined to its navmesh triangle (optional, see below) |
+| SEAM | 32 | APPENDED: seams between linked meshes that do not meet (optional) |
+| LAND | 4360 | APPENDED: terrain heights of each exterior grid cell of the window (optional) |
 
 MESH: `u32 id; u32 cellId; u32 worldId; i16 gridX, gridY /*0x7FFF if interior*/; u32 vertBase, vertCount, triBase,
 triCount, linkBase, linkCount, doorBase, doorCount; f32 min[3], max[3]`. Meshes tile the tables in order. Triangle vertex
@@ -131,6 +144,34 @@ Actor spawn points are the placed ACHR records; hostility and stats are properti
 "Large static" = the larger side of the scaled OBND box is at least `--min-static` units (default 256).
 Window cells that have no navmesh still contribute their refs.
 
+### Appended sections (round 4)
+
+DREF (24): `u32 refIdx; i32 meshIdx; i32 tri; f32 dist; u8 openDefault; u8 lockLevel; u8 teleport; u8 startsDisabled; u32 key`. One row per
+door ref in REFS (plain doors and teleport doors). The triangle is the one of the navmesh DOOR row that names the ref (`dist` 0), else the
+triangle whose x,y footprint CONTAINS the door's position (the one nearest in height; `dist` 0), else the triangle with the nearest point to
+the door (`dist` = that 3D distance); a joined point must be within 100 units of the door in height, a nearest point also within 200 units
+horizontally, else -1 / -1. `openDefault` = the ref's XACT action flags carry
+"open by default" (bit 0x8; the layout comes from community docs and the single data point that doors with XACT 0x0D exist, not from
+observation in the game). `lockLevel`/`key` are the ref's XLOC. `startsDisabled` = REFS flag bit6 (the resolved start state).
+
+SEAM (32): `u32 linkIdx; f32 gap; f32 from[3]; f32 to[3]`. One row per kind 0 LINK whose owner edge does not touch the target triangle: gap
+= nearest approach between the owner edge and the edges of the target triangle (0.25 units or more), `from` a point on the owner edge, `to` the
+nearest point of the target triangle's edge, so a consumer can snap the two meshes together. Links that meet get no row.
+
+LAND (4360): `i16 gridX, gridY; f32 h[1089]`. One row per exterior grid cell of the window that has a LAND record: heights of the 33x33
+vertices, `h[y*33 + x]`, 128 units apart, y south to north, x west to east, origin `grid * 4096` (world space). Decoded from VHGT (f32 offset
+then 33x33 signed bytes, row start = previous row start + first byte, then cumulative, times 8). A crest without navmesh is in these heights.
+Checked against the navmesh: the terrain is at or under the navmesh (the navmesh sits on terrain, rocks and buildings), see Validation.
+CHILD WORLDS: a worldspace whose WRLD record names a parent (`META.worlds[].parent`) with the parent flag "use land data" (PNAM bit 0,
+`useParentLand`) takes its terrain from the parent: its own LAND records (some are present in the plugins) are NOT what the engine draws, so a
+consumer MUST IGNORE the LAND rows of a world with `useParentLand` true and fall back to the navmesh heights. Measured on the vanilla masters: the
+city worlds that carry the flag (bit 0 of PNAM) have 0 to 19 own LAND cells (a few are leftovers), against 94 to 1123 in the big worlds without it. `cells[].quadHide` says which
+quarter of a cell's land is force-hidden (the LAND rows still hold its heights); ignore the heights of a hidden quarter.
+
+Ownership: `REFS.reserved` = the owner id (0 none): the ref's own XOWN, else the cell's XOWN. Flags bit7 = owner is an NPC_ (else a faction or
+other form), bit8 = inherited from the cell. `META.cells[].owner` is the cell's owner id. Loose items (kind 4), containers (kind 1, with base id
+and lock), flora (7) and activators (2) are exported as kinds with their owner; race flags (open doors, fly, swim) live in the world json, not here.
+
 ### Components (TCMP, META.walkComponents)
 
 `walk`: connected components over internal neighbours plus kind 0 links whose target mesh is in the file. Id 0 is the largest.
@@ -154,43 +195,60 @@ or without history: highest vertex more than 12000 under the MEDIAN of the lowes
 meshes of the cell (interior, at least 2 others) or of the 3x3 cells (exterior, at least 3 others). They are dropped before classification and export; the count per environment is in
 `META.counts.displacedMeshesDropped`.
 
-## How the library is picked (measured geometry, no names, no list-specific ids)
+## How the library is picked: reject, then cover (measured geometry, no names, no list-specific ids)
 
-CAVEAT: a class name says what was MEASURED, not what the place is. `exterior_multilevel_statics` is not necessarily a fort and
-`exterior_actors_containers` is not necessarily a camp (wildlife counts as actors). Nothing here reads a name.
+Goal (marth 11-23): every terrain type and design accounted for; places messed up by mods are skipped, not repaired, and the sim's weightings
+then work anywhere.
 
-Candidates: each interior cell (its CELL record must carry the interior flag 0x1, else the mesh is dropped so META never contradicts the cell) with a navmesh that can be reached on foot from an exterior cell through load doors that do not
-start disabled (interiors that cannot are dropped; reachability uses the doors the scan kept, so an interior only reachable
-through a navmesh-less exterior cell is dropped too), and each exterior 3x3 grid-cell window (about 12000 units) with at least
-12.3M square units of walkable area and under 50 percent water-flagged area (lakes are not places to fight). Features come from
-the navmesh rasterised at 64 units: area, bounding box, vertical span, LAYERING (share of raster cells with two walkable surfaces
-more than 120 units apart: stairs, towers, ledges, bridges), NARROW (share with local width under about 200), median width, WIDE
-(width over about 960), STEEP (normal more than 31 degrees off vertical), plus counts of placed refs that do not start disabled
-(actor spawns, doors, teleport doors, containers, furniture, large statics).
+**1. Rejection.** A candidate (each interior cell with a navmesh that is reachable on foot from an exterior cell through load doors that do not
+start disabled and whose CELL carries the interior flag; each exterior 3x3 grid-cell window with 12.3M units^2 of walkable area and under 50
+percent water) is REJECTED if it has any of (limits in `coverage.py` LIMITS): `displaced_mesh` (a navmesh a plugin parked under the map, rules
+below), `doubtful_mesh` (flat within 100 units and more than 3000 under its neighbours' median: looks parked, not certain), `bad_edge_share`
+(more than 0.5 percent of its internal edges are one-way or not the swapped edge; below that the bad edges are CUT and MARKED, see below),
+`stale_or_broken_links` (a link to a triangle beyond the target mesh or to a mesh that does not exist), `owner_less_links`, `kind3_portals`
+(enable/disable portals), `small_main_component` (the largest walk component holds under 0.6 of the walkable area for an interior, 0.4 for an
+exterior window: islands and cliffs are normal outdoors), and for exterior windows `sparse_exterior` (fewer than 10 exported refs AND fewer than
+1500 triangles: filler strips) and `unreachable_exterior` (no teleport door in the window and no neighbouring window, touching it or one cell
+apart, that has content). `plugin_moved_refs` (a later plugin moved a ref into or out of one of its cells) is NOT a rejection since round 5: it
+rejected 92 percent of the big-city windows of a big list and says nothing about the place; it is kept as the feature `movedRefs` (0/1).
+`library` prints the count per reason (first hit / any) and a table of the REJECTED SHARE of the candidates per tag and per class, under the
+round-4 rule and the current one, so a bias against a kind of place shows (the same table is in `index.json`, `biasByTagAndClass`).
 
-`classes.py` is ONE rule table (first matching row wins; edit it to retune or add a class, nothing else changes):
+CUT EDGES: an internal neighbour pair the game data has one-way (the neighbour has no edge back) or whose neighbour edge is not the same two points
+in the opposite direction has `nb` set to -1 in the file and TRIS flag `0x1000 << edge` set, so the consumer sees a wall there, never a fake
+passage; the same cut applies to the component and graph measures.
 
-| class | rule (units) |
-|---|---|
-| interior_small_multilevel | layering >= 0.15, area < 3.0e6 |
-| interior_small | area < 1.5e6, layering < 0.15, < 8 actors |
-| interior_sloped_tall | z span >= 600, steep >= 0.04, area >= 1.5e6, layering < 0.08 |
-| interior_large_multilevel | layering >= 0.05, area >= 3.0e6 |
-| interior_wide | wide share >= 0.02, area >= 1.5e6 |
-| interior_narrow | narrow share >= 0.9, area >= 1.5e6 |
-| interior_other | rest |
-| exterior_many_doors | >= 5 teleport doors in the window |
-| exterior_multilevel_statics | layering >= 0.004, >= 10 large statics |
-| exterior_actors_containers | >= 3 actors, >= 4 containers+furniture, < 2 teleport doors, layering < 0.004 |
-| exterior_door_and_statics | >= 1 teleport door, >= 40 large statics |
-| exterior_steep | steep >= 0.22 |
-| exterior_wide_open | steep < 0.22, wide share >= 0.10 |
-| exterior_other | rest |
+**2. Coverage.** Each surviving place gets measured tags (`coverage.py` TAGS, one table; thresholds are the top quartile of the vanilla candidates,
+measured separately for interiors and exterior windows because they differ by an order of magnitude): `interior`, `exterior`, `slope_flat`
+(share of area under 15 degrees >= 0.85), `slope_gentle` (15-30), `slope_steep` (30-45), `slope_cliff` (45+), `stairs_run` / `stairs_long` (rise of
+the biggest connected run of triangles steeper than 25 degrees), `drops_low` / `drops_mid` / `drops_high` (kind 2 links by drop height: under 100,
+100-300, over 300 units), `narrow`, `doorway_portals` (3+ door triangles), `multi_floor` (layering), `large_open`, `clutter_dense` (small things
+to loot or bump into per million units^2), `occluders_dense` (large statics and trees), `cover_marked` (triangles with cover bits), `water_edge`,
+`water_large`, `islands` (walk components apart from the main one, 30+ triangles), `corridors` (path-like graph AND a high narrow-width share
+AND a low wide-width share), `dead_ends`, `loops`, `choke_points` (articulation points) from a coarse graph of 256-unit bins split into
+floors, `high_ground`, and the distance scale `scale_short` / `scale_mid` / `scale_long` (longest shortest path of that graph). The coarse graph
+is built from RASTERISED TRIANGLES: every 256-unit bin a walkable triangle touches is a node (a big flat triangle covers every bin under it; the
+round-4 graph used the centroid only, so a few huge triangles read as a thin path), nodes of one triangle connect along a 128-unit lattice, and
+triangles connect through their neighbours and links. It is computed for EVERY candidate (cached in `_scan/<set>.graph.pkl`, a few minutes per set)
+so the rejected-share table can tag rejected places too.
 
-Within a class the library takes the members farthest apart in feature space (greedy farthest-point, seeded start); chosen
-exterior windows are at least 3 grid cells apart. `sample` draws more with a seed from the same candidates (uniform, same
-separation rule, never one already in the library). The vanilla masters contain developer test cells; nothing here looks at names,
-so they classify like any other cell.
+**3. One global split, library and held-out.** The unit is an interior cell, or an exterior BLOCK of 12 x 12 grid cells of one worldspace. An
+exterior window is a candidate only when its 3x3 cells lie inside one block (its centre is 1 to 10 cells inside), so windows of different
+blocks never overlap. A block's side is a hash (SHA-1) of its name-based id, plugin file name + local id of the worldspace + block
+coordinates (`coverage.py` BLOCK, HELD_PERCENT = 40), so it does not depend on a load order and the same place in two sets falls on the same
+side. Library places are picked only from 'lib' blocks and held-out places only from 'held' blocks, in EVERY set, so no library place of any set
+overlaps a held-out place of any set. `validate` (no argument) checks it over `index.json`: each place on the side its block hashes to, no window
+crossing a block edge, and 0 cells shared between library windows and held-out windows across all sets.
+Each side gets a pool of clean places (`--pool` library side, two thirds of it held-out side) spread by the feature-space farthest-point rule; the
+pick then takes, greedily, the place covering the most unmet needs until every tag and every COMMON tag pair (present together in at least
+`--pair-share`, default 3 percent, of the candidates) is in the picked set at least `--coverage-n` (default 2) times or the count is reached;
+spare room is filled by farthest-point diversity. Availability is judged on the whole candidate set. `envextract.py coverage` prints the tags
+and pairs unmet over all sets together. The table (pool count, library count, held-out count, status: ok / SHORT / NONE AVAILABLE) and every
+unmet need are printed and stored in `index.json` (`coverage`, `unmetPairsLibrary`, `unmetTagsLibrary`, `unmetTagsHeldout`).
+
+Class names in the files (`exterior_multilevel_statics`, ...) are the older measured classes (`classes.py`), kept for file names and for the pool
+spread. CAVEAT: a class name says what was MEASURED, not what the place is (a "multilevel statics" window is not necessarily a fort, "actors
+containers" not necessarily a camp: wildlife counts as actors). Nothing reads a name.
 
 ## Water
 
@@ -204,7 +262,7 @@ water is walkable (followers wade); treat flagged triangles as a movement cost /
 
 * Real collision meshes (line of sight, projectile blocking, wall thickness): they are `.nif` files in BSAs / loose meshes.
   REFS carry `modelOff` and the base bounds so a later step can fetch them. Until then occlusion is the OBND box.
-* Terrain height away from the navmesh (LAND is not exported).
+* Terrain height of a child world that uses its parent's land data (its LAND rows are ignored, see LAND), and of a force-hidden quad.
 * What scripts decide: which disabled refs get enabled, which doors are locked after a quest.
 * Actor stats: use the world json (list_balance) joined by `(plugin, local)` base ids.
 
@@ -223,7 +281,12 @@ the last run (`validate-<set>.json` in the cache has the raw counts):
 | ... a link back from the target | 99.97% | 99.68% | 99.88% |
 | ... edge within 4 / within 32 units of the target triangle | 76.5% / 97.5% | 78.4% / 97.6% | 78.6% / 97.5% |
 | door flag vs door rows (agree / flag-only) | 2211 / 3 | 6843 / 17 | 8476 / 83 |
+| LAND vs navmesh: within 16 units / terrain more than 16 above the navmesh | 51.0% / 1.99% | 51.5% / 2.99% | 53.5% / 2.18% |
 | water flag: flagged below water height / below water flagged | 98.3% / 91.2% | 98.5% / 89.8% | 96.5% / 90.3% |
+
+LAND check: the decoded terrain is compared with the navmesh vertices of 300 sampled exterior meshes per set; the navmesh sits on terrain, rocks and
+buildings, so the terrain is mostly at or under it; the 2 to 3 percent where it rises more than 16 units above are navmesh meshes edited by mods or on
+steep cell corners. The axis and sign conventions of the decode were tested against alternatives (transposed, flipped), which are 4 to 5 times worse.
 
 "Consumed size equals the subrecord size and every vertex / neighbour / link / door / cover / grid index is in range" holds for
 100 percent of records. Exceptions, explained: the one-way neighbours and the 30-odd links without a link back are what the game
@@ -234,11 +297,19 @@ geometrically adjacent) and a few cell-border seams. The 3 / 17 / 83 flag-only d
 There is no independent NVNM reader on this machine (no xEdit for Skyrim, no pyffi, no Mutagen), so the cross-check is the data's own
 redundancy: bytes consumed exactly, door bit vs door rows, link bits vs link rows, reciprocal neighbours with matching geometry,
 water bit vs water height, link kind pairs 1<->2 (2350 of 2351 in vanilla). `validate FILE.mfoenv` checks written environments (ranges,
-swapped-edge neighbours, door ref ids, bounds, component table); with no argument it checks every file in the cache. The unit tests
-(23) include the C++ reader under ASAN/UBSAN.
+swapped-edge neighbours, cut flags, door ref ids, bounds, component table); with no argument it checks every file in the cache and then the library / held-out split over `index.json`. The unit tests
+(39) include the C++ reader under ASAN/UBSAN, the split, the cut edges, the door join and the raster graph.
 
 
 ## Open items
+
+* DREF `openDefault` reads XACT bit 0x8 (community docs; one data point: 29 vanilla doors carry XACT 0x0D). Not observed in game.
+* The rejections still skip places a mod messed up (parked meshes, broken links, filler strips); `plugin_moved_refs` is no longer one. Check the
+  rejected-share table that `library` prints for a bias against a kind of place.
+* Coverage thresholds (`coverage.py` TAGS) are vanilla top quartiles; lists with small `--count` leave some tag pairs unmet (printed and stored).
+* The coarse graph (256-unit bins split by floor, rasterised triangles) is a proxy for dead ends, loops and choke points.
+* DREF join, round 5 library (125 files): 806 door rows, 30 without a triangle (no triangle within 100 units in height, nearest point 200 horizontally).
+* The thresholds of the graph tags and `LIMITS` were set from the vanilla candidates; a big list's own distribution may differ (printed in the rejected-share table).
 
 * Link kinds 1/2/3 are decoded from data direction and the community enum only; no in-game observation backs them.
 * Triangle bits 0x10, 0x20, 0x40 are not measured.

@@ -89,6 +89,11 @@ class Raster:
             cur = nxt
         self.lvl = lvl
         self.layered = occ & ((self.zmax - self.zmin) > LAYER_GAP)
+        wt = self.water.astype(bool); p = np.pad(wt, 1); dil = np.zeros_like(wt)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                dil |= p[1 + dy:1 + dy + wt.shape[0], 1 + dx:1 + dx + wt.shape[1]]
+        self.wedge = occ & ~wt & dil      # dry walkable cells touching water-flagged cells
 
     def window(self, x0, y0, x1, y1):
         """feature dict of the world rectangle [x0,x1) x [y0,y1)."""
@@ -106,4 +111,5 @@ class Raster:
                     steep=float(self.steep[ja:jb, ia:ib][occ].sum()) / n,
                     water=float(self.water[ja:jb, ia:ib][occ].sum()) / n,
                     zSpan=float(np.percentile(zl, 98) - np.percentile(zl, 2)),
+                    waterEdge=float(self.wedge[ja:jb, ia:ib].sum()) / n, highGround=float((zl >= np.median(zl) + 250).sum()) / n,
                     extX=float(np.any(occ, axis=0).sum()) * S, extY=float(np.any(occ, axis=1).sum()) * S)

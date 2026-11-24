@@ -38,7 +38,7 @@ def world_bounds(obnd, pos, rot, scale):
 
 def classify(sc, ref, min_static=DEFAULT_MIN_STATIC):
     """-> (kind, sig, flags_extra, bounds) or None when the ref is not exported.  ref = scan['refs'] value."""
-    ck, fl, isactor, nm, pos, rot, scale, ep, tel, lock, cnt = ref
+    ck, fl, isactor, nm, pos, rot, scale, ep, tel, lock, cnt = ref[:11]
     b = sc['bases'].get(nm)
     if b is None: return None
     sig, edid, obnd, model = b

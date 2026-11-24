@@ -2,7 +2,7 @@
 import math, random, time
 from multiprocessing import Pool
 import numpy as np
-import features as F, refs as R
+import features as F, refs as R, anomaly as AN
 
 WIN = 1                    # exterior window = (2*WIN+1)^2 grid cells around the centre cell
 MAX_WATER = 0.5            # exterior windows with at least this share of water-flagged walkable area are not candidates
@@ -54,7 +54,25 @@ def displaced_meshes(sc):
                 if k in out: continue
                 o = others_min(nb, k)
                 if len(o) >= 3 and info[k][1] < float(np.median(o)) - MEDIAN_GAP: out.add(k)
-    sc['_displaced'] = out; sc['_displaced_rule1'] = r1
+    sc['_displaced'] = out; sc['_displaced_rule1'] = r1; sc['_info'] = info; sc['_grp'] = grp
+    return out
+
+
+def doubtful_meshes(sc):
+    """Meshes that look parked but are not certain: flat within 100 units and more than DISPLACED_GAP (3000) under the median of the lowest
+    vertices of their non-flat neighbours (the displaced rules need 12000 or a history), and not already displaced.  The coverage library
+    rejects places holding one."""
+    if '_doubtful' in sc: return sc['_doubtful']
+    out_d = displaced_meshes(sc); info = sc['_info']; grp = sc['_grp']; out = set()
+    def others(ks, k): return [info[j][0] for j in ks if j != k and j not in out_d and info[j][1] - info[j][0] >= FLAT]
+    for u, ks in grp.items():
+        nb = ks if u[0] == 'i' else [j for dx in (-1, 0, 1) for dy in (-1, 0, 1) for j in grp.get(('x', u[1], u[2] + dx, u[3] + dy), ())]
+        need = 2 if u[0] == 'i' else 3
+        for k in ks:
+            if k in out_d: continue
+            o = others(nb, k)
+            if len(o) >= need and info[k][1] - info[k][0] < 100.0 and info[k][1] < float(np.median(o)) - DISPLACED_GAP: out.add(k)
+    sc['_doubtful'] = out
     return out
 
 
@@ -97,14 +115,34 @@ def unit_of_mesh(sc, k):
     return ('i', ck)
 
 
-def _mesh_stat(m):
-    P = m['verts'][m['tris']['v'].astype(np.int64)]
-    area = 0.5 * np.linalg.norm(np.cross(P[:, 1] - P[:, 0], P[:, 2] - P[:, 0]), axis=1).sum()
-    return dict(tris=len(m['tris']), verts=len(m['verts']), area3d=float(area), doorTris=m['ndoors'], links=m['nlinks'])
+def _resolver(sc, k):
+    rs = _S.setdefault('rs', {}); pi = sc['navm'][k][0]
+    if pi not in rs:
+        import export
+        rs[pi] = export._res(sc, pi)
+    return rs[pi]
+
+
+def _mesh_stat(sc, k, pm):
+    rk = _resolver(sc, k)
+    def tm(key):
+        return pm(key) if key in sc['navm'] else None
+    st = AN.analyze_mesh(pm(k), rk, tm)
+    st['verts'] = len(pm(k)['verts']); st['area3d'] = st['a0'] + st['a1'] + st['a2'] + st['a3']
+    return st
 
 
 def _add(a, b):
-    for k, v in b.items(): a[k] = a.get(k, 0) + v
+    for k, v in b.items():
+        a[k] = max(a.get(k, 0), v) if k == 'steepRise' else a.get(k, 0) + v
+
+
+def _place(sc, keys, pm):
+    """component facts of one place (union of meshes)"""
+    meshes = [(k, pm(k)) for k in keys]; keyidx = {k: i for i, k in enumerate(keys)}
+    def rt(k, raw): return _resolver(sc, k)(raw)
+    share, islands, _, _ = AN.place_components(meshes, keyidx, rt)
+    return dict(mainShare=share, islands=islands)
 
 
 def _world_task(args):
@@ -116,11 +154,14 @@ def _world_task(args):
         gxs = [u[2] for u in cells]; gys = [u[3] for u in cells]
         gx0, gy0 = min(gxs) - WIN, min(gys) - WIN
         W = (max(gxs) - min(gxs) + 1 + 2 * WIN) * 64; H = (max(gys) - min(gys) + 1 + 2 * WIN) * 64
-        Rz = F.Raster(gx0 * 4096.0, gy0 * 4096.0, W, H); stats = {}
+        Rz = F.Raster(gx0 * 4096.0, gy0 * 4096.0, W, H); stats = {}; pcache = {}
+        def pm(k):
+            if k not in pcache: pcache[k] = F.parse_np(sc['navm'][k][1])
+            return pcache[k]
         for u in cells:
             st = {}
             for k in groups[u]:
-                m = F.parse_np(sc['navm'][k][1]); Rz.add(m['verts'], m['tris']); _add(st, _mesh_stat(m))
+                m = pm(k); Rz.add(m['verts'], m['tris']); _add(st, _mesh_stat(sc, k, pm))
             stats[(u[2], u[3])] = st
         Rz.finish()
         have = set(stats)
@@ -132,19 +173,25 @@ def _world_task(args):
                 for dy in range(-WIN, WIN + 1):
                     if (gx + dx, gy + dy) in have: _add(tot, stats[(gx + dx, gy + dy)])
             if win['water'] >= MAX_WATER: continue      # mostly water: a lake, not a place to fight or loot
-            win.update(tot); out.append((('x', w, gx, gy), win))
+            win.update(tot)
+            keys = [k for dx in range(-WIN, WIN + 1) for dy in range(-WIN, WIN + 1) for k in groups.get(('x', w, gx + dx, gy + dy), ())]
+            win.update(_place(sc, keys, pm)); win['placeKeys'] = len(keys); win['interior'] = False
+            out.append((('x', w, gx, gy), win))
     else:
         for ck in ident:
-            u = ('i', ck); ms = [F.parse_np(sc['navm'][k][1]) for k in groups[u]]
+            u = ('i', ck); pcache = {k: F.parse_np(sc['navm'][k][1]) for k in groups[u]}; ms = [pcache[k] for k in groups[u]]
+            def pm(k, pcache=pcache):
+                if k not in pcache: pcache[k] = F.parse_np(sc['navm'][k][1])
+                return pcache[k]
             allv = np.concatenate([m['verts'] for m in ms])
             ox, oy = math.floor(allv[:, 0].min() / F.S) * F.S - F.S, math.floor(allv[:, 1].min() / F.S) * F.S - F.S
             W = int((allv[:, 0].max() - ox) / F.S) + 3; H = int((allv[:, 1].max() - oy) / F.S) + 3
             if W * H > 40_000_000: continue
             Rz = F.Raster(ox, oy, W, H); st = {}
-            for m in ms: Rz.add(m['verts'], m['tris']); _add(st, _mesh_stat(m))
+            for k in groups[u]: Rz.add(pm(k)['verts'], pm(k)['tris']); _add(st, _mesh_stat(sc, k, pm))
             Rz.finish(); win = Rz.window(ox, oy, ox + W * F.S, oy + H * F.S)
             if win is None: continue
-            win.update(st); out.append((u, win))
+            win.update(st); win.update(_place(sc, groups[u], pm)); win['placeKeys'] = len(groups[u]); win['interior'] = True; out.append((u, win))
     return out
 
 
@@ -197,5 +244,75 @@ def ref_features(sc, cands, min_static=R.DEFAULT_MIN_STATIC):
                 if kind == R.K_DOOR:
                     if ref[8]: f['nTele'] += 1
                     if ref[9]: f['nLocked'] += 1
-    for f in cands.values(): f['nStuff'] = f['nCont'] + f['nFurn']
+    for f in cands.values():
+        f['nRefs'] = sum(f[n] for n in names.values())
+        f['nStuff'] = f['nCont'] + f['nFurn']; mu = max(f.get('areaUnits2', 1e6) / 1e6, 0.01)
+        f['clutter'] = (f['nItem'] + f['nCont'] + f['nActi'] + f['nFlora'] + f['nFurn']) / mu     # small things to loot / bump into, per million units^2
+        f['occl'] = (f['nLarge'] + f['nTree']) / mu                                                # large statics and trees (occluders), per million units^2
     return by
+
+
+def exterior_reach(cands, content, ring=(2, 3)):
+    """sets f['reach'] (0/1) on every candidate.  Interiors: 1 (they were already filtered by reachable_cells).  An exterior window is reachable when it
+    holds a teleport door, or a candidate of the same worldspace at Chebyshev distance in `ring` (a neighbouring window, touching or one cell apart) has
+    content.  content(f) -> bool."""
+    have = {u for u, f in cands.items() if u[0] == 'x' and content(f)}
+    for u, f in cands.items():
+        if u[0] == 'i': f['reach'] = 1; continue
+        near = any(('x', u[1], u[2] + dx, u[3] + dy) in have for dx in range(-ring[1], ring[1] + 1) for dy in range(-ring[1], ring[1] + 1)
+                   if ring[0] <= max(abs(dx), abs(dy)) <= ring[1])
+        f['reach'] = 1 if f.get('nTele', 0) > 0 or near else 0
+
+
+def place_flags(sc, units):
+    """unit -> set of reason names (coverage.REASONS) that come from meshes / refs: displaced, doubtful, plugin-moved refs.  A place is flagged when
+    any mesh of its cells (3x3 for an exterior window) or any moved ref falls in it."""
+    gk = lambda k: unit_of_mesh(sc, k)
+    def cellset(ks):
+        s = set()
+        for k in ks:
+            ni = sc['navinfo'].get(k)
+            if ni is None: continue
+            s.add(('x', ni[0], ni[1], ni[2]) if ni[0] else ('i', ni[3]))
+        return s
+    disp = cellset(displaced_meshes(sc)); doubt = cellset(doubtful_meshes(sc)); moved = set()
+    cells = sc['cells']
+    for ck, n in sc.get('movedfrom', {}).items():
+        c = cells.get(ck)
+        if c is None: continue
+        if c['flags'] & 1 and not c['persist']: moved.add(('i', ck))
+        elif c['grid'] is not None: moved.add(('x', c['world'], c['grid'][0], c['grid'][1]))
+    out = {}
+    for u in units:
+        cs = [u] if u[0] == 'i' else [('x', u[1], u[2] + dx, u[3] + dy) for dx in range(-WIN, WIN + 1) for dy in range(-WIN, WIN + 1)]
+        fl = set()
+        if any(c in disp for c in cs): fl.add('displaced_mesh')
+        if any(c in doubt for c in cs): fl.add('doubtful_mesh')
+        if any(c in moved for c in cs): fl.add('plugin_moved_refs')
+        out[u] = fl
+    return out
+
+
+def _graph_task(units):
+    sc = _S['sc']; groups = _S['groups']; out = []
+    pcache = {}
+    def pm(k):
+        if k not in pcache: pcache[k] = F.parse_np(sc['navm'][k][1])
+        return pcache[k]
+    for u in units:
+        cs = [u] if u[0] == 'i' else [('x', u[1], u[2] + dx, u[3] + dy) for dx in range(-WIN, WIN + 1) for dy in range(-WIN, WIN + 1)]
+        keys = [k for c in cs for k in groups.get(c, ())]
+        meshes = [(k, pm(k)) for k in keys]; keyidx = {k: i for i, k in enumerate(keys)}
+        g = AN.coarse_graph_features(meshes, keyidx, lambda k, raw: _resolver(sc, k)(raw))
+        out.append((u, dict(gnodes=g['nodes'], loops=g['loops'], deadEnds=g['deadEnds'], chokes=g['chokes'], span=g['span'], pathy=g['pathy'])))
+        if len(pcache) > 400: pcache.clear()
+    return out
+
+
+def graph_features(sc, groups, units, procs=6):
+    _S['sc'] = sc; _S['groups'] = groups
+    units = sorted(units); step = max(1, len(units) // (procs * 6)); res = {}
+    with Pool(procs) as p:
+        for chunk in p.imap_unordered(_graph_task, [units[i:i + step] for i in range(0, len(units), step)]):
+            for u, g in chunk: res[u] = g
+    return res

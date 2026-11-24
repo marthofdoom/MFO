@@ -3,6 +3,7 @@
 // load() validates EVERYTHING before any accessor can be used: a file that loads can be traversed without bounds checks
 // by the caller (every index in the tables is in range, strings are terminated, sections are aligned and inside the file).
 #pragma once
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -20,7 +21,10 @@ struct Vert { float x, y, z; };
 struct Tri { uint16_t v[3]; int16_t nb[3]; uint16_t flags, cover; };   // v, nb are LOCAL to the mesh; nb -1 none or external (see Link)
 struct Link { uint32_t meshIdx; uint16_t tri; uint8_t edge, kind; uint32_t targetMeshId; int32_t targetMeshIdx; uint16_t targetTri, flags; float dz; };
 struct Door { uint32_t meshIdx; uint16_t tri, pad; uint32_t crc, doorRefId; int32_t refIdx; };
-struct Comp { uint16_t walk, weak; };   // per triangle component ids (0 = largest)
+struct Comp { uint16_t walk, weak; };
+struct DoorRef { uint32_t refIdx; int32_t meshIdx, tri; float dist; uint8_t openDefault, lockLevel, teleport, startsDisabled; uint32_t key; };   // 24, optional DREF
+struct Seam { uint32_t linkIdx; float gap; float from[3], to[3]; };                                                                      // 32, optional SEAM
+struct Land { int16_t gridX, gridY; float h[1089]; };                                                                                  // 4360, optional LAND: h[y*33+x], 128 units apart, cell origin = grid*4096   // per triangle component ids (0 = largest)
 struct Ref {    // 128
     uint32_t id, base, cellId; uint8_t kind, baseSig; uint16_t flags;
     float pos[3], rot[3], scale, boundsMin[3], boundsMax[3];
@@ -29,12 +33,13 @@ struct Ref {    // 128
 };
 #pragma pack(pop)
 static_assert(sizeof(Mesh) == 72 && sizeof(Vert) == 12 && sizeof(Tri) == 16 && sizeof(Link) == 24 && sizeof(Door) == 20 &&
-              sizeof(Comp) == 4 && sizeof(Ref) == 128, "layout");
+              sizeof(Comp) == 4 && sizeof(Ref) == 128 && sizeof(DoorRef) == 24 && sizeof(Seam) == 32 && sizeof(Land) == 4360, "layout");
 
-enum TriFlag : uint16_t { kEdge0Ext = 1, kEdge1Ext = 2, kEdge2Ext = 4, kDeleted = 8, kNoLarge = 0x10, kOverlap = 0x20, kPreferred = 0x40, kWater = 0x200, kDoor = 0x400 };
+enum TriFlag : uint16_t { kEdge0Ext = 1, kEdge1Ext = 2, kEdge2Ext = 4, kDeleted = 8, kNoLarge = 0x10, kOverlap = 0x20, kPreferred = 0x40, kWater = 0x200, kDoor = 0x400,
+                         kCutEdge0 = 0x1000, kCutEdge1 = 0x2000, kCutEdge2 = 0x4000 };   // kCutEdge<k>: internal edge k was one-way / not the swapped edge in the game data, nb[k] was set to -1
 enum LinkFlag : uint16_t { kStaleTarget = 1, kNoOwnerEdge = 2, kDzUnknown = 4 };
 enum Kind : uint8_t { kDoorRef, kContainer, kActivator, kFurniture, kItem, kActor, kStatic, kFlora, kTree };
-enum RefFlag : uint16_t { kPersistent = 1, kLeveledActor = 2, kHasEnableParent = 4, kLocked = 8, kTeleport = 16, kEnableInverted = 32, kStartsDisabled = 64 };
+enum RefFlag : uint16_t { kPersistent = 1, kLeveledActor = 2, kHasEnableParent = 4, kLocked = 8, kTeleport = 16, kEnableInverted = 32, kStartsDisabled = 64, kOwnerIsNpc = 128, kOwnerFromCell = 256 };   // Ref.reserved = owner id (0 none)
 
 class Env {
 public:
@@ -73,13 +78,13 @@ public:
         if (ns == 0 || ns > 64) return fail(err, "bad section count");
         const uint64_t tableEnd = 16 + 16ull * ns;
         if (tableEnd > n) return fail(err, "section table outside file");
-        struct Sec { uint32_t off = 0, cnt = 0, rec = 0; bool have = false; } S[10];
-        static const char* tags[10] = {"META", "STRS", "PLUG", "MESH", "VERT", "TRIS", "LINK", "DOOR", "REFS", "TCMP"};
-        static const uint32_t recs[10] = {1, 1, 4, sizeof(Mesh), sizeof(Vert), sizeof(Tri), sizeof(Link), sizeof(Door), sizeof(Ref), sizeof(Comp)};
+        struct Sec { uint32_t off = 0, cnt = 0, rec = 0; bool have = false; } S[13];
+        static const char* tags[13] = {"META", "STRS", "PLUG", "MESH", "VERT", "TRIS", "LINK", "DOOR", "REFS", "TCMP", "DREF", "SEAM", "LAND"};
+        static const uint32_t recs[13] = {1, 1, 4, sizeof(Mesh), sizeof(Vert), sizeof(Tri), sizeof(Link), sizeof(Door), sizeof(Ref), sizeof(Comp), sizeof(DoorRef), sizeof(Seam), sizeof(Land)};
         for (uint32_t i = 0; i < ns; ++i) {
             const uint8_t* p = &buf_[16 + 16 * (size_t)i]; uint32_t off, cnt, rec;
             std::memcpy(&off, p + 4, 4); std::memcpy(&cnt, p + 8, 4); std::memcpy(&rec, p + 12, 4);
-            for (int t = 0; t < 10; ++t) {
+            for (int t = 0; t < 13; ++t) {
                 if (std::memcmp(p, tags[t], 4) != 0) continue;   // unknown tags are ignored on purpose (append-only evolution)
                 if (S[t].have) return fail(err, "duplicate section");
                 if (rec != recs[t]) return fail(err, "section record size mismatch");
@@ -88,7 +93,7 @@ public:
                 S[t].off = off; S[t].cnt = cnt; S[t].rec = rec; S[t].have = true;
             }
         }
-        for (int t = 0; t < 10; ++t) if (!S[t].have) return fail(err, "required section missing");
+        for (int t = 0; t < 10; ++t) if (!S[t].have) return fail(err, "required section missing");   // DREF, SEAM and LAND are optional (older v2 files lack them)
         const uint8_t* base = buf_.data();
         meta_.assign((const char*)base + S[0].off, S[0].cnt);
         strs_ = base + S[1].off; strsN_ = S[1].cnt;
@@ -101,6 +106,9 @@ public:
         door_ = (const Door*)(base + S[7].off); doorN_ = S[7].cnt;
         ref_ = (const Ref*)(base + S[8].off); refN_ = S[8].cnt;
         comp_ = (const Comp*)(base + S[9].off);
+        if (S[10].have) { dref_ = (const DoorRef*)(base + S[10].off); drefN_ = S[10].cnt; }
+        if (S[11].have) { seam_ = (const Seam*)(base + S[11].off); seamN_ = S[11].cnt; }
+        if (S[12].have) { land_ = (const Land*)(base + S[12].off); landN_ = S[12].cnt; }
         if (S[9].cnt != triN_) return fail(err, "component table size mismatch");
         for (uint32_t i = 0; i < plugN_; ++i) if (plug_[i] >= strsN_) return fail(err, "plugin name offset");
         auto idOk = [&](uint32_t id) { return id == 0 || (id >> 24) < plugN_; };
@@ -129,6 +137,7 @@ public:
             if (l.targetMeshIdx < -1 || l.targetMeshIdx >= (int64_t)meshN_) return fail(err, "link target mesh");
             if (l.targetMeshIdx >= 0 && !(l.flags & kStaleTarget) && l.targetTri >= mesh_[l.targetMeshIdx].triCount) return fail(err, "link target triangle");
             if (!idOk(l.targetMeshId)) return fail(err, "link id plugin index");
+            if (!std::isfinite(l.dz)) return fail(err, "link dz not finite");
         }
         for (uint32_t i = 0; i < doorN_; ++i) {
             const Door& d = door_[i];
@@ -141,7 +150,24 @@ public:
             if (r.kind > kTree) return fail(err, "ref kind");
             if (!idOk(r.id) || !idOk(r.base) || !idOk(r.cellId) || !idOk(r.key) || !idOk(r.teleportRef) || !idOk(r.tpCellId) || !idOk(r.enableParent)) return fail(err, "ref id plugin index");
             if (r.baseNameOff >= strsN_ || r.modelOff >= strsN_) return fail(err, "ref string offset");
+            if (!idOk(r.reserved)) return fail(err, "ref owner id plugin index");
         }
+        for (uint32_t i = 0; i < drefN_; ++i) {
+            const DoorRef& d = dref_[i];
+            if (d.refIdx >= refN_) return fail(err, "door ref row ref index");
+            if (d.meshIdx < -1 || d.meshIdx >= (int64_t)meshN_) return fail(err, "door ref row mesh");
+            if (d.tri < -1 || (d.tri >= 0 && (d.meshIdx < 0 || d.tri >= (int64_t)mesh_[d.meshIdx].triCount))) return fail(err, "door ref row triangle");
+            if (!idOk(d.key)) return fail(err, "door ref row key id");
+            if (!std::isfinite(d.dist)) return fail(err, "door ref row distance not finite");
+        }
+        for (uint32_t i = 0; i < seamN_; ++i) {
+            const Seam& sm = seam_[i];
+            if (sm.linkIdx >= linkN_) return fail(err, "seam link index");
+            if (!std::isfinite(sm.gap)) return fail(err, "seam gap not finite");
+            for (int j = 0; j < 3; ++j) if (!std::isfinite(sm.from[j]) || !std::isfinite(sm.to[j])) return fail(err, "seam point not finite");
+        }
+        for (uint32_t i = 0; i < landN_; ++i)
+            for (int j = 0; j < 1089; ++j) if (!std::isfinite(land_[i].h[j])) return fail(err, "land height not finite");
         return true;
     }
 
@@ -158,12 +184,15 @@ public:
     uint32_t refCount() const { return refN_; }         const Ref& ref(uint32_t i) const { return ref_[i]; }
     uint32_t linkCount() const { return linkN_; }       const Link& link(uint32_t i) const { return link_[i]; }
     uint32_t doorCount() const { return doorN_; }       const Door& door(uint32_t i) const { return door_[i]; }
+    uint32_t doorRefCount() const { return drefN_; }    const DoorRef& doorRef(uint32_t i) const { return dref_[i]; }
+    uint32_t seamCount() const { return seamN_; }       const Seam& seam(uint32_t i) const { return seam_[i]; }
+    uint32_t landCount() const { return landN_; }       const Land& land(uint32_t i) const { return land_[i]; }
 private:
     static bool fail(std::string* err, const char* m) { if (err) *err = m; return false; }
     std::vector<uint8_t> buf_; std::string meta_;
     const uint8_t* strs_ = nullptr; uint32_t strsN_ = 0; const uint32_t* plug_ = nullptr; uint32_t plugN_ = 0;
     const Mesh* mesh_ = nullptr; uint32_t meshN_ = 0; const Vert* vert_ = nullptr; uint32_t vertN_ = 0; const Tri* tri_ = nullptr; uint32_t triN_ = 0;
     const Link* link_ = nullptr; uint32_t linkN_ = 0; const Door* door_ = nullptr; uint32_t doorN_ = 0; const Ref* ref_ = nullptr; uint32_t refN_ = 0;
-    const Comp* comp_ = nullptr;
+    const Comp* comp_ = nullptr; const DoorRef* dref_ = nullptr; uint32_t drefN_ = 0; const Seam* seam_ = nullptr; uint32_t seamN_ = 0; const Land* land_ = nullptr; uint32_t landN_ = 0;
 };
 }  // namespace mfoenv
