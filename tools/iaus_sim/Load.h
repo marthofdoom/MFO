@@ -213,6 +213,25 @@ namespace Sim {
         float mageBlend = 0;   // hybrids: this share of his class weights is the mage row's (MODEL)
     };
 
+    // ── FIELD-SIZE BOOKS (sim v4 batch C, iaus-sim-v4.md 7.1 and 14) ─────────────────────────────────────────────────────────────────
+    // The lab's own draw (`--books lab`, the default) gives a caster 2 to 8 spells he can pay for. A fielded follower holds a hundred: Jesper
+    // (750012C6, _evidence/deck-run-1119-jesper, `[spellbook]` at 16:42:01) holds 74 offense, 4 control, 13 heal, 8 buff and 3 ward spells. So the
+    // field's choice is "which of 74" and the lab's was "which of 3". `--books field` draws books of that size and mix from the world's own taught
+    // spell records: per nature, kFieldBook's count times a size factor drawn per follower (kFieldBookSize, percent), without replacement, from the
+    // spells of that nature his skill allows (the record's tier within 10 points of his skill in its school: the lab's own reach rule). Class enters
+    // through his skills and his gate, level through his skills and magicka. A spell he cannot PAY for stays in the book, as in the field (the
+    // generator drops it). Costs, magnitudes and perk multipliers are the list's (the loop below). Seeded by the fight's own stream.
+    // `--books heldout`: the same rule over the OTHER half of the spell records (a record's half is a hash of its editor id: BookHalf), so a
+    // tuning can be checked on spells it never saw. A world whose pool is smaller than the mix (the built-in fixtures) gives what it has.
+    // To change the mix or the size: this table. A real follower's dump becomes a book through tools/list_balance (not built here, iaus-sim-v4.md 15.3).
+    struct BookMix { Prune::Nature nature; int n; };
+    inline constexpr BookMix kFieldBook[] = { { Prune::Nature::Offense, 74 }, { Prune::Nature::Control, 4 }, { Prune::Nature::Heal, 13 }, { Prune::Nature::Buff, 8 }, { Prune::Nature::Ward, 3 },
+                                              { Prune::Nature::Summon, 6 } };   // the first five are Jesper's counts; Summon is an ASSUMPTION (his line holds none; a Conjurer's book needs them)
+    inline constexpr int kFieldBookSize[2] = { 60, 120 };       // percent of the mix, drawn per follower (ASSUMPTION: one field book is one sample)
+    inline constexpr float kFieldBookHybrid = 0.35f;            // a casting class off the Mage line holds this share of it (ASSUMPTION)
+    inline int g_books = 0;                                     // 0 lab | 1 field (the train half of the records) | 2 heldout (the other half)
+    [[nodiscard]] inline int BookHalf(const std::string& edid) { std::uint32_t h = 2166136261u; for (unsigned char ch : edid) { h ^= ch; h *= 16777619u; } return static_cast<int>((h >> 7) & 1u); }   // FNV-1a
+
     struct FollowerBuild {
         ActorSpec spec;
         Book book;
@@ -292,7 +311,18 @@ namespace Sim {
         std::vector<const SimSpell*> afford;
         for (const SimSpell& s : D.spells) if (static_cast<float>(s.skillReq) <= (s.school >= 0 ? a.Skill(s.school) : 15.0f) + 10 && costOf(s) <= a.mp * 0.7f) afford.push_back(&s);
         if (afford.empty()) for (const SimSpell& s : D.spells) afford.push_back(&s);
-        if (fam == Cls::Mage && casts) {
+        if (g_books != 0 && casts) {   // a book of the field's size and mix (kFieldBook)
+            const float size = static_cast<float>(R.I(kFieldBookSize[0], kFieldBookSize[1])) / 100.0f * (fam == Cls::Mage ? 1.0f : kFieldBookHybrid);
+            for (const BookMix& m : kFieldBook) {
+                std::vector<const SimSpell*> cnd;
+                for (const SimSpell& s : D.spells) if (s.e.nature == m.nature && s.e.drop == Prune::Drop::Keep && static_cast<float>(s.skillReq) <= (s.school >= 0 ? a.Skill(s.school) : 15.0f) + 10
+                                                       && BookHalf(s.e.name) == (g_books == 2 ? 1 : 0)) cnd.push_back(&s);
+                int want = std::max(1, static_cast<int>(std::lround(static_cast<float>(m.n) * size)));
+                for (std::size_t i = 0; want > 0 && i < cnd.size(); ++i, --want) { std::swap(cnd[i], cnd[static_cast<std::size_t>(R.I(static_cast<int>(i), static_cast<int>(cnd.size()) - 1))]); fb.spells.push_back(*cnd[i]); }
+            }
+            bool heal = false; for (const SimSpell& s : fb.spells) heal |= s.e.nature == Prune::Nature::Heal && costOf(s) <= a.mp;   // as the lab's draw: one heal he can pay for, when the list has one
+            if (!heal) { std::vector<const SimSpell*> cnd; for (auto* s : afford) if (s->e.nature == Prune::Nature::Heal) cnd.push_back(s); if (!cnd.empty()) fb.spells.push_back(*cnd[static_cast<std::size_t>(R.I(0, static_cast<int>(cnd.size()) - 1))]); }
+        } else if (fam == Cls::Mage && casts) {
             for (auto nat : { Prune::Nature::Offense, Prune::Nature::Heal, Prune::Nature::Buff, Prune::Nature::Control, Prune::Nature::Ward }) {   // a ward too when the list has one (card I6)
                 std::vector<const SimSpell*> cnd; for (auto* s : afford) if (s->e.nature == nat) cnd.push_back(s);
                 if (!cnd.empty()) fb.spells.push_back(*cnd[static_cast<std::size_t>(R.I(0, static_cast<int>(cnd.size()) - 1))]);

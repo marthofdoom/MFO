@@ -122,6 +122,11 @@ namespace Sim {
     // cap as noApproach, the entry foe, the left-hand share of hand_lost, the cast deferrals, the heal's full-health release, the 128 approach up a
     // ledge path). For before / after runs of the field scenarios only; what the game's own generator does (compiled in) is not switched.
     inline bool  g_mirror = true;
+    // SIM V4 batch C: WHICH SPELL-WORTH RULES THE FOLLOWER'S READER PLAYS (`--spell-rules today|old|all`). today (0, the default) = main after fix/spell-worth
+    // (2026-11-24): a rider spell is measured by its direct damage, an unmeasured one reads a share of his best, a level cap is read per foe. old (1) = the
+    // game of the 11-23 field run, for the regret report's "before" column: ANY indirect effect made the spell unmeasured, an unmeasured spell's damage terms
+    // did not apply, the book's level cap was not read (Policy.h SpellMeasured / SimGenerate). all (2) = the lab before this batch: every spell measured.
+    inline int   g_spellRules = 0;
     // --engage-on-sight: Harbinger's ch.21 combat ENTRY is modelled (the second id of Snapshot.h ChaseWaived). OFF by default, as the game ships it
     // ([CombatEntry] EngageOnSight, Config.cpp:328); a scenario that models engage-on-sight sets FightSpec::engageOnSight.
     inline bool  g_engageOnSight = false;
@@ -157,6 +162,10 @@ namespace Sim {
     inline constexpr int kArValueMod = 0, kArScript = 1, kArAbsorb = 4, kArDualValueMod = 5, kArCalm = 6, kArDemoralize = 7,
                          kArFrenzy = 8, kArSummon = 18, kArParalysis = 21, kArReanimate = 22, kArTurnUndead = 24,
                          kArStagger = 33, kArPeakValueMod = 34, kArCloak = 35;
+    // The effect archetypes whose damage is not in the spell's own effect list (native iaus/Fills.cpp MeasureSpell: kScript 1, kCloak 35, kEnhanceWeapon 39,
+    // kSpawnHazard 40; the numbers are RE::EffectArchetypes::ArchetypeID's, the fork's EffectArchetypes.h). To add one: this row, after native's switch.
+    inline constexpr int kArEnhanceWeapon = 39, kArSpawnHazard = 40;
+    inline constexpr int kIndirectArch[] = { kArScript, kArCloak, kArEnhanceWeapon, kArSpawnHazard };
 
     struct Rng {
         std::mt19937_64 g;
@@ -199,6 +208,10 @@ namespace Sim {
         bool  reanimate = false, summon = false;
         float summonDur = 60;
         float recovery = 0;         // shout recovery (its cooldown)
+        // SIM V4 batch C (the fix/spell-worth mirror, native iaus/Fills.cpp MeasureSpell): the spell has an effect whose damage lives ELSEWHERE than in its own
+        // effect list: a hazard it spawns, a cloak's second spell, a script, an enchantment it puts on the weapon (kIndirectArch). Read from the record's
+        // effect archetypes, never from a name. With no direct health damage beside it, an OFFENSE spell's damage is unmeasured (Policy.h SpellMeasured).
+        bool  indirect = false;
         bool  healOther = false;    // a heal that is not self-only
         std::string element;        // "fire" / "frost" / "shock" / ""
         // SIM V3. An ACTIVE area (iaus-sim-v3.md 6): 0 none, 1 it moves with the caster (a cloak: effect archetype Cloak, FACT), 2 it stays at
@@ -430,6 +443,7 @@ namespace Sim {
                 if (arch == kArTurnUndead) { out.turnUndead = true; e.undeadOnly = true; }
             }
             if (arch == kArStagger) out.stagger = true;
+            for (int ia : kIndirectArch) if (arch == ia) out.indirect = true;
             if (arch == kArCloak && self) { cloak = true; out.areaKind = 1; out.areaDps = std::max(out.areaDps, static_cast<float>(mag)); out.areaDur = std::max(out.areaDur, static_cast<float>(d)); }   // SIM V3: a cloak is an area that moves with him
             if (host || detr) { hostileAny = true; if (ec > topHostCost) { topHostCost = ec; resist = static_cast<int>(x["resist"].num(-1)); } }
             const bool vm = arch == kArValueMod || arch == kArPeakValueMod || arch == kArAbsorb || arch == kArDualValueMod;

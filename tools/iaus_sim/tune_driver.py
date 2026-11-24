@@ -24,6 +24,12 @@ STAGES    prep      the world inputs exist, each list's potion-worth table is me
                     accepted value carried into the next sweep -> holdout -> many-seed gates -> fresh-seed cross-world confirmatory
                     -> Knight guard floor. The T1 rows (melee, ranged, mage) are searched first and their accepted values are
                     every later class's baseline. One dashboard results file per finished sweep.
+          follow    THE ORACLE GAP IS THE SCORE (marth 11-17: "The tuning then follows the Oracle as its guide"; iaus-sim-v4.md 6.3 and 14). Per class,
+                    on its gap fights: a candidate is accepted when it closes the gap to the class oracle (the class's own abilities only),
+                    holds on fresh gap fights and on held-out places and books, and passes the J gates as a FENCE. Its RULE is its docstring.
+          spells    the shared spell-worth numbers (t.unmeasuredDamage, the cast families' weights, the damage / exploit / overkill / variety /
+                    control_worth curves, the SpellWorth table once native fills it) against the SPELL REGRET on field-size books, pooled over
+                    the cells that cast. One oracle fight prices every candidate (--regret-alt). Its RULE is its docstring.
           joint     the whole final table against the shipped one on every cell (128 seeds, three configs), and each T1 value
                     left out in turn. A failure is an open decision: no value is written.
           edge      marth "Widen to x4 / x0.25": only knobs whose accepted value sits at the edge of the range tried are searched
@@ -86,8 +92,8 @@ import time
 
 INF = float("inf")
 # G2 (review of 7e883a9a): gap runs before the stages that describe the final table, because its (a) search can move the table
-DEFAULT_STAGES = "prep,rejudge,classes,edge,joint,gap,globals,consts,worth,floor,rating,recalib,logistics,loot,summary"
-FOR_CLASS_STAGES = "prep,classes,edge,joint,gap,floor,summary"
+DEFAULT_STAGES = "prep,rejudge,classes,edge,follow,spells,joint,gap,globals,consts,worth,floor,rating,recalib,logistics,loot,summary"
+FOR_CLASS_STAGES = "prep,classes,edge,follow,joint,gap,floor,summary"
 CONFIGS = {"g3": [], "off": ["--stealth", "off"], "shipped": ["--stealth", "off", "--no-fill-swing", "--no-estimates"]}
 BETA1_TREE = "melee,ranged,mage,knight,warrior,mercenary,archer,thief,evoker,conjurer,healer,warlock".split(",")
 BASE = ["melee-off", "ranged-off", "mage-off"]
@@ -107,10 +113,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 FULL = dict(probe_seeds=6, train=64, hold=64, confirm=96, max_knobs=250, passes=2, min_probe=0.0, global_seeds=96, list_global_seeds=48,
             const_seeds=48, floor_seeds=36, rating_seeds=6, calib_seeds=24, calib_fights=400, list_calib_seeds=12, force=False,
-            gap_seeds=12, gap_max_seeds=48, gap_nat=4, gap_scen=1, gap_families=3, gap_knobs=12, logi_seeds=12, logi_eps=8, loot_eps=6, card_seeds=3, card_fights=48)
+            gap_seeds=12, gap_max_seeds=48, gap_nat=4, gap_scen=1, gap_families=3, gap_knobs=12, logi_seeds=12, logi_eps=8, loot_eps=6, card_seeds=3, card_fights=48,
+            follow_seeds=6, follow_knobs=12, follow_min_gap=0.5, spell_seeds=4, spell_rounds=4)
 SMOKE = dict(probe_seeds=2, train=4, hold=4, confirm=4, max_knobs=4, passes=1, min_probe=0.0, global_seeds=4, list_global_seeds=2,
              const_seeds=2, floor_seeds=2, rating_seeds=1, calib_seeds=2, calib_fights=40, list_calib_seeds=1, force=True,
-             gap_seeds=1, gap_max_seeds=2, gap_nat=1, gap_scen=1, gap_families=1, gap_knobs=1, logi_seeds=1, logi_eps=1, loot_eps=1, card_seeds=1, card_fights=8)
+             gap_seeds=1, gap_max_seeds=2, gap_nat=1, gap_scen=1, gap_families=1, gap_knobs=1, logi_seeds=1, logi_eps=1, loot_eps=1, card_seeds=1, card_fights=8,
+             follow_seeds=1, follow_knobs=1, follow_min_gap=0.0, spell_seeds=1, spell_rounds=1)
 
 A = None            # parsed arguments
 CFG = None          # FULL or SMOKE
@@ -152,6 +160,8 @@ def ident(world, binary=None):
     compiled into it), the world's .sim.json and .combatmods.json, and its potion-worth table. Part of every cache key, so a result
     measured on another binary, another list extract or another potion table is never replayed as this one's."""
     out = ["bin:" + sha(binary or A.bin)]
+    if getattr(A, "world", "") == "v4":   # the library of places is test input like a list: another library is another world
+        out.append("env:" + sha(env_index()))
     if world == "builtin":
         if A.builtin_worth:
             out.append("worth:" + sha(A.builtin_worth))
@@ -194,12 +204,30 @@ def key_of(world, classes, cfg, curves, sets, binary):
     return json.dumps([world, classes, cfg, sorted(curves), sets or "", ident(world, binary)] + extra, separators=(",", ":"))
 
 
+V4_TRAIN = ["--env-set", "all", "--env-hold", "train", "--books", "field"]   # the tune's world since sim v4 batch C: the library's train places, field-size books
+HOLD_FLAGS = ["--env-hold", "heldout", "--books", "heldout"]                 # the check: places and spell records no search saw (the simulator takes the LAST of a repeated switch)
+# THE ORACLE RACE'S COST CUTS (Oracle.h, the block above g_oraclePrune; iaus-sim-v4.md 15.7): dominance on the foe's own resists, pairwise
+# indifference 0.10 U with twins retired, a first look at 4 streams. The ceiling, the rollouts, the decision points and the candidates are
+# the full oracle's. `--oracle-cuts ""` runs the race without them (about 3 to 4 times the oracle stages' cost on a caster cell).
+ORACLE_CUTS = "--oracle-prune target --oracle-pair 0.10 --oracle-nmin 4"
+
+
+def env_index():
+    return os.path.join(os.environ.get("MFO_ENV_CACHE") or os.path.expanduser("~/.cache/mfo-env"), "index.json")
+
+
 def world_flags(world, sim_flags):
-    """The simulator switches of every run: `--world <v2|v3>` first, then --sim-flags. --sim-flags may not name the world itself."""
+    """The simulator switches of every run: `--world <v2|v3|v4>` first, then (v4) the library's TRAIN places and field-size books, then
+    --sim-flags (so `--sim-flags "--books lab"` or "--env-hold all" still wins). --sim-flags may not name the world itself."""
     flags = (sim_flags or "").split()
     if "--world" in flags:
-        raise SystemExit("--sim-flags may not carry --world: use the driver's own --world v2|v3")
-    return ["--world", world] + flags
+        raise SystemExit("--sim-flags may not carry --world: use the driver's own --world v2|v3|v4")
+    return ["--world", world] + (V4_TRAIN if world == "v4" else []) + flags
+
+
+def hold_bin(binary=None):
+    """The same simulator on the HELD-OUT places and books (v4), else the same binary: a held-out check on v2 / v3 has only the held-out books."""
+    return getattr(A, "bin_hold", None) or binary or A.bin
 
 
 def uses_path():
@@ -744,10 +772,13 @@ def knight_floor(world, cls, curves, sets=None):
     return out
 
 
-def judge(cls, kept, spec, train_d=None, forced=False, fresh0=4001, sets=None, base_sets=None, replace=None):
+def judge(cls, kept, spec, train_d=None, forced=False, fresh0=4001, sets=None, base_sets=None, replace=None, fence=False):
     """Holdout, many-seed gates, cross-world confirmatory, Knight floor for ONE candidate (a --curve spec, or a --set string in `sets`)
     on top of the kept specs. Returns the row; row["accepted"] is the verdict. forced (smoke runs, re-judgements): every step is
-    run and reported even after one fails, and the verdict is still the rule's."""
+    run and reported even after one fails, and the verdict is still the rule's.
+    fence=True (the follow and spells stages, whose SCORE is the oracle gap / the spell regret): J is a fence, not the objective. The two
+    lines that ask J to IMPROVE (holdout confirmed, the cross-world mean beats noise) ask instead that it is NOT WORSE; every gate, the
+    as-shipped line and the Knight floor are unchanged."""
     cur = [k for k in kept if k != replace] + ([spec] if spec else [])   # replace: the edge stage moves an accepted value, never stacks two specs on one parameter
     row = {"class": cls, "spec": spec or sets, "accepted": False, "why": "", "steps": {}}
     fails = []
@@ -755,8 +786,8 @@ def judge(cls, kept, spec, train_d=None, forced=False, fresh0=4001, sets=None, b
     b, v = jmany([req("builtin", cls, "g3", kept, hold, base_sets), req("builtin", cls, "g3", cur, hold, sets)])
     hd, hse = paired(b, v)
     row["steps"]["holdout"] = [round(hd, 3), round(hse, 3)]
-    if not hd > 1.5 * hse:
-        fails.append("holdout: not confirmed")
+    if (worse(hd, hse) if fence else not hd > 1.5 * hse):
+        fails.append("holdout: worse" if fence else "holdout: not confirmed")
     if fails and not forced:
         row["why"] = fails[0]
         return row
@@ -799,7 +830,7 @@ def judge(cls, kept, spec, train_d=None, forced=False, fresh0=4001, sets=None, b
         md = sum(x[0] for x in ds) / len(ds)
         mse = math.sqrt(sum(x[1] ** 2 for x in ds)) / len(ds)
         conf["mean/" + g] = [round(md, 3), round(mse, 3)]
-        if g == "g3" and not md > 2.0 * mse:
+        if g == "g3" and (worse(md, mse) if fence else not md > 2.0 * mse):
             fails.append("cross-world: the mean over the worlds does not beat noise (%+.2f, se %.2f)" % (md, mse))
         if g == "shipped" and (worse(md, mse) or out_of_band(cls, md, mse)):
             fails.append("cross-world: worse as shipped (%+.2f, se %.2f)" % (md, mse))
@@ -818,7 +849,7 @@ def judge(cls, kept, spec, train_d=None, forced=False, fresh0=4001, sets=None, b
                         fails.append("Knight guard floor: %s on %s %s %.1f -> %.1f" % (kc, w, g, o[g], n[g]))
         row["steps"]["knight_floor"] = fl
     row["accepted"] = not fails
-    row["why"] = "ACCEPTED: holdout, many-seed gates, cross-world on fresh seeds" if not fails else "; ".join(fails)
+    row["why"] = ("FENCE HOLDS: holdout, many-seed gates, cross-world on fresh seeds" if fence else "ACCEPTED: holdout, many-seed gates, cross-world on fresh seeds") if not fails else "; ".join(fails)
     if train_d is not None:
         row["train"] = train_d
     return row
@@ -1101,6 +1132,11 @@ def final_curves(with_withheld=False):
             if k.split("=")[0] not in have:
                 out.append(k)
                 have.add(k.split("=")[0])
+    for cls, v in SUMMARY["stages"].get("follow", {}).get("kept", {}).items():   # the follow stage (the gap is the score)
+        for k in v:
+            if k.split("=")[0] not in have:
+                out.append(k)
+                have.add(k.split("=")[0])
     if not with_withheld:
         wh = set(SUMMARY.get("withheld", []))
         out = [k for k in out if k not in wh]
@@ -1338,12 +1374,105 @@ FIDELITY = {}
 GAP_SEEDS0 = 6001   # a fresh range (1.., 1001.., 3001.., 4001.., 5001.., 8001.., 9001.. are used by the other stages)
 
 
-def gap_cmd(world, cls, curves, seed, subject_only=True):
-    cmd = [A.bin, "--no-json", "--threads", "1", "--seed", str(seed), "--classes", cls, "--fights", "1", "--rating", "0",
+def table_slice(cls, curves):
+    """COST CUTS 3 and 4 (iaus-sim-v4.md 6.2): the part of the table a gap fight of `cls` can read. A --curve spec belongs to ONE class row,
+    and a gap fight holds the subject and his T1 companions, so the other classes' values are left out of the command (and of its cache
+    key). After class C accepts a value only C's gap fights run again (every cell's, when C is a T1 row); a class that took nothing and
+    whose T1 rows did not move has the shipped table's key, and its "final" measurement is the shipped one, replayed."""
+    own = set(T1) | {cls}
+    return [k for k in curves if k.split(":", 1)[0] in own]
+
+
+def gap_cmd(world, cls, curves, seed, subject_only=True, arm="both", sets=None, alts=(), hold=False):
+    """arm "iaus": the same fights played by IAUS only (GAPIAUS lines; milliseconds). sets: a shared --set table. alts: --set lists priced on
+    the same oracle decisions (SPELLFIGHT's extra columns). hold: the held-out places and books. Every oracle run prints the spell regret."""
+    cmd = [hold_bin() if hold else A.bin, "--no-json", "--threads", "1", "--seed", str(seed), "--classes", cls, "--fights", "1", "--rating", "0",
            "--class-oracle", str(CFG["gap_nat"]), "--gap-scenarios", str(CFG["gap_scen"]), "--gap-dump"] + (["--oracle-subject-only"] if subject_only else []) + world_args(world)
-    for c in curves:
+    cmd += ["--gap-arm", "iaus"] if arm == "iaus" else ["--spell-regret"]
+    if arm != "iaus":
+        cmd += getattr(A, "oracle_cuts", ORACLE_CUTS).split()   # only where the oracle runs: the IAUS arm's command and cache key do not move with them
+    for c in table_slice(cls, curves):
         cmd += ["--curve", c]
+    if sets:
+        cmd += ["--set", sets]
+    for a in alts:
+        cmd += ["--regret-alt", a]
     return cmd
+
+
+def gapi_parse(txt, cls, seed):
+    """The IAUS arm alone: {(seed, job): U}. A run with too few lines is an error, never a gap of 0."""
+    out = {(seed, int(m.group(2))): float(m.group(3)) for m in re.finditer(r"^GAPIAUS %s (\S+) (\d+) ([-0-9.]+)$" % re.escape(cls), txt, re.M)}
+    if len(out) < CFG["gap_nat"]:
+        raise RuntimeError("IAUS-arm run of %s seed %d printed %d fights (%d natural expected):\n%s" % (cls, seed, len(out), CFG["gap_nat"], txt[-600:]))
+    return out
+
+
+def gapi_runs(tasks):
+    """tasks: (world, cls, curves, seed, sets, hold) -> one {(seed, job): U} per task. Cached text runs, like gap_runs."""
+    def one(t):
+        w, cls, curves, seed, sets, hold = t
+        cmd = gap_cmd(w, cls, curves, seed, True, "iaus", sets, (), hold)
+        return gapi_parse(text_run("gapi:" + json.dumps(cmd[1:]), cmd, w, check=lambda x: gapi_parse(x, cls, seed)), cls, seed)
+    return list(POOL.map(one, tasks))
+
+
+def regret_parse(txt, cls, seed, nalt=0):
+    """One oracle run's spell regret: per fight (seed, job) -> (cast decisions, regret U, [the alternates' regret U]); the cluster rows
+    (iaus family, oracle family, cause) -> [n, n with a regret, regret U, n with a world number, epsW, epsX, epm]; the decision counts."""
+    fights = {}
+    for m in re.finditer(r"^SPELLFIGHT %s (\S+) (\d+) (\d+) ([-0-9.]+)((?: [-0-9.]+)*)$" % re.escape(cls), txt, re.M):
+        alt = [float(x) for x in m.group(5).split()]
+        if len(alt) != nalt:
+            raise RuntimeError("regret run of %s seed %d: %d alternate column(s), %d expected" % (cls, seed, len(alt), nalt))
+        fights[(seed, int(m.group(2)))] = (int(m.group(3)), float(m.group(4)), alt)
+    if len(fights) < CFG["gap_nat"]:
+        raise RuntimeError("regret run of %s seed %d printed %d SPELLFIGHT lines (%d natural expected): a simulator without --spell-regret?\n%s" % (cls, seed, len(fights), CFG["gap_nat"], txt[-600:]))
+    rows = {}
+    for m in re.finditer(r"^SPELLREG %s (\S+) (\S+) (\S+) (\d+) (\d+) ([-0-9.]+) (\d+) ([-0-9.]+) ([-0-9.]+) ([-0-9.]+)$" % re.escape(cls), txt, re.M):
+        rows["|".join(m.group(1, 2, 3))] = [int(m.group(4)), int(m.group(5)), float(m.group(6)), int(m.group(7)), float(m.group(8)), float(m.group(9)), float(m.group(10))]
+    dec = re.search(r"^SPELLDEC %s (\d+) (\d+) (\d+)$" % re.escape(cls), txt, re.M)
+    return {"fights": fights, "rows": rows, "dec": [int(x) for x in dec.groups()] if dec else [0, 0, 0]}
+
+
+def regret_runs(tasks):
+    """tasks: (world, cls, curves, seed, sets, alts, hold) -> regret_parse per task. The run with no alternate and no --set is the gap
+    stage's and the follow stage's own oracle run (one cache entry, three readers)."""
+    def one(t):
+        w, cls, curves, seed, sets, alts, hold = t
+        cmd = gap_cmd(w, cls, curves, seed, True, "both", sets, alts, hold)
+        return regret_parse(text_run("gap:" + json.dumps(cmd[1:]), cmd, w, check=lambda x: regret_parse(x, cls, seed, len(alts))), cls, seed, len(alts))
+    return list(POOL.map(one, tasks))
+
+
+def regret_table(parts):
+    """The regret report of some runs of one class, merged: U per fight, the share of cast decisions with a regret, within / cross
+    family, the cause split (share of the regret), and the world's own effect per cast second / per magicka shortfalls."""
+    nf = sum(len(p["fights"]) for p in parts)
+    rows, cast = {}, sum(p["dec"][1] for p in parts)
+    for p in parts:
+        for k, v in p["rows"].items():
+            r = rows.setdefault(k, [0, 0, 0.0, 0, 0.0, 0.0, 0.0])
+            for i in range(7):
+                r[i] += v[i]
+    tot = sum(r[2] for r in rows.values())
+    cause = {c: 0.0 for c in ("fact", "weight", "gate", "hand", "sight")}
+    within = cross = 0.0
+    for k, r in rows.items():
+        fi, fo, ca = k.split("|")
+        if ca in cause:
+            cause[ca] += r[2]
+        if fi.rstrip("!") == fo:
+            within += r[2]
+        else:
+            cross += r[2]
+    ne = max(1, sum(r[3] for r in rows.values()))
+    f = max(1, nf)
+    return {"fights": nf, "cast_per_fight": round(cast / f, 2), "regret_u": round(tot / f, 4), "any_pct": round(100.0 * sum(r[1] for r in rows.values()) / max(1, cast), 1),
+            "within": round(within / f, 4), "cross": round(cross / f, 4), "cause_pct": {c: round(100.0 * v / tot, 1) if tot > 0 else 0.0 for c, v in cause.items()},
+            "eps_within_pct": round(100.0 * sum(r[4] for r in rows.values()) / ne, 1), "eps_cross_pct": round(100.0 * sum(r[5] for r in rows.values()) / ne, 1),
+            "epm_pct": round(100.0 * sum(r[6] for r in rows.values()) / ne, 1),
+            "top": [[k, r[0], round(r[2] / f, 4)] for k, r in sorted(rows.items(), key=lambda kv: -kv[1][2])[:6] if r[2] > 0]}
 
 
 def gap_parse(txt, cls, seed):
@@ -1358,10 +1487,10 @@ def gap_parse(txt, cls, seed):
 
 
 def gap_runs(tasks):
-    """tasks: (world, cls, curves, seed, subject_only). All at once on the pool; each run is a cached text run (resumable)."""
+    """tasks: (world, cls, curves, seed, subject_only[, hold]). All at once on the pool; each run is a cached text run (resumable)."""
     def one(t):
-        w, cls, curves, seed, so = t
-        cmd = gap_cmd(w, cls, curves, seed, so)
+        w, cls, curves, seed, so = t[:5]
+        cmd = gap_cmd(w, cls, curves, seed, so, hold=len(t) > 5 and t[5])
         return gap_parse(text_run("gap:" + json.dumps(cmd[1:]), cmd, w, check=lambda t: gap_parse(t, cls, seed)), cls, seed)
     return list(POOL.map(one, tasks))
 
@@ -1492,6 +1621,347 @@ def stage_gap():
     st["search_changed"] = gap_search(st, order)
     gap_ledger(st, order)
     SUMMARY["stages"]["gap"] = st
+
+
+# ── the follow stage (iaus-sim-v4.md 6.3, 14): the oracle gap is the score ───────────────────────────────────────────────────────────
+FOLLOW_FRESH0 = 7001   # fresh gap fights (6001.. are the gap stage's and this stage's search fights)
+
+
+def a_families(merged):
+    """The families the (a) clusters of some gap fights name, most costly first, and the (a) share of the divergence cost."""
+    nf = max(1, len(merged["fights"]))
+    fam_du, tot, a = {}, 0.0, 0.0
+    for key, (n, du) in merged["sit"].items():
+        li, lo, kind, _ = key.split("|")
+        cl, _, fams = classify(li, lo, kind, merged["gen"])
+        tot += du / nf
+        if cl == "a":
+            a += du / nf
+            for f in fams:
+                fam_du[f] = fam_du.get(f, 0.0) + du / nf
+    return [f for f, _ in sorted(fam_du.items(), key=lambda kv: -kv[1])[:CFG["gap_families"]]], (a / tot if tot > 0 else 0.0)
+
+
+def follow_candidates(cls, knobs, taken, fams):
+    """(i) every value of the classes stage's sweeps that beat noise on train (not only each sweep's winner), then (ii) the class's live
+    knobs of the families its (a) clusters name, at every value the classes stage tries (up to follow_knobs knobs, most sensitive first).
+    A knob the table already holds a value for is never offered. -> [(knob, value, spec, source)]"""
+    meta = {n: (t, sh, vals) for n, t, sh, vals in class_knobs(cls, knobs)}
+    out, seen = [], set()
+
+    def add(name, v, src):
+        if name in meta:
+            spec = meta[name][0].format(c=cls, v=v)
+            if spec.split("=")[0] not in taken and spec not in seen:
+                seen.add(spec)
+                out.append((name, v, spec, src))
+    cs = SUMMARY["stages"].get("classes", {}).get(cls, {})
+    for r in cs.get("rows", []):
+        for v, d, se in r.get("sweep", []):
+            if d > 0 and d > 2.5 * se:
+                add(r["knob"], v, "sweep")
+    n = 0
+    for name, _ in cs.get("live", []):
+        if name in meta and any(name == "family." + f or name.startswith(f + ".") for f in fams):
+            if n >= CFG["follow_knobs"]:
+                break
+            n += 1
+            for v in meta[name][2]:
+                add(name, v, "cluster")
+    return out
+
+
+def follow_oracle(cls, table, seeds, hold=False):
+    """Both arms of the class's gap fights on every world: {world: merged gap dump}. Paid once per (class, table slice, seed), cached."""
+    res = gap_runs([(w, cls, table, s, True, hold) for w in A.worlds for s in seeds])
+    n = len(seeds)
+    return {w: gap_merge(res[i * n:(i + 1) * n]) for i, w in enumerate(A.worlds)}
+
+
+def follow_iaus(cls, table, seeds, hold=False):
+    """The IAUS arm alone of the same fights: {world: {(seed, job): U}}. Milliseconds a fight."""
+    res = gapi_runs([(w, cls, table, s, None, hold) for w in A.worlds for s in seeds])
+    n, out = len(seeds), {}
+    for i, w in enumerate(A.worlds):
+        out[w] = {}
+        for r in res[i * n:(i + 1) * n]:
+            out[w].update(r)
+    return out
+
+
+def u_of(orc, which):
+    """{world: {(seed, job): U}} of one arm of follow_oracle's result (which: 3 = IAUS, 4 = oracle)."""
+    return {w: {(f[0], f[1]): f[which] for f in m["fights"]} for w, m in orc.items()}
+
+
+def world_delta(a, b):
+    """b - a per fight, per world (mean, se), and the equal-weight mean over the worlds (mean, se)."""
+    per = {w: mse([b[w][k] - a[w][k] for k in a[w] if k in b[w]]) for w in a}
+    n = max(1, len(per))
+    return per, sum(x[0] for x in per.values()) / n, math.sqrt(sum(x[1] ** 2 for x in per.values())) / n
+
+
+def stage_follow():
+    """THE ORACLE GAP AS THE SCORE (marth 11-17: "The tuning then follows the Oracle as its guide", "a classes tune will be the actual
+    best possible class behavior"; iaus-sim-v4.md 6.3). The classes stage accepts on IAUS's own J. Here J is the fence and the gap decides.
+    RULE of this stage (written before any of its results was read):
+      score    G(C) = the mean over the class's gap fights of (oracle U - IAUS U), paired per fight: the gap stage's fights (seeds 6001..,
+               4 natural + his own scenarios, the oracle held to the class's own abilities and rulings, planning for the subject only),
+               on EVERY world of the run, the worlds weighted equally. The oracle's arm is paid ONCE per class, table and seed.
+      size     follow_seeds seeds, grown by as many while the pooled gap's se > max(0.5 U, |G| / 4), up to gap_max_seeds (cost cut 2: a
+               sequential test on the measurement, never on the oracle). A class whose gap is not above max(follow_min_gap, 2 se) is
+               not searched.
+      order    the T1 rows first (their values are every later class's companions), then the cells of the run.
+      search   candidates = every value of his classes-stage sweeps that beat noise on train, and his live knobs of the families his (a)
+               divergence clusters name, at the values the classes stage tries. Each costs the IAUS arm only (the same fights, the same
+               seeds, milliseconds): d = IAUS U with the value - IAUS U without, against the oracle already paid for.
+      accept   best first, a value is accepted when ALL hold: d > 2 se pooled and no world worse (d < -2 se); on FRESH gap fights
+               (7001..) d > 1.5 se; on the HELD-OUT places and books (never searched) it is not worse; the J rule as a FENCE (judge
+               fence=True: holdout not worse, every many-seed gate, cross-world not worse, as shipped, the Knight floor); the class card
+               and potion gates; and, with the oracle run AGAIN on the new table, the gap did not rise beyond noise. The oracle's own U
+               shift is reported beside it, so a "gain" that is the oracle getting worse is visible.
+      then     the other candidates are measured again on the new table. At most follow_knobs values per class.
+      closable the gap times the (a) share of his divergence cost is reported as an ESTIMATE of what a tune can close ((b) to (d) need
+               code); it is a report, not a bound.
+    Sight-driven knobs stay skipped (all_knobs). The joint gate after this stage judges the whole table as before."""
+    old = SUMMARY["stages"].pop("follow", {})
+    order0 = scope() or cells()
+    order = [c for c in sorted(T1) if c in order0] + [c for c in order0 if c not in T1]
+    keep = lambda part: {k: v for k, v in old.get(part, {}).items() if k not in order}
+    st = {"rule": stage_follow.__doc__[stage_follow.__doc__.index("RULE"):], "cells": keep("cells"), "kept": keep("kept"), "rows": keep("rows"), "changed": [], "complete": False}
+    SUMMARY["stages"]["follow"] = st
+    knobs, _ = all_knobs()
+    for c in order:
+        follow_class(c, knobs, st)
+        save_summary()
+    st["complete"] = True
+
+
+def follow_class(cls, knobs, st):
+    base = final_curves()
+    n = CFG["follow_seeds"]
+    while True:   # cost cut 2: stop a cell when its gap is measured well enough, not at a fixed count
+        seeds = list(range(GAP_SEEDS0, GAP_SEEDS0 + n))
+        orc = follow_oracle(cls, base, seeds)
+        _, g, se = world_delta(u_of(orc, 3), u_of(orc, 4))
+        if (sum(len(m["fights"]) for m in orc.values()) >= 2 and se <= max(0.5, abs(g) / 4.0)) or n >= CFG["gap_max_seeds"]:
+            break
+        n = min(CFG["gap_max_seeds"], n + CFG["follow_seeds"])
+    fams, share = a_families(gap_merge(list(orc.values())))
+    cell = {"gap": round(g, 3), "se": round(se, 3), "seeds": n, "a_share": round(share, 3), "closable_estimate": round(g * share, 3), "families": fams,
+            "worlds": {w: [round(x, 3) for x in mse([f[4] - f[3] for f in m["fights"]])] for w, m in orc.items()}}
+    st["cells"][cls], st["rows"][cls] = cell, []
+    log("follow %s: gap %+.2f (se %.2f, %d seeds), (a) share %.0f%%, families %s" % (cls, g, se, n, 100 * share, ",".join(fams) or "-"))
+    if not CFG["force"] and not g > max(CFG["follow_min_gap"], 2.0 * se):
+        cell["verdict"] = "no gap beyond noise: not searched"
+        return
+    taken = {k.split("=")[0] for k in base}
+    cands = follow_candidates(cls, knobs, taken, fams)
+    if CFG["force"]:
+        cands = cands[:2]
+    if not cands:
+        cell["verdict"] = "no candidate (no sweep value beat noise and no live knob of the cluster families%s)" % ("" if SUMMARY["stages"].get("classes", {}).get(cls) else "; the classes stage has not run for this class in this --out")
+        return
+    fresh = list(range(FOLLOW_FRESH0, FOLLOW_FRESH0 + n))
+    start = SUMMARY["stages"].get("classes", {}).get(cls, {}).get("base", [])
+    kept = st["kept"].setdefault(cls, [])
+    while cands and len(kept) < CFG["follow_knobs"]:
+        base_u = u_of(orc, 3)
+        us = [follow_iaus(cls, base + [spec], seeds) for _, _, spec, _ in cands]
+        scored = sorted(((world_delta(base_u, u) + (i,)) for i, u in enumerate(us)), key=lambda x: -x[1])
+        took = None
+        for per, d, dse, i in scored:
+            name, v, spec, src = cands[i]
+            row = {"knob": name, "value": v, "spec": spec, "source": src, "train": [round(d, 3), round(dse, 3)], "worlds": {w: [round(x, 3) for x in p] for w, p in per.items()}, "accepted": False}
+            bad = [w for w, (wd, wse) in per.items() if wd < -2.0 * wse and wd < 0]
+            if not (d > 2.0 * dse and d > 0) or bad:
+                row["why"] = "worse on %s" % ", ".join(bad) if bad and d > 2.0 * dse else "does not close the gap beyond noise"
+                if not CFG["force"] or st["rows"][cls]:
+                    st["rows"][cls].append(row)
+                    continue
+            fails = []
+            _, fd, fse = world_delta(u_of(follow_oracle(cls, base, fresh), 3), follow_iaus(cls, base + [spec], fresh))
+            row["fresh"] = [round(fd, 3), round(fse, 3)]
+            if not fd > 1.5 * fse:
+                fails.append("fresh gap fights: not confirmed")
+            _, hd, hse = world_delta(follow_iaus(cls, base, seeds, True), follow_iaus(cls, base + [spec], seeds, True))
+            row["held_out"] = [round(hd, 3), round(hse, 3)]
+            if hd < -2.0 * hse and hd < 0:
+                fails.append("held-out places and books: worse")
+            if not fails or CFG["force"]:
+                j = judge(cls, base, spec, forced=CFG["force"], fence=True)
+                row["fence"] = j["steps"]
+                if not j["accepted"]:
+                    fails.append("J fence: " + j["why"])
+            if not fails and A.decisions == "auto":
+                gate = card_potion_gate(cls, start, base + [spec])
+                row["card_potion"] = gate
+                if not gate["ok"]:
+                    fails.append("card / potion gate: " + "; ".join(gate["fails"]))
+            orc2 = None
+            if not fails:   # the oracle again, for the accepted value only: is the gap really smaller, or did the oracle move?
+                orc2 = follow_oracle(cls, base + [spec], seeds)
+                _, g2, se2 = world_delta(u_of(orc2, 3), u_of(orc2, 4))
+                _, shift, sse = world_delta(u_of(orc, 4), u_of(orc2, 4))
+                dg = world_delta({w: {(f[0], f[1]): f[4] - f[3] for f in m["fights"]} for w, m in orc.items()}, {w: {(f[0], f[1]): f[4] - f[3] for f in m["fights"]} for w, m in orc2.items()})
+                row["gap_after"], row["oracle_u_shift"], row["gap_change"] = [round(g2, 3), round(se2, 3)], [round(shift, 3), round(sse, 3)], [round(dg[1], 3), round(dg[2], 3)]
+                if dg[1] > 2.0 * dg[2] and dg[1] > 0:
+                    fails.append("with the oracle run again the gap ROSE (%+.2f, se %.2f): the IAUS gain was not a gap gain" % (dg[1], dg[2]))
+            row["why"] = "; ".join(fails) if fails else "ACCEPTED: closes the gap on the search fights, on fresh fights, not worse held out, the J fence and the card hold"
+            st["rows"][cls].append(row)
+            log("follow %s %-30s -> %-8g d %+.2f (se %.2f) %s" % (cls, name, v, d, dse, row["why"][:140]))
+            if not fails:
+                row["accepted"] = True
+                kept.append(spec)
+                st["changed"] = sorted(set(st["changed"]) | {cls})
+                base, orc, took = base + [spec], orc2, spec.split("=")[0]
+                cell["gap_after"] = row["gap_after"]
+                break
+        if not took:
+            break
+        cands = [x for x in cands if x[2].split("=")[0] != took]
+        save_summary()
+    cell["verdict"] = "%d value(s) accepted" % len(kept)
+
+
+# ── the spells stage (iaus-sim-v4.md 7.5, 14): the shared spell-worth numbers against the spell regret ────────────────────────────────
+SPELL_FAMILIES = ("cast_offense", "cast_control", "cast_heal", "cast_buff", "cast_summon", "cast_ward")
+SPELL_CONS = ("damage", "exploit", "overkill", "variety", "control_worth")
+SPELL_SCALARS = [("t.unmeasuredDamage", 0.5, [0.25, 0.35, 0.65, 0.8])]   # fix/spell-worth C2's placeholder (iaus/Core.h Tuning::unmeasuredDamage)
+# native iaus/SpellWorth.h `struct SpellWorth` (S11b): one row per field once Estimate-side code reads it, as ("sw.<field>", shipped, [values]).
+# Until then every field is listed in SW_NOT_SEARCHED with the reason, and test_tune_driver.py checks the two lists cover the struct.
+SW_KNOBS = []
+_SW_WHY = "iaus/SpellWorth.cpp is a skeleton (S11b): no consideration reads it yet, so the lab cannot move it"
+SW_NOT_SEARCHED = {"sw." + f: _SW_WHY for f in ("landSecBase", "landSecOffense", "landSecControl", "landSecHeal", "landSecBuff", "landSecSummon", "landSecWard", "recoverSec", "channelUptime",
+                                                 "channelMinSec", "areaFoesIntoDamage", "areaFriendPenalty", "dotLifeShare", "foeLifeFloorSec", "controlDpsScale", "buffDpsScale", "wardDpsScale",
+                                                 "summonDpsScale", "summonLifeSec", "redundantEffectScale", "killConfirmBonus", "magickaHorizonSec", "magickaDryPenalty", "failedStartSec")}
+
+
+def spell_knobs():
+    """The SHARED numbers the spells stage may move, from the simulator's own catalogue (--list-uses), each with values inside its valid
+    range: t.unmeasuredDamage, the SpellWorth rows (SW_KNOBS), each cast family's action weight, and for the considerations that rank one
+    spell against another (SPELL_CONS) the shared curve and each cast family's weight on it. Names are the simulator's --set names."""
+    txt = text_run("list-uses", [A.bin, "--list-uses"])
+    out, seen = list(SPELL_SCALARS) + list(SW_KNOBS), set()
+    for line in txt.splitlines():
+        p = line.split()
+        if len(p) == 4 and p[0] == "FAMILY" and p[2] in SPELL_FAMILIES and float(p[3]) > 0.0:
+            out.append(("aw.%s" % p[1], float(p[3]), [round(float(p[3]) * k, 5) for k in (0.5, 0.75, 1.33, 2.0)]))
+        if len(p) == 10 and p[0] == "USE" and p[2] in SPELL_FAMILIES and p[4] in SPELL_CONS:
+            f, c, kind, a, b, w = int(p[1]), int(p[3]), p[5], float(p[6]), float(p[7]), float(p[9])
+            if kind not in ("Bin", "Piece") and c not in seen:   # the consideration's one shared curve
+                seen.add(c)
+                if a != 0.0:
+                    out.append(("c.%d.a" % c, a, [round(a * k, 5) for k in (0.5, 0.75, 1.33, 2.0)]))
+                if kind == "Lin":
+                    vals = uniq([max(min(b, 0.0), b + x) for x in (-0.2, -0.1, 0.1, 0.2)], b)
+                    if vals:
+                        out.append(("c.%d.b" % c, b, vals))
+            if kind != "Bin" and w > 0.0:
+                out.append(("w.%d.%d" % (f, c), w, [round(w * k, 5) for k in (0.5, 0.75, 1.5, 2.0)]))
+    return out
+
+
+def spell_sets():
+    """The spells stage's accepted shared values, as --set entries."""
+    return list(SUMMARY["stages"].get("spells", {}).get("kept", []))
+
+
+def cells_mean(per):
+    """per: {cell: [values]} -> the equal-weight mean over the cells of each cell's mean, and its se."""
+    ms = [mse(v) for v in per.values() if v]
+    n = max(1, len(ms))
+    return sum(x[0] for x in ms) / n, math.sqrt(sum(x[1] ** 2 for x in ms)) / n
+
+
+def stage_spells():
+    """THE SPELL CHOICE PASS (marth 11-23: "the spells being chosen were still pretty ineffective"; iaus-sim-v4.md 7). Shared numbers only:
+    a class's own rows are the follow stage's.
+    RULE of this stage (written before any of its results was read):
+      score    the SPELL REGRET (Oracle.h RegretLog): per fight, the sum over the subject's cast decisions of the oracle's paired lead of
+               its best castable spell over IAUS's pick, on the gap stage's fights with FIELD-SIZE books (the driver's v4 world), on the
+               list worlds (the built-in fixtures hold no field-size pool; with no list in the run, the built-in world), pooled over the
+               cells that cast (a cell with no cast decision on the base table is left out), each (cell, world) weighted equally.
+      screen   one oracle run per (cell, world, seed) prices EVERY candidate value as an alternate table on the same oracle decisions
+               (--regret-alt): d = base regret - the alternate's, paired per fight.
+      accept   the best screened value, when d > 2 se, is measured AS THE TABLE on fresh fights (7001..): its regret is lower by more
+               than 1.5 se; on the held-out places and books (priced there as an alternate) it is not higher beyond 2 se; and the J rule holds as a FENCE over every
+               cell (judge "beta1", fence=True: no class worse, cross-world, as shipped, the Knight floor). Then the screen runs again on
+               the new table. One value per round, at most spell_rounds rounds.
+      report   per cell and world, on the base table (and on the final one when a value was accepted): regret U per fight, the share of
+               cast decisions with a regret, within / cross family, the cause split (fact, weight, gate, hand, sight) and the world's
+               effect per cast second / per magicka shortfalls. A report row is never a gate."""
+    worlds = [w for w in A.worlds if w != "builtin"] or ["builtin"]
+    seeds = list(range(GAP_SEEDS0, GAP_SEEDS0 + CFG["spell_seeds"]))
+    fresh = list(range(FOLLOW_FRESH0, FOLLOW_FRESH0 + CFG["spell_seeds"]))
+    curves, order = final_curves(), scope() or cells()
+    knobs = spell_knobs()[:2] if CFG["force"] else spell_knobs()
+    st = {"rule": stage_spells.__doc__[stage_spells.__doc__.index("RULE"):], "knobs": [n for n, _, _ in knobs], "kept": [], "rows": [], "report": {}, "casters": [], "complete": False,
+          "not_searched": SW_NOT_SEARCHED, "worlds": worlds}
+    SUMMARY["stages"]["spells"] = st
+
+    def measure(sets, alts, sd, hold=False, who=None):
+        who = order if who is None else who
+        res = regret_runs([(w, c, curves, s, sets, tuple(alts), hold) for c in who for w in worlds for s in sd])
+        n = len(sd)
+        return {(c, w): res[(i * len(worlds) + j) * n:(i * len(worlds) + j + 1) * n] for i, c in enumerate(who) for j, w in enumerate(worlds)}
+
+    base = measure(None, (), seeds)
+    for (c, w), parts in base.items():
+        st["report"]["%s/%s" % (c, w)] = regret_table(parts)
+    casters = [c for c in order if sum(p["dec"][1] for w in worlds for p in base[(c, w)]) > 0]
+    st["casters"] = casters
+    log("spells: %d knob(s), %d casting cell(s) of %d: %s" % (len(knobs), len(casters), len(order), ",".join(casters)))
+    save_summary()
+    regs = lambda m: {k: [f[1] for p in parts for f in p["fights"].values()] for k, parts in m.items()}
+    paired_cells = lambda a, b: cells_mean({k: [a[k][i] - b[k][i] for i in range(min(len(a[k]), len(b[k])))] for k in a})
+    kept, done = [], set()
+    for rnd in range(CFG["spell_rounds"] if casters else 0):
+        alts = [(n, v) for n, _, vals in knobs if n not in done for v in vals]
+        if not alts:
+            break
+        specs = ["%s=%s" % a for a in alts]
+        sets = ",".join(kept) or None
+        scr = measure(sets, specs, seeds, who=casters)
+        diff = [{k: [f[1] - f[2][i] for p in parts for f in p["fights"].values()] for k, parts in scr.items()} for i in range(len(specs))]
+        scored = sorted(((cells_mean(d) + (i,)) for i, d in enumerate(diff)), key=lambda x: -x[0])
+        took = False
+        for d, se, i in scored:
+            row = {"knob": alts[i][0], "shipped": dict((k[0], k[1]) for k in knobs)[alts[i][0]], "value": alts[i][1], "spec": specs[i], "round": rnd + 1, "screen": [round(d, 4), round(se, 4)], "accepted": False}
+            if not (d > 2.0 * se and d > 0) and not (CFG["force"] and not st["rows"]):
+                row["why"] = "screen: does not lower the regret beyond noise (the best of %d values this round)" % len(specs)
+                st["rows"].append(row)
+                break
+            new, fails = ",".join(kept + [specs[i]]), []
+            fd, fse = paired_cells(regs(measure(sets, (), fresh, who=casters)), regs(measure(new, (), fresh, who=casters)))
+            row["fresh"] = [round(fd, 4), round(fse, 4)]
+            if not fd > 1.5 * fse:
+                fails.append("as the table on fresh fights: not confirmed")
+            hd, hse = cells_mean({k: [f[1] - f[2][0] for p in parts for f in p["fights"].values()] for k, parts in measure(sets, [specs[i]], seeds, True, casters).items()})   # priced as an alternate on the held-out oracle run: one measurement, not two
+            row["held_out"] = [round(hd, 4), round(hse, 4)]
+            if hd < -2.0 * hse and hd < 0:
+                fails.append("held-out places and books: the regret is higher")
+            if not fails or CFG["force"]:
+                j = judge("beta1", curves, None, forced=CFG["force"], sets=new, base_sets=sets, fence=True)
+                row["fence"] = j["steps"]
+                if not j["accepted"]:
+                    fails.append("J fence: " + j["why"])
+            row["why"] = "; ".join(fails) if fails else "ACCEPTED: lowers the spell regret on the screen and as the table on fresh fights, not worse held out, the J fence holds"
+            st["rows"].append(row)
+            log("spells round %d  %-22s %-8g -> %-8g screen %+.3f (se %.3f) %s" % (rnd + 1, row["knob"], row["shipped"], row["value"], d, se, row["why"][:140]))
+            if not fails:
+                row["accepted"] = took = True
+                kept.append(specs[i])
+                done.add(alts[i][0])
+                st["kept"] = kept
+            break   # one value per round: the next screen is on the new table
+        save_summary()
+        if not took:
+            break
+    if kept:
+        fin = measure(",".join(kept), (), seeds, who=casters)
+        st["report_final"] = {"%s/%s" % k: regret_table(parts) for k, parts in fin.items()}
+    st["complete"] = True
 
 
 def gap_search(st, order):
@@ -1713,8 +2183,8 @@ LOOT_NOT_SEARCHED = {"loot.stealNeedMin": "the theft road exists in the loot wor
 
 
 def final_sets():
-    """The accepted worth-the-gold values (the worth stage), as one --set string, or None."""
-    kept = SUMMARY["stages"].get("worth", {}).get("kept", [])
+    """The accepted SHARED values (the spells stage, then the worth stage), as one --set string, or None."""
+    kept = spell_sets() + SUMMARY["stages"].get("worth", {}).get("kept", [])
     return ",".join(kept) or None
 
 
@@ -1783,7 +2253,7 @@ def stage_worth():
     curves = final_curves()
     def judge_one(bs, ns, forced):
         return judge("beta1", curves, None, forced=forced, sets=ns, base_sets=bs)
-    kept, rows = shared_search("worth", WORTH_KNOBS, "beta1", range(1, CFG["train"] + 1), judge_one)
+    kept, rows = shared_search("worth", WORTH_KNOBS, "beta1", range(1, CFG["train"] + 1), judge_one, base_sets=",".join(spell_sets()) or None)
     for r in rows:
         if r["accepted"] and (r["best"] in (min(dict((k[0], k[2]) for k in WORTH_KNOBS)[r["knob"]]), max(dict((k[0], k[2]) for k in WORTH_KNOBS)[r["knob"]]))):
             open_decision("worth %s accepted at the edge of the range tried (%s)" % (r["knob"], r["best"]), "the best value may lie past it (runbook 7); written only after a look")
@@ -2203,6 +2673,29 @@ def render_md():
             L += ["| %s | %+.2f (%.2f) | %d | %+.2f | %+.0f g | %d / %d | %d | %s |" % (c, v["gap"], v["se"], v["episodes"], v["potionJ_gap"], v["gold_equivalent_gap"], v["baseline_takes"], v["oracle_takes"], v["sell_runs"],
                   "; ".join("(%s) %s %.2f" % (r["class"], r["cluster"], r["dU_per_episode"]) for r in g["clusters"][c][:3])) for c, v in g["cells"].items()] + [""]
     ad = SUMMARY.get("auto_decisions", [])
+    if "follow" in s:
+        fo = s["follow"]
+        L += ["## Follow: the oracle gap as the score", "", "| Class | Gap (se) | Seeds | (a) share | Closable (estimate) | After | Accepted | Verdict |", "|---|---|---|---|---|---|---|---|"]
+        for c, cell in fo.get("cells", {}).items():
+            L.append("| %s | %+.2f (%.2f) | %d | %.0f%% | %+.2f | %s | %s | %s |" % (c, cell["gap"], cell["se"], cell["seeds"], 100 * cell["a_share"], cell["closable_estimate"],
+                     "%+.2f (%.2f)" % tuple(cell["gap_after"]) if cell.get("gap_after") else "-", " ".join("`%s`" % k for k in fo.get("kept", {}).get(c, [])) or "none", cell.get("verdict", "running")))
+        L.append("")
+    if "spells" in s:
+        sp = s["spells"]
+        L += ["## Spells: the regret report (%s)" % ", ".join(sp.get("worlds", [])), "",
+              "Regret = the oracle's lead of its best castable spell over IAUS's pick, U per fight. Cause = share of the regret. eps / epm = how far his pick is under the best castable spell per cast second (within his family, across families) and per magicka, from the lab's world.", "",
+              "| Cell / world | Table | Fights | Casts/f | Regret U/f | Any % | Within | Cross | fact | weight | gate | hand | sight | epsW % | epsX % | epm % |", "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+        for tab, key in (("base", "report"), ("final", "report_final")):
+            for k, r in sp.get(key, {}).items():
+                if r["cast_per_fight"] > 0:
+                    cp = r["cause_pct"]
+                    L.append("| %s | %s | %d | %.1f | %.3f | %.1f | %.3f | %.3f | %.0f | %.0f | %.0f | %.0f | %.0f | %.1f | %.1f | %.1f |" % (k, tab, r["fights"], r["cast_per_fight"], r["regret_u"], r["any_pct"], r["within"], r["cross"],
+                             cp["fact"], cp["weight"], cp["gate"], cp["hand"], cp["sight"], r["eps_within_pct"], r["eps_cross_pct"], r["epm_pct"]))
+        L += ["", "Accepted shared values: %s" % (" ".join("`%s`" % k for k in sp.get("kept", [])) or "none"), "", "| Round | Knob | Shipped -> value | Screen (se) | Fresh | Held out | Verdict |", "|---|---|---|---|---|---|---|"]
+        for r in sp.get("rows", []):
+            L.append("| %d | `%s` | %g -> %g | %+.3f (%.3f) | %s | %s | %s |" % (r["round"], r["knob"], r["shipped"], r["value"], r["screen"][0], r["screen"][1], "%+.3f (%.3f)" % tuple(r["fresh"]) if "fresh" in r else "-",
+                     "%+.3f (%.3f)" % tuple(r["held_out"]) if "held_out" in r else "-", r["why"]))
+        L += ["", "Not searched (SpellWorth, until native reads it): %s" % ", ".join(sorted(sp.get("not_searched", {}))), ""]
     if SUMMARY.get("sight_skipped"):
         L += ["## Not searched: knobs that read sight", "", "The lab's sight is geometry whose error against the engine's rays is not measured (no parity probe yet), so these were kept out of every stage (`--sight-knobs` lifts it): " + ", ".join("`%s`" % k for k in SUMMARY["sight_skipped"]), ""]
     L += ["## AUTOMATIC DECISIONS (--decisions %s; the rule and the numbers are in summary.json auto_decisions)" % A.decisions, "", "| Kind | Verdict | What | Evidence |", "|---|---|---|---|"]
@@ -2288,6 +2781,8 @@ def rerun_after(name, done, rest):
         from before it (the default order puts gap first, so this is a custom order only)."""
     if name == "recalib" and SUMMARY.get("withheld") and "joint" in done and "joint" not in rest:
         return ["joint"], "recalib withheld %d value(s), the table changed" % len(SUMMARY["withheld"])
+    if name == "follow" and SUMMARY["stages"].get("follow", {}).get("changed") and "joint" in done and "joint" not in rest:
+        return ["joint"], "the follow stage moved the table after the joint gate graded it"
     if name == "gap" and SUMMARY["stages"].get("gap", {}).get("search_changed"):
         again = [x for x in ("floor", "rating", "recalib") if x in done and x not in rest]
         return again, "gap search moved the table"
@@ -2340,7 +2835,8 @@ def main():
     ap.add_argument("--loot-world", choices=("episodes", "stops"), default="episodes", help="the loot stage's world: episodes = looting in the fight world (sim v4 batch L, Loot.h); stops = the older 8-stop lab (Logistics.h)")
     ap.add_argument("--loot-places", default="", help="the extracted set the loot episodes are played in (Vanilla, LoreRim, Tuxborn: ~/.cache/mfo-env/<set> and ~/.cache/mfo-list-balance/<set>.loot.json); default: the hand-made loot fixtures. The kept table is then checked on <set>/heldout")
     ap.add_argument("--sim-flags", default="", help="simulator switches for EVERY run of this driver (batch 3 models, e.g. '--ranged-perks --point-blank'); they go into a wrapper in --out whose text names the binary's sha256, so they are part of every cache key")
-    ap.add_argument("--world", choices=("v2", "v3"), default="v3", help="the simulator's world for EVERY run of this driver (iaus-sim-v3.md): v3 (the default since the sim mirror batch of 11-17, marth 11-16 'v3 default after data': the field cast delay and the chase-waiver fix are in), the positional world; v2 = the lab every tuning up to 2.11.5 was searched in, kept working. Passed to the simulator as --world, through the same wrapper as --sim-flags")
+    ap.add_argument("--world", choices=("v2", "v3", "v4"), default="v4", help="v4 (the default since sim v4 batch C, iaus-sim-v4.md 15): the environment world on the library's TRAIN places (MFO_ENV_CACHE, default ~/.cache/mfo-env) with field-size books; the follow and spells stages check on the held-out places and books. Older text: the simulator's world for EVERY run of this driver (iaus-sim-v3.md): v3 (the default since the sim mirror batch of 11-17, marth 11-16 'v3 default after data': the field cast delay and the chase-waiver fix are in), the positional world; v2 = the lab every tuning up to 2.11.5 was searched in, kept working. Passed to the simulator as --world, through the same wrapper as --sim-flags")
+    ap.add_argument("--oracle-cuts", default=ORACLE_CUTS, help="simulator switches of the oracle race's cost cuts, on every oracle run of the gap, follow and spells stages (default: %(default)s; iaus-sim-v4.md 15.7). '' = the race without them")
     ap.add_argument("--knobs", help="a regular expression: the classes / edge / gap stages search only the knobs whose name matches (e.g. '^equip\\.' for the posture curves); the gates are unchanged")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 16)
     ap.add_argument("--decisions", choices=("auto", "ask"), default="auto", help="auto (default): every former open decision is decided by a rule (class card + potion gates, tuner-auto-decisions.md) or is a report-only note, all in summary.json auto_decisions; ask: the old open decisions, no card / potion gate")
@@ -2363,6 +2859,8 @@ def main():
         if "--parked" not in A.sim_flags.split():
             A.sim_flags = (A.sim_flags + " --parked").strip()
     A.bin = os.path.abspath(A.bin)
+    if A.world == "v4" and not os.path.exists(env_index()):
+        raise SystemExit("--world v4 needs the library of places: %s is missing (tools/envextract builds it; MFO_ENV_CACHE points elsewhere). --world v3 is the plane." % env_index())
     bin_sha = sha(A.bin)   # of the simulator itself, before any --sim-flags wrapper
     CFG = SMOKE if A.smoke else FULL
     os.makedirs(A.out, exist_ok=True)
@@ -2372,12 +2870,14 @@ def main():
         if any(f in ("--list", "--potion-worth", "--classes", "--seed", "--seeds", "--curve") for f in flags):
             raise SystemExit("--sim-flags takes model switches only, never a world, a class, a seed or a curve")
         body = "#!/bin/sh\n# tune_driver --sim-flags wrapper: binary sha256 %s\nexec %s %s \"$@\"\n" % (sha(A.bin), A.bin, " ".join(flags))
-        wrap = os.path.join(A.out, "sim-%s.sh" % hashlib.sha256(body.encode()).hexdigest()[:12])
-        if not os.path.exists(wrap) or open(wrap).read() != body:
-            with open(wrap, "w") as f:
-                f.write(body)
-            os.chmod(wrap, 0o755)
-        A.bin = wrap
+        hbody = "#!/bin/sh\n# tune_driver held-out wrapper: binary sha256 %s\nexec %s %s \"$@\"\n" % (sha(A.bin), A.bin, " ".join(flags + (HOLD_FLAGS if A.world == "v4" else HOLD_FLAGS[2:])))
+        for which, text in (("bin", body), ("bin_hold", hbody)):   # the held-out wrapper: the same switches, then the held-out places and books (the LAST of a repeated switch stands)
+            wrap = os.path.join(A.out, "sim-%s.sh" % hashlib.sha256(text.encode()).hexdigest()[:12])
+            if not os.path.exists(wrap) or open(wrap).read() != text:
+                with open(wrap, "w") as f:
+                    f.write(text)
+                os.chmod(wrap, 0o755)
+            setattr(A, which, wrap)
     POOL = cf.ThreadPoolExecutor(max_workers=A.jobs)
     load_cache()
     prev = os.path.join(A.out, "summary.json")
@@ -2391,7 +2891,7 @@ def main():
             pass   # cut off by a kill: every stage it held replays from the cache
     SUMMARY["config"] = dict(CFG, smoke=A.smoke, worlds=A.worlds, bin=A.bin, sim_flags=A.sim_flags, world=A.world, knobs=A.knobs, cells=A.cells, cell_list=list(CELLS), bin_sha=bin_sha, classes=A.classes, stages=A.stages)
     log("START%s stages=%s worlds=%s cache=%d results" % (" (SMOKE)" if A.smoke else "", A.stages, ",".join(A.worlds), len(CACHE)))
-    stages = {"prep": stage_prep, "rejudge": stage_rejudge, "classes": stage_classes, "joint": stage_joint, "edge": stage_edge, "globals": stage_globals, "consts": stage_consts, "floor": stage_floor, "rating": stage_rating, "recalib": stage_recalib, "gap": stage_gap, "logistics": stage_logistics, "worth": stage_worth, "loot": stage_loot}
+    stages = {"prep": stage_prep, "rejudge": stage_rejudge, "classes": stage_classes, "joint": stage_joint, "edge": stage_edge, "globals": stage_globals, "consts": stage_consts, "floor": stage_floor, "rating": stage_rating, "recalib": stage_recalib, "gap": stage_gap, "follow": stage_follow, "spells": stage_spells, "logistics": stage_logistics, "worth": stage_worth, "loot": stage_loot}
     order = A.stages.split(",")
     done = []
     i = 0
