@@ -114,7 +114,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 FULL = dict(probe_seeds=6, train=64, hold=64, confirm=96, max_knobs=250, passes=2, min_probe=0.0, global_seeds=96, list_global_seeds=48,
             const_seeds=48, floor_seeds=36, rating_seeds=6, calib_seeds=24, calib_fights=400, list_calib_seeds=12, force=False,
             gap_seeds=12, gap_max_seeds=48, gap_nat=4, gap_scen=1, gap_families=3, gap_knobs=12, logi_seeds=12, logi_eps=8, card_seeds=3, card_fights=48,
-            follow_seeds=6, follow_knobs=12, follow_min_gap=0.5, spell_seeds=6, spell_rounds=6)
+            follow_seeds=6, follow_knobs=12, follow_min_gap=0.5, spell_seeds=4, spell_rounds=4)
 SMOKE = dict(probe_seeds=2, train=4, hold=4, confirm=4, max_knobs=4, passes=1, min_probe=0.0, global_seeds=4, list_global_seeds=2,
              const_seeds=2, floor_seeds=2, rating_seeds=1, calib_seeds=2, calib_fights=40, list_calib_seeds=1, force=True,
              gap_seeds=1, gap_max_seeds=2, gap_nat=1, gap_scen=1, gap_families=1, gap_knobs=1, logi_seeds=1, logi_eps=1, card_seeds=1, card_fights=8,
@@ -1865,7 +1865,7 @@ def stage_spells():
       screen   one oracle run per (cell, world, seed) prices EVERY candidate value as an alternate table on the same oracle decisions
                (--regret-alt): d = base regret - the alternate's, paired per fight.
       accept   the best screened value, when d > 2 se, is measured AS THE TABLE on fresh fights (7001..): its regret is lower by more
-               than 1.5 se; on the held-out places and books it is not higher beyond 2 se; and the J rule holds as a FENCE over every
+               than 1.5 se; on the held-out places and books (priced there as an alternate) it is not higher beyond 2 se; and the J rule holds as a FENCE over every
                cell (judge "beta1", fence=True: no class worse, cross-world, as shipped, the Knight floor). Then the screen runs again on
                the new table. One value per round, at most spell_rounds rounds.
       report   per cell and world, on the base table (and on the final one when a value was accepted): regret U per fight, the share of
@@ -1917,7 +1917,7 @@ def stage_spells():
             row["fresh"] = [round(fd, 4), round(fse, 4)]
             if not fd > 1.5 * fse:
                 fails.append("as the table on fresh fights: not confirmed")
-            hd, hse = paired_cells(regs(measure(sets, (), seeds, True, casters)), regs(measure(new, (), seeds, True, casters)))
+            hd, hse = cells_mean({k: [f[1] - f[2][0] for p in parts for f in p["fights"].values()] for k, parts in measure(sets, [specs[i]], seeds, True, casters).items()})   # priced as an alternate on the held-out oracle run: one measurement, not two
             row["held_out"] = [round(hd, 4), round(hse, 4)]
             if hd < -2.0 * hse and hd < 0:
                 fails.append("held-out places and books: the regret is higher")

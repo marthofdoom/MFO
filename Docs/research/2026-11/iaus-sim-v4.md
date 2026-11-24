@@ -1032,3 +1032,105 @@ Result on the library: `osc/min` of the six caster cells from about 12 to betwee
 
 **Checks.** `sim --env-test`: 81 checks pass (sight dwell, back-off, leaf, snapshot, three door-block checks). `baseline_v4_builtin.txt` rewritten once more. It compares with 0 metrics changed at 1 and at 16 threads. `--world v3` and `--world v2`: 0 metrics changed. Solo walk: fixtures 657 trips and 0 wrong, library copy 10615 walked and 2 wrong, none over or under the goal. `run.sh` with `SIM_CLITEST=1`: CLI-CHECKS PASS (the field-log check skipped again). Local MSVC build of the two changed native files and the link: exit 0.
 
+
+## 14. Batch C as built (branch `feat/sim-v4-choice`, 2026-11-24)
+
+Slices S7, S11a, S11b (the skeleton only) and S11c, with the mirror of `fix/spell-worth` in front of them. The sim and the driver follow the oracle now. Native gained one unwired file pair.
+
+### 14.1 Where things are
+
+| What | Where | To change it |
+|---|---|---|
+| Which spells a follower can measure | `tools/iaus_sim/Data.h kIndirectArch`, `SimSpell::indirect`, `Policy.h SpellMeasured`, `FillSpellEstimate` | an archetype whose damage lives elsewhere: one value in `kIndirectArch`, after native's switch in `iaus/Fills.cpp MeasureSpell` |
+| The rules of the 11-23 field build, for the "before" column | `Data.h g_spellRules`, `Policy.h SimGenerate`, `--spell-rules today\|old\|all` | |
+| The ask list (a refused pair stays asked) | `Policy.h` `ServeWith`, native's own `NextAskList` | |
+| Field-size books | `Load.h kFieldBook`, `kFieldBookSize`, `kFieldBookHybrid`, `BookHalf`, `--books lab\|field\|heldout` | the mix or the size: that table |
+| Held-out places | `Env.h g_envHold`, `kEnvHoldEvery`, `--env-hold all\|train\|heldout` | |
+| Spell regret, its causes, the world's own numbers | `Oracle.h RegretLog`, `TrueSpell`, the block in `OraclePolicy::Serve`, `sim.cpp SpellRegretReport`, `--spell-regret` | a cause: the chain in `Serve`. A family's number: `TrueSpell` |
+| Alternate tables on one oracle fight | `Oracle.h AltTable`, `--regret-alt "<sets>"` | |
+| Exact pruning | `Oracle.h Dominates`, `--oracle-prune off` | a number the world reads for an offense cast: one more term in `Dominates` |
+| The IAUS arm of a gap fight alone | `sim.cpp` `--gap-arm iaus` (`GAPIAUS` lines) | |
+| The field's failure, counted without an oracle | `World.h Tally spTop`, metrics `sp.unmTop%`, `sp.tie%`, `sp.capTop%` | |
+| The follow stage | `tune_driver.py stage_follow`, `follow_class`, `follow_candidates` | sizes: `FULL follow_seeds`, `follow_knobs`, `follow_min_gap` |
+| The spells stage | `tune_driver.py stage_spells`, `spell_knobs`, `SPELL_FAMILIES`, `SPELL_CONS`, `SPELL_SCALARS`, `SW_KNOBS` | a shared number to search: a row of one of those lists |
+| The fence form of the J rule | `tune_driver.py judge(fence=True)` | |
+| The cost cuts | `tune_driver.py table_slice` (3 and 4), the size loop in `follow_class` (2) | |
+| The tune's world | `tune_driver.py V4_TRAIN`, `HOLD_FLAGS`, `world_flags`, `--world v4` (the default) | |
+| The spell-worth reader, SKELETON | `native/iaus/SpellWorth.h`, `SpellWorth.cpp` | see 14.6 |
+
+### 14.2 The mirror of fix/spell-worth
+
+Most of that fix needed no mirror: the lab compiles `native/iaus/Generate.cpp`, so the per-second comparison (`Facts::expRate` against `bestDamage`), the exploit term reading no resist the damage already carries, the immune pairs dropped and the placeholder for an unmeasured spell were in the lab the moment main had them. What the lab fills itself is the BOOK, and it filled `measured = true` for every spell. So the lab had no unmeasured spell and the placeholder could not be searched.
+
+**How the lab decides a spell is unmeasured.** From the world json's effect records, never from a name. `Data.h Classify` reads each effect's `archetype`. A spell is `indirect` when any effect's archetype is Script (1), Cloak (35), EnhanceWeapon (39) or SpawnHazard (40): native's own four, the damage of which lives in a hazard, a second spell, a script or a weapon enchantment. A spell is unmeasured when it is an offense spell, it is indirect, and its own hostile value-modifier effects on health sum to zero. That last test is `Estimate::DamageUnmeasurable`, native's function, called by the lab. A bolt with a rider keeps its direct damage, a lower bound. Counts in the taught pools: Tuxborn 108 hostile spells are indirect with no direct damage, 271 are riders with direct damage, 128 are plain. LoreRim 169, 287, 50.
+
+Mirrored with it:
+- **Units.** A concentration spell's entry holds one second of the stream (`Fills.cpp Total`). The lab's `SimSpell` holds its 2 s stream, so the entry is half of it. Before, a stream read twice as good per second as it is.
+- **The level cap.** `SpellEntry::levelCap` is the record's cap for Calm, Demoralize, Frenzy and Turn Undead. The pairs the generator queues (`Generated::capQueued`) join the ask list.
+- **The ask list.** `iaus/Candidates.cpp NoteDecision` keeps a refused pair on the list while its No is under 6 s old. The lab asked only the top pairs of the last decision, so a refused pair came back every other lap. The lab now runs native's `NextAskList`.
+- **`t.unmeasuredDamage`** is in `Tune.h kTuneScalars` and is a knob of the spells stage (`SPELL_SCALARS`).
+
+Not in the extract, so not mirrored: effect and MGEF conditions (native counts conditional damage effects once, by the largest. The lab sums every effect), the spell type (a poison-type spell reads poison resist first. The lab reads magic resist for all), and the hazard record. That last one matters: the lab's WORLD deals no damage for the hazard a spell spawns, so a Wall of Flames is worth nothing here and the oracle never picks it. A request to `tools/list_balance`: the three fields above, and the hazard's own spell.
+
+Effect on the built-in baseline: the stream unit moves the casters (evoker, seed 1, J 68.19 to 71.75). The three baselines were rewritten once, at the end of the batch.
+
+### 14.3 Field-size books, and the field's failure reproduced
+
+`--books field` gives a caster the mix of Jesper's book (74 offense, 4 control, 13 heal, 8 buff, 3 ward. Summon 6 is an ASSUMPTION, his line holds none) times a size drawn per follower between 60 and 120 percent, from the world's taught spell records of each nature that his skill allows, without replacement, seeded by the fight. A class off the Mage line holds 35 percent of it (ASSUMPTION). A spell he cannot pay for stays in the book, as in the field. Costs, magnitudes and perk multipliers are the list's own, as before. `--books heldout` draws from the other half of the records (a hash of the editor id), so a tuning is checked on spells no search saw. The built-in world has 17 spells and gives what it has: field-size books need a list world.
+
+`book_from_log.py` (a real follower's `[spellbook]` dump as a book) is not built. It needs the dump keyed by (plugin, local id) and the extract keyed the same way. Neither is today.
+
+The field's failure was two things. Checked by the three counters, natural bracket, Tuxborn, seed 1 (a tiny run, and a CLI check pins it):
+
+@@FAILTABLE@@
+
+- **Unmeasured spells on top, and tied.** Reproduced with `--spell-rules old`, gone today.
+- **A level-capped Turn on top.** NOT reproduced by the rules alone: the lab's will-work answers a capped pair No on the lap after it is asked, under both rules, so a capped control spell is on top in about one lap in a hundred either way. In the field the Turn also keyed a row no caster served (`--seats old` in the v4 world is that game). @@SEATSNOTE@@
+
+### 14.4 The regret report
+
+On the gap pass (`--class-oracle N --spell-regret`), so it costs no oracle fight of its own. Per decision of the subject where IAUS picked a cast or the oracle's best option is one: the oracle's paired lead of its best castable spell over IAUS's pick, in U, counted only when the race dropped IAUS's pick. The causes, in the order they are tested:
+
+- **gate**: IAUS vetoed the oracle's spell or scored it under the floor, or picked something the class's rulings forbid.
+- **sight**: that veto was the sight term, or the spell ranks lower while IAUS reads its target occluded.
+- **hand**: that veto was the hand term, or the spell ranks lower with a hand-lost share.
+- **fact**: ranked lower and an input is wrong or absent. Either spell is unmeasured in his book, or both are offense spells whose estimate orders them the other way round from what the world does per cast second.
+- **weight**: ranked lower with none of the above.
+
+Beside it, from the world and not from the estimate: how far his pick is under the best castable spell in effect per cast second (inside his pick's family, and across the families that have a number) and per magicka. The unit across families is health: removed, restored, or a controlled foe's seconds times that foe's damage rate. A buff, a ward and a summon have no number in the lab yet.
+
+The table, before (`--spell-rules old`) and today, field-size books:
+
+@@REGRETTABLE@@
+
+### 14.5 The follow and spells stages
+
+**follow** (between `edge` and `spells`). Its rule is `stage_follow`'s docstring. In short: the score is the class's gap to its own oracle on its gap fights, on every world of the run. The oracle arm is paid once per class, table and seed. A candidate is the IAUS arm of the same fights with the value set, which is milliseconds. It is accepted when it closes the gap by more than 2 se with no world worse, holds on fresh gap fights, is not worse on the held-out places and books, passes the J rule as a fence (`judge(fence=True)`: the two lines that ask J to rise ask that it does not fall, every gate and the Knight floor unchanged) and the class card, and the gap did not rise when the oracle ran again on the new table. The oracle's own U shift is printed beside every accepted value. The order is the T1 rows, then the cells of the run. The joint gate and the generator read the table through `final_curves()` as before, which now includes this stage's values. Sight-driven knobs stay skipped.
+
+The closable gap is the gap times the (a) share of the divergence cost. It is an ESTIMATE and a report line, since the cluster costs are an ordering and not an additive share.
+
+**spells** (after `follow`). Its rule is `stage_spells`'s docstring. Shared numbers only: `t.unmeasuredDamage`, each cast family's action weight, and for `damage`, `exploit`, `overkill`, `variety` and `control_worth` the shared curve and each cast family's weight on it. A class's own rows on those considerations are the follow stage's. The score is the spell regret pooled over the cells that cast, on the list worlds. One oracle run prices every candidate value as an alternate table: the oracle's option values are read for what the other table would have picked on the same snapshot. That is a screen, because the rollouts ran under the base table, so the winner is then measured as the table on fresh fights, priced on the held-out places and books, and fenced by J over every cell. The `sw.*` table joins the knob list when native reads it (`SW_KNOBS`. Until then a test holds every field in `SW_NOT_SEARCHED`).
+
+**The cuts of 6.2.** Built: 2 (a cell's seed count grows only while its gap is not measured well enough, from 6), 3 and 4 (`table_slice`: a gap fight's command and cache key hold only its own class's values and the T1 rows', so one class's accepted value re-runs one class, and a class that took nothing replays the shipped measurement). Not built: 1 (bands subject-only) changes what the bands mean and waits for marth. 5 is marth's call by the standing rule. 6 was batch W's.
+
+**Validation** (6.4): `test_tune_driver.py ChoiceBatch` plants an improvement and a regression for each stage on a fixed set of results. The stage accepts the first and rejects the second, and rejects a value that fails only on fresh fights, only held out, or only because the gap rose when the oracle ran again.
+
+### 14.6 The SpellWorth skeleton (S11b), and what filling it needs
+
+`native/iaus/SpellWorth.h` and `SpellWorth.cpp`: the named table `struct SpellWorth` (24 fields, each a labelled placeholder), `SetSpellWorthKnob` and `GetSpellWorthKnob` over one name table, and `Estimate::SpellWorthOn(entry, target, snapshot, table, in) -> {known, effect, seconds, magicka}` with one function per term (cast seconds, channel seconds, area, a DoT over the foe's expected life, control, buff, ward and summon in the same unit, magicka against the fight). Every body is a TODO that answers "not known". Nothing calls it. It is in `native/CMakeLists.txt` and in the sim's build. Engine-free: standard headers and `iaus/Snapshot.h`.
+
+One departure from 7.5: the claim-to-fire seconds are per cast FAMILY, not per engine row, because the pure code does not hold the row. `SpellEntry::engineRow` is on the list below.
+
+What the Sonnet brief needs, precisely (the header's own list, items 1 to 5): the table as a member of `Tuning` and its names in `SetTuningScalar`. The names in `tuningfiles.py`, `Tune.h` and `SW_KNOBS`. The inputs the Snapshot lacks, each with its own reader: charge time, the DoT part apart from the direct part, the engine row, the summoned actor's base, what a buff adds and for how long, a ward's power, a foe's expected life, the fight's expected length. The call sites, all in `Generate.cpp Casts`. A harness batch that pins each term.
+
+### 14.7 The tune's world, the commands, the cost
+
+@@COMMANDS@@
+
+### 14.8 Checks, and what was not run
+
+@@CHECKS@@
+
+### 14.9 Open
+
+@@OPEN@@

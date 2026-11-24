@@ -43,7 +43,7 @@ class SightGate(unittest.TestCase):   # review F11: the knobs that read sight ar
             T.ALLOW_SIGHT_KNOBS = False
 
 
-class World(unittest.TestCase):   # sim v3: the driver always names the world (v3 by default since the sim mirror batch of 11-17; --world v2 still works)
+class World(unittest.TestCase):   # the driver always names the world (v4 by default since sim v4 batch C; --world v3 and v2 still work)
     def test_world_is_always_first(self):
         self.assertEqual(T.world_flags("v2", ""), ["--world", "v2"])
         self.assertEqual(T.world_flags("v3", "--ranged-perks --point-blank"), ["--world", "v3", "--ranged-perks", "--point-blank"])
@@ -51,6 +51,185 @@ class World(unittest.TestCase):   # sim v3: the driver always names the world (v
     def test_sim_flags_may_not_name_the_world(self):
         with self.assertRaises(SystemExit):
             T.world_flags("v2", "--world v3")
+
+    def test_v4_is_the_train_places_with_field_books_and_sim_flags_come_last(self):   # sim v4 batch C: the tune's world
+        self.assertEqual(T.world_flags("v4", ""), ["--world", "v4", "--env-set", "all", "--env-hold", "train", "--books", "field"])
+        self.assertEqual(T.world_flags("v4", "--books lab")[-2:], ["--books", "lab"])   # the simulator takes the last of a repeated switch
+        self.assertEqual(T.HOLD_FLAGS, ["--env-hold", "heldout", "--books", "heldout"])
+        self.assertEqual(T.DEFAULT_STAGES.split(",")[2:7], ["classes", "edge", "follow", "spells", "joint"])   # the gap is the score BEFORE the joint gate judges the table
+
+
+class ChoiceBatch(unittest.TestCase):   # sim v4 batch C (iaus-sim-v4.md 14): the follow stage, the spells stage, their readers
+    NAMES = ("all_knobs", "class_knobs", "final_curves", "follow_oracle", "follow_iaus", "judge", "card_potion_gate", "log", "save_summary", "regret_runs", "spell_knobs", "scope", "cells")
+
+    def setUp(self):
+        self.saved = {k: getattr(T, k) for k in self.NAMES}
+        self.cfg, self.a, self.stages = T.CFG, T.A, T.SUMMARY.get("stages")
+        T.CFG = dict(T.FULL, follow_seeds=2, gap_max_seeds=2, spell_seeds=2, spell_rounds=3)
+        T.A = types.SimpleNamespace(worlds=["builtin"], out=tempfile.mkdtemp(), decisions="auto", classes=None)
+        T.SUMMARY["stages"] = {}
+        T.SUMMARY["open_decisions"], T.SUMMARY["auto_decisions"] = [], []
+        T.log = lambda m: None
+        T.save_summary = lambda: None
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            setattr(T, k, v)
+        T.CFG, T.A = self.cfg, self.a
+        T.SUMMARY["stages"] = self.stages if self.stages is not None else {}
+
+    def test_table_slice_is_the_class_and_its_t1_companions(self):   # cost cuts 3 and 4
+        tab = ["mage:9.1.a=2", "evoker:9.2.w=1.5", "healer:11.3.b=0.2", "melee:family.0=1.15"]
+        self.assertEqual(T.table_slice("evoker", tab), ["mage:9.1.a=2", "evoker:9.2.w=1.5", "melee:family.0=1.15"])
+        self.assertEqual(T.table_slice("knight", tab), ["mage:9.1.a=2", "melee:family.0=1.15"])
+        T.CFG = dict(T.SMOKE)
+        T.A.bin, T.A.builtin_worth = "/sim", None
+        a, b = T.gap_cmd("builtin", "knight", tab, 6001), T.gap_cmd("builtin", "knight", tab[:1] + tab[3:], 6001)
+        self.assertEqual(a, b)                                      # a value of another class is not in the command, so not in the cache key
+        self.assertIn("--spell-regret", a)                          # every oracle run prints the regret: one cache entry for gap, follow and spells
+        i = T.gap_cmd("builtin", "knight", tab, 6001, arm="iaus")
+        self.assertTrue("--gap-arm" in i and "--spell-regret" not in i)
+
+    def plant(self, gain, fresh_gain=None, hold_gain=None, gap_after=None):
+        """A class with a gap of 4 U on 8 fights; candidate spec -> what it adds to IAUS's U on the search fights (gain), on fresh fights and
+        on the held-out ones; the oracle run again on the new table reads gap_after (default: the gap less the gain)."""
+        keys = [(s, j) for s in (6001, 6002) for j in range(4)]
+        noise = [0.0, 0.2, -0.2, 0.1, -0.1, 0.3, -0.3, 0.0]
+        T.all_knobs = lambda: ([], 0)
+        T.class_knobs = lambda c, k: [("cast_offense.damage.a", "{c}:9.1.a={v}", 1.0, [0.5, 2.0])]
+        T.final_curves = lambda: list(T.SUMMARY["stages"].get("follow", {}).get("kept", {}).get("evoker", []))
+        T.SUMMARY["stages"]["classes"] = {"evoker": {"base": [], "live": [["cast_offense.damage.a", 1.0]], "rows": [{"knob": "cast_offense.damage.a", "sweep": [[0.5, 0.4, 0.1], [2.0, 0.5, 0.1]]}]}}
+        fg, hg = fresh_gain if fresh_gain is not None else gain, hold_gain if hold_gain is not None else gain
+        add = lambda table, g: sum(g.get(k, 0.0) for k in table)
+
+        def oracle(cls, table, seeds, hold=False):
+            off = 0 if seeds[0] == 6001 else 1000
+            ga = gap_after if (gap_after is not None and table) else 4.0 - add(table, gain)
+            return {"builtin": {"fights": [(s + off, j, "nat", 50.0 + n + add(table, fg if off else gain), 50.0 + n + add(table, fg if off else gain) + ga) for (s, j), n in zip(keys, noise)],
+                                "sit": {"cast_offense|cast_offense|ranked|x": (8, 16.0)}, "gen": {}, "dec": 8}}
+        T.follow_oracle = oracle
+        T.follow_iaus = lambda cls, table, seeds, hold=False: {"builtin": {(s + (0 if seeds[0] == 6001 else 1000), j): 50.0 + n + add(table, hg if hold else (gain if seeds[0] == 6001 else fg)) for (s, j), n in zip(keys, noise)}}
+        T.judge = lambda cls, kept, spec, forced=False, fence=False: {"accepted": fence, "why": "FENCE HOLDS" if fence else "strict judge called", "steps": {}}
+        T.card_potion_gate = lambda cls, anchor, new: {"ok": True, "fails": []}
+        T.scope = lambda: ["evoker"]
+
+    def test_follow_accepts_a_planted_improvement_and_rejects_a_planted_regression(self):   # design 6.4
+        self.plant({"evoker:9.1.a=2.0": 1.5, "evoker:9.1.a=0.5": -1.5})
+        T.stage_follow()
+        fo = T.SUMMARY["stages"]["follow"]
+        self.assertEqual(fo["kept"]["evoker"], ["evoker:9.1.a=2.0"])
+        self.assertEqual(fo["cells"]["evoker"]["gap"], 4.0)
+        self.assertEqual(fo["cells"]["evoker"]["gap_after"][0], 2.5)
+        self.assertEqual(T.final_curves(), ["evoker:9.1.a=2.0"])                       # the one reader of the table sees it
+        self.assertEqual(fo["changed"], ["evoker"])
+
+    def test_follow_needs_fresh_fights_held_out_places_and_a_gap_that_really_fell(self):
+        for kw, why in (({"fresh_gain": {"evoker:9.1.a=2.0": 0.0}}, "fresh gap fights"), ({"hold_gain": {"evoker:9.1.a=2.0": -3.0}}, "held-out"), ({"gap_after": 6.0}, "the gap ROSE")):
+            T.SUMMARY["stages"] = {}
+            self.plant({"evoker:9.1.a=2.0": 1.5}, **kw)
+            T.stage_follow()
+            fo = T.SUMMARY["stages"]["follow"]
+            self.assertEqual(fo["kept"]["evoker"], [], why)
+            self.assertTrue(any(why in r["why"] for r in fo["rows"]["evoker"]), (why, [r["why"] for r in fo["rows"]["evoker"]]))
+
+    def test_follow_does_not_search_a_class_with_no_gap(self):
+        self.plant({"evoker:9.1.a=2.0": 1.5}, gap_after=None)
+        orc = T.follow_oracle
+        T.follow_oracle = lambda cls, table, seeds, hold=False: {w: dict(m, fights=[(s, j, k, ui, ui + 0.05) for s, j, k, ui, _ in m["fights"]]) for w, m in orc(cls, table, seeds, hold).items()}
+        T.stage_follow()
+        self.assertIn("not searched", T.SUMMARY["stages"]["follow"]["cells"]["evoker"]["verdict"])
+
+    def test_rerun_and_final_sets(self):
+        T.SUMMARY["stages"] = {"follow": {"changed": ["evoker"]}, "spells": {"kept": ["t.unmeasuredDamage=0.35"]}, "worth": {"kept": ["worth.floor=0.1"]}}
+        self.assertEqual(T.rerun_after("follow", ["joint", "follow"], ["summary"])[0], ["joint"])   # a custom order: the joint gate graded the older table
+        self.assertEqual(T.rerun_after("follow", ["classes", "follow"], ["joint"])[0], [])          # the default order: the joint gate comes after
+        self.assertEqual(T.final_sets(), "t.unmeasuredDamage=0.35,worth.floor=0.1")
+
+    def spell_world(self, alt_regret, table_regret, hold_regret=None):
+        """Two casters and a blade; base regret 2 U a fight (with a little spread); each alternate spec -> its screened regret; each accepted
+        table (--set string) -> its true regret."""
+        spread = [0.0, 0.1, -0.1, 0.05]
+
+        def runs(tasks):
+            out = []
+            for w, c, curves, s, sets, alts, hold in tasks:
+                cast = c != "knight"
+                base = table_regret.get(sets, 2.0) if sets else 2.0
+                out.append({"fights": {(s, j): (5 if cast else 0, (base + spread[j]) if cast else 0.0, [((hold_regret if hold and hold_regret else alt_regret).get(a, 2.0) + spread[j]) if cast else 0.0 for a in alts]) for j in range(4)},
+                            "rows": {"cast_offense|cast_offense|fact": [20, 8, 4 * base, 20, 5.0, 6.0, 4.0]} if cast else {}, "dec": [30, 20 if cast else 0, 3]})
+            return out
+        T.regret_runs = runs
+        T.spell_knobs = lambda: [("t.unmeasuredDamage", 0.5, [0.25, 0.8]), ("aw.9", 1.769, [0.9, 3.5])]
+        T.final_curves = lambda: []
+        T.scope = lambda: ["evoker", "healer", "knight"]
+        self.judged = []
+        T.judge = lambda cls, kept, spec, forced=False, sets=None, base_sets=None, fence=False: (self.judged.append((cls, sets, base_sets, fence)), {"accepted": True, "why": "FENCE HOLDS", "steps": {}})[1]
+
+    def test_spells_accepts_a_planted_improvement_once_and_reports(self):
+        self.spell_world({"t.unmeasuredDamage=0.25": 1.0, "aw.9=3.5": 3.0}, {"t.unmeasuredDamage=0.25": 1.0})
+        T.stage_spells()
+        sp = T.SUMMARY["stages"]["spells"]
+        self.assertEqual(sp["casters"], ["evoker", "healer"])                             # a cell with no cast decision is left out
+        self.assertEqual(sp["kept"], ["t.unmeasuredDamage=0.25"])
+        self.assertEqual(self.judged[0], ("beta1", "t.unmeasuredDamage=0.25", None, True))   # J is the fence, over every cell
+        self.assertEqual(sp["report"]["evoker/builtin"]["cause_pct"]["fact"], 100.0)
+        self.assertEqual(sp["report"]["evoker/builtin"]["regret_u"], 2.0)
+        self.assertEqual(sp["report_final"]["evoker/builtin"]["regret_u"], 1.0)
+        self.assertFalse(sp["rows"][-1]["accepted"])                                      # the next round found nothing more, and says so
+
+    def test_spells_rejects_a_screen_winner_that_fails_as_the_table_or_held_out(self):
+        self.spell_world({"t.unmeasuredDamage=0.25": 1.0}, {"t.unmeasuredDamage=0.25": 2.0})          # the screen flattered it
+        T.stage_spells()
+        self.assertEqual(T.SUMMARY["stages"]["spells"]["kept"], [])
+        self.assertIn("fresh fights", T.SUMMARY["stages"]["spells"]["rows"][0]["why"])
+        T.SUMMARY["stages"] = {}
+        self.spell_world({"t.unmeasuredDamage=0.25": 1.0}, {"t.unmeasuredDamage=0.25": 1.0}, {"t.unmeasuredDamage=0.25": 5.0})
+        T.stage_spells()
+        self.assertEqual(T.SUMMARY["stages"]["spells"]["kept"], [])
+        self.assertIn("held-out", T.SUMMARY["stages"]["spells"]["rows"][0]["why"])
+
+    def test_the_regret_readers(self):
+        T.CFG = dict(T.SMOKE)
+        txt = "SPELLFIGHT evoker nat 0 3 1.5000 1.0000 2.0000\nSPELLDEC evoker 12 3 40\nSPELLREG evoker cast_offense cast_offense fact 2 1 1.0000 2 0.5000 0.6000 0.2000\nSPELLREG evoker cast_control! cast_offense gate 1 1 0.5000 0 0.0000 0.0000 0.0000\nGAPIAUS evoker nat 0 71.2500\n"
+        r = T.regret_parse(txt, "evoker", 6001, 2)
+        self.assertEqual(r["fights"][(6001, 0)], (3, 1.5, [1.0, 2.0]))
+        t = T.regret_table([r])
+        self.assertEqual((t["regret_u"], t["within"], t["cross"], t["any_pct"]), (1.5, 1.0, 0.5, 66.7))
+        self.assertEqual((t["cause_pct"]["fact"], t["cause_pct"]["gate"]), (66.7, 33.3))
+        self.assertEqual(T.gapi_parse(txt, "evoker", 6001), {(6001, 0): 71.25})
+        with self.assertRaises(RuntimeError):
+            T.regret_parse(txt, "evoker", 6001, 1)                # another number of alternates than asked: a mixed-up run, never read
+        with self.assertRaises(RuntimeError):
+            T.regret_parse("", "evoker", 6001)                    # a simulator without --spell-regret is an error, never a regret of 0
+        with self.assertRaises(RuntimeError):
+            T.gapi_parse("", "evoker", 6001)
+
+    def test_spell_worth_rows_cover_the_native_table(self):   # one knob = one native member (the NewTables rule), searched or listed with its reason
+        fields = NewTables.fields(None, "SpellWorth.h", "SpellWorth")
+        self.assertEqual({n.split(".", 1)[1] for n, _, _ in T.SW_KNOBS} | {n.split(".", 1)[1] for n in T.SW_NOT_SEARCHED}, fields)
+        self.assertFalse({n for n, _, _ in T.SW_KNOBS} & set(T.SW_NOT_SEARCHED))
+        cpp = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../native/iaus/SpellWorth.cpp")).read()
+        self.assertEqual(set(re.findall(r'"sw\.(\w+)"', cpp)), fields)                # Set / Get name every field
+        self.assertIn("t.unmeasuredDamage", open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "Tune.h")).read())
+
+    def test_the_fence_asks_j_not_to_fall_where_the_rule_asks_it_to_rise(self):
+        names = ("jmany", "req", "paired", "cells", "out_of_band")
+        saved = {k: getattr(T, k) for k in names}
+        try:
+            T.req = lambda w, c, g, curves, seeds, sets=None, binary=None: "new" if "evoker:9.1.a=2.0" in curves else "base"
+            T.jmany = lambda reqs: list(reqs)
+            T.paired = lambda a, b: (0.01, 0.05) if (a, b) == ("base", "new") else (0.0, 0.05)   # J does not move
+            T.out_of_band = lambda c, d, se, k=1.0: False
+            strict = T.judge("evoker", [], "evoker:9.1.a=2.0")
+            fence = T.judge("evoker", [], "evoker:9.1.a=2.0", fence=True)
+            T.paired = lambda a, b: (-1.0, 0.05)                                               # J falls
+            fallen = T.judge("evoker", [], "evoker:9.1.a=2.0", fence=True)
+        finally:
+            for k, v in saved.items():
+                setattr(T, k, v)
+        self.assertEqual((strict["accepted"], strict["why"]), (False, "holdout: not confirmed"))
+        self.assertTrue(fence["accepted"])
+        self.assertEqual((fallen["accepted"], fallen["why"]), (False, "holdout: worse"))
 
 
 class Cards(unittest.TestCase):   # review F2 of 5749026a: every band of Playstyles.h is parsed, a two-sided or raw one is never silently dropped
