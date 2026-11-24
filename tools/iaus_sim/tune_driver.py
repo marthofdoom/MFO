@@ -2160,6 +2160,25 @@ def replay(path):
     return 0
 
 
+def carry_over(old, cells_now):
+    """What a resumed or one-stage run takes from the summary.json already in --out: every stage's result, the decisions, the withheld
+    list. EXCEPT when that summary is of a run with ANOTHER CELL SET (--cells 15 against all; a summary from before the driver recorded
+    its cells counts as 15): its joint and recalib stages graded a table of other classes, so both are dropped with the withheld list,
+    and this run decides them again. (Round 2 of 11-19: a summary seeded from a 15-cell round carried recalib rows of 15 classes into a
+    38-cell round.) Returns the lines to log."""
+    SUMMARY["stages"], SUMMARY["open_decisions"] = old.get("stages", {}), [d for d in old.get("open_decisions", []) if d.get("stage")]
+    SUMMARY["auto_decisions"], SUMMARY["withheld"] = [d for d in old.get("auto_decisions", []) if d.get("stage")], old.get("withheld", [])
+    was = old.get("config", {}).get("cells", "15")
+    if was == cells_now:
+        return []
+    dropped = [k for k in ("joint", "recalib") if SUMMARY["stages"].pop(k, None) is not None]
+    wh, SUMMARY["withheld"] = SUMMARY["withheld"], []
+    for key in ("open_decisions", "auto_decisions"):
+        SUMMARY[key] = [d for d in SUMMARY[key] if d.get("stage") not in ("joint", "recalib")]
+    return ["RESUME: the summary in --out is of a --cells %s run and this is --cells %s: its %s stage result(s) and %d withheld value(s) describe another table and are DROPPED; run joint and recalib again in this round"
+            % (was, cells_now, " and ".join(dropped) or "no joint / recalib", len(wh))]
+
+
 def main():
     global A, CFG, POOL
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -2218,8 +2237,8 @@ def main():
         try:
             old = json.load(open(prev))
             if old.get("config", {}).get("smoke") == A.smoke:
-                SUMMARY["stages"], SUMMARY["open_decisions"] = old.get("stages", {}), [d for d in old.get("open_decisions", []) if d.get("stage")]
-                SUMMARY["auto_decisions"], SUMMARY["withheld"] = [d for d in old.get("auto_decisions", []) if d.get("stage")], old.get("withheld", [])
+                for line in carry_over(old, A.cells):
+                    log(line)
         except ValueError:
             pass   # cut off by a kill: every stage it held replays from the cache
     SUMMARY["config"] = dict(CFG, smoke=A.smoke, worlds=A.worlds, bin=A.bin, sim_flags=A.sim_flags, world=A.world, knobs=A.knobs, cells=A.cells, cell_list=list(CELLS))
