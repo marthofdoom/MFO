@@ -5,6 +5,53 @@
 
 namespace Sim {
 
+    // A place made in code: a lower floor (z 0, four squares along x), an upper floor EXACTLY over it (z 300), joined at the side by a flat square, a
+    // two-square ramp and a landing. The file format's hand fixtures are height fields and cannot stack. Squares are 128 units.
+    inline std::shared_ptr<SimEnv> MakeStacked() {
+        auto E = std::make_shared<SimEnv>(); E->name = "stacked"; E->cls = "fixture_stacked"; E->pool = false; const float c = 128.0f;
+        struct Sq { float x, y, zw, ze; };   // the square at (x, y), its height at the west and at the east side
+        std::vector<Sq> sq; for (int i = 0; i < 4; ++i) sq.push_back({ static_cast<float>(i), 0, 0, 0 });
+        sq.push_back({ 3, 1, 0, 0 }); sq.push_back({ 2, 1, 150, 0 }); sq.push_back({ 1, 1, 300, 150 }); sq.push_back({ 0, 1, 300, 300 });
+        for (int i = 0; i < 4; ++i) sq.push_back({ static_cast<float>(i), 0, 300, 300 });
+        for (const Sq& q : sq) { const std::uint32_t b = static_cast<std::uint32_t>(E->verts.size());
+            E->verts.push_back({ q.x * c, q.y * c, q.zw }); E->verts.push_back({ (q.x + 1) * c, q.y * c, q.ze }); E->verts.push_back({ (q.x + 1) * c, (q.y + 1) * c, q.ze }); E->verts.push_back({ q.x * c, (q.y + 1) * c, q.zw });
+            EQ::Tri a; a.v[0] = b; a.v[1] = b + 1; a.v[2] = b + 2; EQ::Tri d; d.v[0] = b; d.v[1] = b + 2; d.v[2] = b + 3; E->tris.push_back(a); E->tris.push_back(d); }
+        auto same = [&](std::uint32_t p, std::uint32_t q) { const EQ::Vec3& a = E->verts[p]; const EQ::Vec3& b = E->verts[q]; return std::fabs(a.x - b.x) < 0.01f && std::fabs(a.y - b.y) < 0.01f && std::fabs(a.z - b.z) < 0.01f; };
+        for (std::size_t i = 0; i < E->tris.size(); ++i) for (int k = 0; k < 3; ++k) for (std::size_t j = 0; j < E->tris.size(); ++j) { if (i == j) continue; for (int m = 0; m < 3; ++m)
+            if (same(E->tris[i].v[k], E->tris[j].v[(m + 1) % 3]) && same(E->tris[i].v[(k + 1) % 3], E->tris[j].v[m])) { E->tris[i].nb[k] = static_cast<std::int32_t>(j); E->tris[i].kind[k] = EQ::Edge::Walk; } }
+        EQ::BuildGrid(E->grid, E->verts, E->tris); EQ::LabelComponents(E->tris, E->walk, E->weak);
+        { const EQ::View v = E->View(E->doors0, 0); EQ::BuildWalls(E->walls, v); EQ::IndexWalls(E->grid, E->walls); }
+        E->triArea.assign(E->tris.size(), 0.5f * c * c); E->tris0 = static_cast<std::uint32_t>(E->tris.size()); E->area0 = 0.5f * c * c * static_cast<float>(E->tris.size());
+        return E;
+    }
+
+    // THE SOLO WALK (review F1): one body, nobody else, walked from one triangle of a place to another, over every place of the pool. A trip is WRONG
+    // when a route exists and he does not end at the goal: within 40 units of it and within 32 of its HEIGHT. This is the check that found walks
+    // ending under or over their goal. `sim --solo-walk N`: N trips a place. The exit code is the wrong share over a tenth of a percent.
+    inline int RunSoloWalk(const Data& D, const std::vector<SimClass>& classes, int trips) {
+        const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3); long total = 0, wrong = 0, noRoute = 0, bad = 0, wrongZ = 0; int shown = 0;
+        EQ::Scratch sc; EQ::Path path; const V4 keep = g_v4; g_v4.Defaults();
+        for (const SimEnv* E : g_envPool.draw) {
+            FightSpec fs; fs.cls = &classes[0]; fs.env = E; fs.seed = 11; fs.foes.push_back({ 0, { 0.0f, 0.0f } }); Fight F = BuildFight(D, fs, t1);
+            for (Body& b : F.b) if (&b != &F.b[0]) b.alive = false;
+            Body& w = F.b[0]; const std::size_t nt = E->tris.size(); std::uint64_t hs = SimEnv::Mix(E->hash ^ 0x501050105010ULL);
+            auto pick = [&]() { hs = SimEnv::Mix(hs); std::size_t i = hs % nt; while (E->walk[i] != 0) i = (i + 1) % nt; return static_cast<std::int32_t>(i); };
+            for (int k = 0; k < trips; ++k) { const std::int32_t a = pick(), g = pick(); if (a == g) continue;
+                F.doors = E->doors0; F.doorStamp = 0; const EQ::View v = E->View(F.doors, 0, true); const EQ::Vec3 pa = EQ::Centroid(v, a), pg = EQ::Centroid(v, g);
+                EQ::PathQuery q; q.from = pa; q.to = pg; q.fromTri = a; q.toTri = g; q.who = WalkerOf(w); ++total;
+                if (!EQ::FindPath(v, q, sc, path) || !path.reachable) { ++noRoute; continue; }
+                w.c.x = pa.x; w.c.y = pa.y; w.c.z = pa.z; w.nav = Nav{}; w.nav.tri = a; const EnvPoint goal{ pg, g, 0, 0 }; const long bad0 = F.t.envBad;
+                const int ticks = static_cast<int>(30.0f * (2.0f * path.length / std::max(50.0f, w.spec->run) + 12.0f));
+                for (int tk = 0; tk < ticks && std::hypot(pg.x - w.c.x, pg.y - w.c.y, pg.z - w.c.z) > 20.0f; ++tk) { F.Move(w, pg.x, pg.y, w.spec->run, false, nullptr, &goal); EnvStep(F); F.now += TM::dt; }
+                bad += F.t.envBad - bad0; const bool xy = std::hypot(pg.x - w.c.x, pg.y - w.c.y) <= 40.0f, zz = std::fabs(pg.z - w.c.z) <= 32.0f;
+                if (!xy || !zz) { ++wrong; if (xy) ++wrongZ; if (shown++ < 8) std::printf("SOLO-WALK WRONG %s: triangle %d -> %d, route %.0f, ended %.0f away in x, y and %.0f in height, on triangle %d at (%.0f, %.0f, %.0f), %d of %d corners, %s\n", E->name.c_str(), a, g, static_cast<double>(path.length), static_cast<double>(std::hypot(pg.x - w.c.x, pg.y - w.c.y)), static_cast<double>(w.c.z - pg.z), w.nav.tri, w.c.x, w.c.y, w.c.z, int(w.nav.i), int(w.nav.n), F.now < w.nav.holdUntil ? "holding after a leg end" : w.nav.stuckNoted ? "stuck" : "walking"); } }
+        }
+        g_v4 = keep; const long walked = total - noRoute;
+        std::printf("SOLO-WALK  places %zu  trips %ld  no route %ld  walked %ld  WRONG %ld (%.3f%%), of them over or under the goal %ld  off-mesh steps %ld  => %s\n", g_envPool.draw.size(), total, noRoute, walked, wrong, walked ? 100.0 * double(wrong) / double(walked) : 0.0, wrongZ, bad,
+                    walked > 0 && double(wrong) <= 0.001 * double(walked) && bad == 0 ? "PASS" : "FAIL");
+        return walked > 0 && double(wrong) <= 0.001 * double(walked) && bad == 0 ? 0 : 1;
+    }
+
     inline int RunEnvTests(const Data& D, const std::vector<SimClass>& classes) {
         int fail = 0, n = 0; auto ok = [&](bool c, const char* what) { ++n; if (!c) { ++fail; std::printf("ENV-TEST FAILED: %s\n", what); } };
         auto env = [&](const char* nm) -> const SimEnv& { const SimEnv* e = g_envPool.ByName(nm); if (!e) { std::printf("ENV-TEST: fixture %s not loaded\n", nm); std::exit(2); } return *e; };
@@ -98,15 +145,34 @@ namespace Sim {
           const std::uint64_t st0 = G.doorStamp; Body& w = G.b[0]; const EQ::Vec3 g2 = at(*G.env, 128, 9, 17, 4); double openedAt = -1;
           for (int tick = 0; tick < 30 * 30; ++tick) { if (std::hypot(g2.x - w.c.x, g2.y - w.c.y) > 60.0f) G.Move(w, g2.x, g2.y, w.spec->run); if (openedAt < 0 && G.doors[0].state == EQ::DoorState::Open) openedAt = G.now; EnvStep(G); G.now += TM::dt; }
           ok(openedAt > 0 && G.doors[1].state == EQ::DoorState::Open && G.doorStamp != st0 && std::hypot(g2.x - w.c.x, g2.y - w.c.y) <= 61.0f, "closed door: he opens it (both triangles), the stamp changes, he arrives");
-          // CAST STARTS (section 5): a claim on a row no seat starts holds his hand for the short window, never fires, and the spell is held off for the fight.
-          { Fight C = BuildFight(D, fs, t1); Body& x = C.b[static_cast<std::size_t>(C.ctl[0].body)]; x.ctrlLive = true; std::uint32_t foe = 0; for (const Body& o : C.b) if (o.role == Role::Foe) foe = o.c.id;
-            SimSpell par = Fx("TestParalyze", Prune::Nature::Control, kAvAlteration, -1, 10, 0, 0, 0); par.ctrlPar = true; par.row = kRowParalyze; par.e.form = 0x7E57; par.e.source = SpellSource::Spell;
-            C.StartCast(x, 0, par, foe, 10.0f, true);
-            ok(x.hitAt < 0 && std::fabs(x.actEnd - (C.now + 4.0)) < 1e-6 && C.t.castUnseated == 1 && C.t.castHeldOff == 1 && C.ctl[0].CastHeld(0x7E57, foe) && C.ctl[0].CastHeld(0x7E57, 12345u), "cast start: a Paralyze claim never fires, stands 4 s (the short window) and is held off on every target");
-            Fight C2 = BuildFight(D, fs, t1); Body& y = C2.b[static_cast<std::size_t>(C2.ctl[0].body)]; y.ctrlLive = true; g_seatsAll = true; C2.StartCast(y, 0, par, foe, 10.0f, true); g_seatsAll = false;
-            ok(C2.t.castUnseated == 0 && !C2.ctl[0].CastHeld(0x7E57, 12345u), "cast start: --seats all, the same claim goes down the measured road like any other");
-            SimSpell bolt = Fx("TestBolt", Prune::Nature::Offense, kAvDestruction, kAvResistFire, 10, 20, 0, 0); Fight C3 = BuildFight(D, fs, t1); Body& z = C3.b[static_cast<std::size_t>(C3.ctl[0].body)]; z.ctrlLive = true; C3.StartCast(z, 0, bolt, foe, 10.0f, true);
-            ok(C3.t.castUnseated == 0 && RowFightLong(kRowNone) && !RowFightLong(kRowSeated) && RowNeverStarts(kRowScript) && !RowNeverStarts(kRowNone), "cast start: a seated row is not refused, and the two readers say what cast/CastOn.cpp's say"); }
+          // CAST STARTS (section 5). Today every row is seated (Harbinger ABI 46). --seats old: a claim on a row no seat started holds his hand for the short window, never fires, and is held off.
+          { SimSpell par = Fx("TestParalyze", Prune::Nature::Control, kAvAlteration, -1, 10, 0, 0, 0); par.ctrlPar = true; par.row = kRowParalyze; par.e.form = 0x7E57; par.e.source = SpellSource::Spell;
+            Fight C = BuildFight(D, fs, t1); Body& x = C.b[static_cast<std::size_t>(C.ctl[0].body)]; x.ctrlLive = true; std::uint32_t foe = 0; for (const Body& o : C.b) if (o.role == Role::Foe) foe = o.c.id;
+            g_seatsOld = true; C.StartCast(x, 0, par, foe, 10.0f, true); g_seatsOld = false;
+            ok(x.hitAt < 0 && std::fabs(x.actEnd - (C.now + 4.0)) < 1e-6 && C.t.castUnseated == 1 && C.t.castHeldOff == 1 && C.ctl[0].CastHeld(0x7E57, foe) && C.ctl[0].CastHeld(0x7E57, 12345u), "cast start, --seats old: a Paralyze claim never fires, stands 4 s (the short window) and is held off on every target");
+            Fight C2 = BuildFight(D, fs, t1); Body& y = C2.b[static_cast<std::size_t>(C2.ctl[0].body)]; y.ctrlLive = true; C2.StartCast(y, 0, par, foe, 10.0f, true);
+            ok(C2.t.castUnseated == 0 && !C2.ctl[0].CastHeld(0x7E57, 12345u), "cast start, today: the same claim goes down the measured road like any other (the row is seated)");
+            ok(RowFightLong(kRowNone) && RowFightLong(kRowScript) && !RowFightLong(kRowSeated) && !RowFightLong(kRowParalyze) && !RowNeverStarts(kRowScript) && !RowNeverStarts(kRowNone), "cast start: a Script row is never refused, it takes the short window like a spell with no row; a seated row the long one"); }
+          // STACKED FLOORS (review F1, F2, F6): an upper floor exactly over a lower one, joined by a ramp at the side. The same x, y exists on both.
+          { const std::shared_ptr<SimEnv> SE = MakeStacked(); const SimEnv& S2 = *SE; const EQ::View v = S2.View(S2.doors0, 0); const EQ::Vec3 lo{ 200.0f, 40.0f, 0.0f }, up{ 200.0f, 40.0f, 300.0f };
+            const std::int32_t tl = EQ::TriAt(v, lo), tu = EQ::TriAt(v, up); const EQ::Walk w = EQ::WalkLine(v, tl, lo, up, man);
+            ok(tl >= 0 && tu >= 0 && tl != tu && EQ::Invalid(v) == nullptr, "stacked: the point has a triangle on each floor, and the view passes the snapshot check");
+            ok(w.reached && !w.At() && std::fabs(w.zMiss + 300.0f) < 1.0f, "stacked: a straight walk 'reaches' the x, y and reports it is 300 under the goal (WalkLine::At is false)");
+            ok(route(S2, S2.doors0, lo, up, man) && path.reachable && path.length > 600.0f && path.climb > 290.0f, "stacked: the route to the floor above goes round by the ramp");
+            FightSpec f3 = fs; f3.env = &S2; f3.envExact = false; Fight H = BuildFight(D, f3, t1); for (Body& b2 : H.b) if (b2.role == Role::Foe || b2.role == Role::Follower) b2.alive = false;
+            Body& wk = H.b[0]; auto put = [&](Body& b2, const EQ::Vec3& p, std::int32_t t) { b2.c.x = p.x; b2.c.y = p.y; b2.c.z = p.z; b2.nav = Nav{}; b2.nav.tri = t; };
+            put(wk, lo, tl); const EnvPoint goal{ up, tu, 0, 0 };
+            for (int tick = 0; tick < 30 * 30; ++tick) { if (std::hypot(up.x - wk.c.x, up.y - wk.c.y, up.z - wk.c.z) > 30.0f) H.Move(wk, up.x, up.y, wk.spec->run, false, nullptr, &goal); EnvStep(H); H.now += TM::dt; }
+            ok(std::fabs(wk.c.z - 300.0f) < 24.0f && std::hypot(up.x - wk.c.x, up.y - wk.c.y) < 40.0f, "stacked: a walk to a point of the floor above ENDS on the floor above, not under it");
+            Body& st = H.b[static_cast<std::size_t>(H.ctl[0].body)]; st.alive = true; put(st, up, tu); put(wk, lo, tl);   // and to a BODY on the floor above: his storey is the goal's
+            for (int tick = 0; tick < 30 * 30; ++tick) { if (Fight::Dist(wk, st) > 90.0f) H.Move(wk, st.c.x, st.c.y, wk.spec->run, false, &st); EnvStep(H); H.now += TM::dt; }
+            ok(std::fabs(wk.c.z - 300.0f) < 24.0f && Fight::Dist(wk, st) < 120.0f, "stacked: a walk to a body on the floor above ends beside him");
+            put(wk, lo, tl);
+            ok(!EnvMeleeClear(H, wk, st), "stacked: no blow through the floor");
+            ok(!EnvInBlast(H, lo.x, lo.y, lo.z, 400.0f, st), "stacked: a blast on the floor below does not burn through the floor");
+            ok(EnvInBlast(H, up.x + 100.0f, up.y, up.z, 400.0f, st), "stacked: a blast on his own floor reaches him");
+            ok(!H.Sees(wk, st), "stacked: no sight through the floor");
+            ok(H.t.envBad == 0, "stacked: nobody left the mesh"); }
           g_v4 = keep; }
         std::printf("ENV-TESTS %s: %d checks, %d failed  (fixtures %zu loaded, %zu skipped)\n", fail ? "FAIL" : "PASS", n, fail, g_envPool.all.size(), g_envPool.skipped.size());
         return fail ? 1 : 0;

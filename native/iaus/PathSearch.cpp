@@ -94,6 +94,7 @@ namespace MFO::Iaus::Env {
             if (a_t.maxExpand > 0 && a_out.expanded >= static_cast<std::uint32_t>(a_t.maxExpand)) break;
             const Tri& T = a_v.tris[ci]; const Vec3 P = a_s.entry[ci]; const float gT = a_s.g[ci], mT = TriMult(T, a_t);
             if (gT < a_t.blockPenalty) { const float h = Dist(P, a_q.to); if (h < bestH) { bestH = h; best = nd.tri; } }
+            const Door* leaf = T.door >= 0 && a_v.doors[static_cast<std::size_t>(T.door)].leaf && a_v.doors[static_cast<std::size_t>(T.door)].state != DoorState::Open ? &a_v.doors[static_cast<std::size_t>(T.door)] : nullptr;
             for (int k = 0; k < 3; ++k) {
                 const std::int32_t nb = T.nb[k]; if (nb < 0 || static_cast<std::size_t>(nb) >= n) continue;
                 const Edge kind = T.kind[k];
@@ -107,7 +108,9 @@ namespace MFO::Iaus::Env {
                 else continue;
                 const Tri& N = a_v.tris[static_cast<std::size_t>(nb)];
                 if (a_q.who.large && (N.flags & kTriNoLarge)) continue;
-                if (N.door >= 0) { const DoorState ds = a_v.doors[static_cast<std::size_t>(N.door)].state;
+                // a door with a leaf gates the walk that CROSSES the leaf, inside its own triangle: the rest of that triangle is plain floor
+                float lt = 0.0f; const Door* gate = leaf && LeafCrossed(*leaf, P, mid, lt) ? leaf : (N.door >= 0 && !a_v.doors[static_cast<std::size_t>(N.door)].leaf) ? &a_v.doors[static_cast<std::size_t>(N.door)] : nullptr;
+                if (gate) { const DoorState ds = gate->state;
                     if (ds == DoorState::Closed) { if (a_q.who.opensDoors) cost += a_t.doorOpenU; else { cost += a_t.blockPenalty; penal = true; } }
                     else if (ds == DoorState::Locked) { if (a_q.who.opensDoors && a_q.who.unlocks) cost += a_t.unlockU; else { cost += a_t.blockPenalty; penal = true; } } }
                 touch(nb); const std::size_t ni = static_cast<std::size_t>(nb);
@@ -124,8 +127,11 @@ namespace MFO::Iaus::Env {
         std::reverse(a_s.corridor.begin(), a_s.corridor.end());
         if (a_s.corridor.empty() || a_s.corridor.front().tri != a_q.fromTri) return false;
         for (std::size_t i = 1; i < a_s.corridor.size(); ++i) if (a_s.state[static_cast<std::size_t>(a_s.corridor[i].tri)] & kPenal) {   // BLOCKED: the path ends in front of the first thing he cannot open
-            a_out.blocked = true; a_out.blockDoor = a_v.tris[static_cast<std::size_t>(a_s.corridor[i].tri)].door; reach = false;
-            const Vec3 at = a_s.entry[static_cast<std::size_t>(a_s.corridor[i].tri)]; const Vec3 c = Centroid(a_v, a_s.corridor[i - 1].tri);
+            { const std::int32_t d0 = a_v.tris[static_cast<std::size_t>(a_s.corridor[i].tri)].door, d1 = a_v.tris[static_cast<std::size_t>(a_s.corridor[i - 1].tri)].door; a_out.blockDoor = d0 >= 0 && !a_v.doors[static_cast<std::size_t>(d0)].leaf ? d0 : d1 >= 0 ? d1 : d0; }
+            a_out.blocked = true; reach = false;
+            const std::int32_t pd = a_v.tris[static_cast<std::size_t>(a_s.corridor[i - 1].tri)].door; const bool atLeaf = pd >= 0 && a_v.doors[static_cast<std::size_t>(pd)].leaf && a_out.blockDoor == pd;
+            // a leaf stands INSIDE the triangle before: the path ends where he came into that triangle, short of the leaf
+            const Vec3 at = atLeaf ? (i >= 2 ? a_s.entry[static_cast<std::size_t>(a_s.corridor[i - 1].tri)] : a_q.from) : a_s.entry[static_cast<std::size_t>(a_s.corridor[i].tri)]; const Vec3 c = Centroid(a_v, a_s.corridor[i - 1].tri);
             const float l = std::max(1.0f, std::hypot(c.x - at.x, c.y - at.y)), inl = std::min(4.0f, 0.5f * l);
             goal = { at.x + (c.x - at.x) / l * inl, at.y + (c.y - at.y) / l * inl, 0.0f }; goal.z = HeightAt(a_v, a_s.corridor[i - 1].tri, goal.x, goal.y);
             a_s.corridor.resize(i); break; }
@@ -158,7 +164,7 @@ namespace MFO::Iaus::Env {
               const PathPoint& c = a_out.pts[i];
               const bool last = i + 1 >= a_out.pts.size(), fixed = c.kind != Corner::Walk || last || a_out.pts[i + 1].kind == Corner::DropLand;
               if (!fixed) { const PathPoint& nx = a_out.pts[i + 1]; const Walk wk = WalkLine(a_v, fromTri, from, nx.p, a_q.who);
-                  if (wk.reached && std::fabs(wk.end.z - nx.p.z) < 16.0f) continue; }   // skipped: the next corner is reached without it
+                  if (wk.At()) continue; }   // skipped: the next corner is reached without it
               if (w && std::fabs(a_out.pts[w - 1].p.x - c.p.x) < 0.5f && std::fabs(a_out.pts[w - 1].p.y - c.p.y) < 0.5f && std::fabs(a_out.pts[w - 1].p.z - c.p.z) < 8.0f && a_out.pts[w - 1].kind == Corner::Walk) --w;   // the same point twice
               a_out.pts[w++] = c;
               if (c.kind == Corner::DropLand) { from = c.p; fromTri = c.tri; }

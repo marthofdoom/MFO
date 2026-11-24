@@ -44,8 +44,7 @@ namespace Sim {
         for (const float h : { T.feetU, T.torsoFrac * T.bodyH, T.eyeFrac * T.bodyH }) {
             EQ::Vec3 to{ o.c.x, o.c.y, o.c.z + h }; const float dx = to.x - eye.x, dy = to.y - eye.y, dz = to.z - eye.z, len = std::sqrt(dx * dx + dy * dy + dz * dz);
             if (len <= T.targetMargin) return true;
-            const float k = (len - T.targetMargin) / len; to = { eye.x + dx * k, eye.y + dy * k, eye.z + dz * k };
-            if (EQ::CastRay(v, eye, to, tl_envScratch, g_sightT).clear) return true;
+            if (EQ::CastRay(v, eye, to, tl_envScratch, g_sightT, T.targetMargin).clear) return true;
         }
         return false;
     }
@@ -63,15 +62,25 @@ namespace Sim {
     // Is (px, py) floor of his own level (within a storey of his height) with no closed door on it?
     inline bool EnvStandable(const Fight& F, const Body& who, float px, float py) {
         const EQ::View v = EnvViewOf(F); const std::int32_t t = EQ::TriAt(v, { px, py, who.c.z }); if (t < 0) return false;
-        if (std::fabs(EQ::HeightAt(v, t, px, py) - who.c.z) > 150.0f) return false;
-        const std::int32_t d = v.tris[static_cast<std::size_t>(t)].door; return d < 0 || F.doors[static_cast<std::size_t>(d)].state == EQ::DoorState::Open;
+        if (std::fabs(EQ::HeightAt(v, t, px, py) - who.c.z) > g_envT.storeyU) return false;
+        const std::int32_t d = v.tris[static_cast<std::size_t>(t)].door; return d < 0 || F.doors[static_cast<std::size_t>(d)].leaf || F.doors[static_cast<std::size_t>(d)].state == EQ::DoorState::Open;   // a door with a leaf closes the leaf, not its triangle
     }
 
     // Can a blow pass between them: the straight walk from one to the other is open floor (no wall, no closed door, no ledge), on one level.
     inline bool EnvMeleeClear(const Fight& F, const Body& a, const Body& o) {
         if (a.nav.tri < 0 || std::fabs(a.c.z - o.c.z) > 110.0f) return a.nav.tri < 0;
         const EQ::Walk w = EQ::WalkLine(EnvViewOf(F), a.nav.tri, { a.c.x, a.c.y, a.c.z }, { o.c.x, o.c.y, o.c.z }, EQ::Walker{});
-        return w.reached || std::hypot(w.end.x - o.c.x, w.end.y - o.c.y) < 24.0f;
+        return (w.reached || std::hypot(w.end.x - o.c.x, w.end.y - o.c.y) < 24.0f) && std::fabs(w.end.z - o.c.z) < 110.0f;   // ... and it ends on HIS floor, not the one under it
+    }
+
+    // Does a blast or an area centred at (cx, cy, cz) reach him: inside its radius in 3D, with a clear ray from the centre (review F2: a fireball in the
+    // next room, or on the floor below, does not burn through the wall). The ray runs chest to chest.
+    inline bool EnvInBlast(const Fight& F, float cx, float cy, float cz, float r, const Body& o) {
+        if (std::hypot(o.c.x - cx, o.c.y - cy, o.c.z - cz) > r) return false;
+        if (!g_v4.los) return true;
+        const float h = g_envT.torsoFrac * g_envT.bodyH; const EQ::Vec3 a{ cx, cy, cz + h }, b{ o.c.x, o.c.y, o.c.z + h };
+        if (std::hypot(b.x - a.x, b.y - a.y, b.z - a.z) <= g_envT.targetMargin) return true;
+        return EQ::CastRay(EnvViewOf(F), a, b, tl_envScratch, g_sightT, g_envT.targetMargin).clear;
     }
 
     enum class LegEnd { Blocked, Unreachable, Stuck };
@@ -88,9 +97,9 @@ namespace Sim {
                     if (!cnt) { c.apprDrops.push_back({ n.goalBody, 0 }); cnt = &c.apprDrops.back().second; }
                     if (++*cnt > static_cast<int>(lt.offenseApproachDropCap)) { c.apprBlocked.push_back(n.goalBody); if (subj) ++F.t.apprBlocked; }
                     else { n.holdUntil = F.now + static_cast<double>(std::max(0.0f, lt.offenseApproachBackoffSec)); if (subj) ++F.t.apprDrops; } } }
-        } else if (subj) ++F.t.pathStuckLegs;
+        } else { n.exact = true; if (subj) ++F.t.pathStuckLegs; }
         if (F.trace && x.ctl >= 0) std::fprintf(F.trace, "%7.2f  LEG %s: %s at (%.0f, %.0f, %.0f)\n", F.now, x.c.name.c_str(), how == LegEnd::Blocked ? "BLOCKED" : how == LegEnd::Unreachable ? "UNREACHABLE" : "STUCK", x.c.x, x.c.y, x.c.z);
-        n.n = n.i = 0; n.legOpen = false;
+        n.n = n.i = 0; n.legOpen = false; n.away = false;
     }
 
     // One step toward (qx, qy) on the TRUE mesh: the straight walk, one slide along what stopped it, the door, the bodies.
@@ -147,86 +156,124 @@ namespace Sim {
         x.c.x = w.end.x; x.c.y = w.end.y; x.c.z = w.end.z; x.nav.tri = w.tri; x.nav.n = x.nav.i = 0;
     }
 
-    // Where a seek to (tx, ty) ends on the mesh: the level of whoever stands there (his target, the player), else his own.
-    inline std::int32_t EnvGoal(const Fight& F, const Body& x, float tx, float ty, EQ::Vec3& gp, std::uint32_t& who) {
-        const EQ::View v = EnvViewOf(F, true); float z = x.c.z, bd = 300.0f; who = 0;
-        for (const Body& o : F.b) { if (&o == &x || !Fight::Up(o) || o.airborne) continue; const float d = std::hypot(o.c.x - tx, o.c.y - ty); if (d < bd) { bd = d; z = o.c.z; who = o.c.id; } }
-        std::int32_t t = EQ::TriAt(v, { tx, ty, z });
-        if (t >= 0) { gp = { tx, ty, EQ::HeightAt(v, t, tx, ty) }; if (std::fabs(gp.z - z) <= 200.0f) return t; }
+    // Where a seek ends on the mesh. THE CALLER SAYS WHO OR WHAT HE WALKS TO (review F6): a body (its own triangle and height, so a target on
+    // another storey is on that storey), an explicit mesh point, or neither, which means a point of HIS OWN storey. Nothing is guessed from who
+    // happens to stand near the x, y.
+    inline std::int32_t EnvGoal(const Fight& F, const Body& x, float tx, float ty, const Body* to, const EnvPoint* point, EQ::Vec3& gp) {
+        if (point) { gp = point->p; return point->tri; }
+        const EQ::View v = EnvViewOf(F, true); const float z = to && to->nav.tri >= 0 ? to->c.z : x.c.z;
+        if (to && to->nav.tri >= 0 && std::fabs(to->c.x - tx) < 0.5f && std::fabs(to->c.y - ty) < 0.5f) { gp = { to->c.x, to->c.y, to->c.z }; return to->nav.tri; }
+        const std::int32_t t = EQ::TriAt(v, { tx, ty, z });
+        if (t >= 0) { gp = { tx, ty, EQ::HeightAt(v, t, tx, ty) }; if (std::fabs(gp.z - z) <= g_envT.storeyU) return t; }
         return EQ::NearestTri(v, { tx, ty, z }, g_envT.snapU, gp);
     }
 
-    // A leg is over (he arrived, or a new one begins): its detour sample (2.5), walked over the ground it covered, for a leg that had a route.
-    inline void EnvLegClose(Fight& F, Body& x) {
+    // A leg is over. Its detour sample (2.5) is taken when he ARRIVED: what he walked over the length of the route he was given (FindPath's, or the
+    // straight line of a direct walk), so a route round a wall is not a detour and a walk that wandered off its route is.
+    inline void EnvLegClose(Fight& F, Body& x, bool arrived) {
         Nav& n = x.nav;
-        if (n.legOpen && n.legReach && x.ctl == 0 && n.walked > 200.0f) { const float straight = std::max(50.0f, std::hypot(x.c.x - n.legSx, x.c.y - n.legSy)); const double r = static_cast<double>(n.walked / straight);
+        if (arrived) n.exact = false;
+        if (arrived && n.legOpen && n.legReach && x.ctl == 0 && n.walked > 200.0f && n.legLen > 1.0f) { const double r = static_cast<double>(n.walked / std::max(50.0f, n.legLen));
             F.t.detourSum += r; ++F.t.detourN; ++F.t.detourHist[std::clamp(static_cast<int>((r - 1.0) * 4.0), 0, 15)];
-            if (F.trace && r > 2.0) std::fprintf(F.trace, "%7.2f  DETOUR %s: walked %.0f for %.0f of ground, from (%.0f, %.0f) toward (%.0f, %.0f)\n", F.now, x.c.name.c_str(), static_cast<double>(n.walked), static_cast<double>(straight), n.legSx, n.legSy, n.legG0x, n.legG0y); }
+            if (F.trace && r > 2.0) std::fprintf(F.trace, "%7.2f  DETOUR %s: walked %.0f on a route of %.0f, from (%.0f, %.0f) toward (%.0f, %.0f)\n", F.now, x.c.name.c_str(), static_cast<double>(n.walked), static_cast<double>(n.legLen), n.legSx, n.legSy, n.legG0x, n.legG0y); }
         n.legOpen = false; n.walked = 0.0f;
+    }
+    // A leg begins, heading (fx, fy). A reversal (2.5) is a leg that heads back within oscSec of the one before, when both go farther than legMinU.
+    // AWAY legs (a backpedal, a flight) are legs too (review F7): walking at a foe and backing off him again and again is the oscillation.
+    inline void EnvLegStart(Fight& F, Body& x, float fx, float fy, float goalDist, float gx, float gy, float len, bool reach) {
+        Nav& n = x.nav; const EnvTuning& T = g_envT; const bool subj = x.ctl == 0, longLeg = goalDist >= T.legMinU; const float fl = std::hypot(fx, fy);
+        if (fl > 1e-3f) { fx /= fl; fy /= fl;
+            if (subj && longLeg && n.legLong && F.now - n.legAt < static_cast<double>(T.oscSec) && fx * n.legDx + fy * n.legDy < -0.5f) { ++F.t.pathOsc;
+                if (F.trace) std::fprintf(F.trace, "%7.2f  REVERSAL %s: a new leg to (%.0f, %.0f) heads back %.1f s after the last began toward (%.0f, %.0f)\n", F.now, x.c.name.c_str(), gx, gy, F.now - n.legAt, n.legG0x, n.legG0y); }
+            n.legDx = fx; n.legDy = fy; }
+        n.legLong = longLeg; n.legAt = F.now; n.legSx = x.c.x; n.legSy = x.c.y; n.legG0x = gx; n.legG0y = gy; n.walked = 0.0f; n.legOpen = true; n.legLen = len; n.legReach = reach;
+        if (subj) { ++F.t.pathLegs; if (!reach) ++F.t.pathUnreach; }
     }
 
     inline void EnvPlan(Fight& F, Body& x, std::int32_t gt, const EQ::Vec3& gp, bool idleBefore) {
         Nav& n = x.nav; const EnvTuning& T = g_envT; const bool subj = x.ctl == 0;
-        n.pathAt = F.now; n.stamp = F.doorStamp; n.goalTri = gt; n.goal = gp; n.i = n.n = 0; n.cut = n.blocked = false; n.reach = false;
-        const EQ::Vec3 pos{ x.c.x, x.c.y, x.c.z };
+        n.pathAt = F.now; n.stamp = F.doorStamp; n.goalTri = gt; n.goal = gp; n.i = n.n = 0; n.cut = n.blocked = false; n.reach = false; n.away = false;
+        const EQ::Vec3 pos{ x.c.x, x.c.y, x.c.z }; float len = 0.0f;
         if (gt >= 0) {
             const EQ::View pv = EnvViewOf(F, true); const EQ::Walker who = WalkerOf(x);
-            if (gt == n.tri || EQ::WalkLine(pv, n.tri, pos, gp, who).reached) { n.pts[0] = { gp, gt, EQ::Corner::Goal }; n.n = 1; n.reach = true; }
+            // the straight walk counts only when it ENDS AT THE GOAL'S HEIGHT (review F1): the same x, y on the floor above is not the goal
+            if (EQ::WalkLine(pv, n.tri, pos, gp, who).At()) { n.pts[0] = { gp, gt, EQ::Corner::Goal }; n.n = 1; n.reach = true; len = std::hypot(gp.x - pos.x, gp.y - pos.y, gp.z - pos.z); }
+            else if (n.exact) {   // the shared route runs centre to centre, and its first corner need not be a straight walk from where HE is. After a STUCK end the route is searched from his own spot (a pure function of the state, so still the same run at any thread count)
+                static thread_local EQ::Path xp; EQ::PathQuery q; q.from = pos; q.to = gp; q.fromTri = n.tri; q.toTri = gt; q.who = who;
+                if (EQ::FindPath(pv, q, tl_envScratch, xp)) { n.n = static_cast<std::uint8_t>(std::min<std::size_t>(xp.pts.size(), n.pts.size())); for (std::uint8_t i = 0; i < n.n; ++i) n.pts[i] = xp.pts[i];
+                    n.reach = xp.reachable; n.blocked = xp.blocked; n.cut = xp.pts.size() > n.pts.size(); len = xp.length; } }
             else { const SimEnv::Route r = F.env->FindRoute(F.doors, F.doorStamp, n.tri, gt, who, true);
-                if (r.any) { n.n = r.n; for (std::uint8_t i = 0; i < r.n; ++i) n.pts[i] = r.pts[i]; n.reach = r.reach; n.blocked = r.blocked; n.cut = r.cut;
+                if (r.any) { n.n = r.n; for (std::uint8_t i = 0; i < r.n; ++i) n.pts[i] = r.pts[i]; n.reach = r.reach; n.blocked = r.blocked; n.cut = r.cut; len = r.length;
                     if (n.reach && !n.cut && n.n && n.pts[n.n - 1].kind == EQ::Corner::Goal) n.pts[n.n - 1].p = gp; } }
         }
         if (subj) ++F.t.pathPlans;
-        // legs (2.5): a new one when the goal moved far, or he had stopped asking
-        const bool newLeg = !n.legOpen || idleBefore || std::hypot(gp.x - n.legG0x, gp.y - n.legG0y) > T.legGoalU;   // against the goal the leg BEGAN with: a chase is a row of short legs
-        if (newLeg) {
-            EnvLegClose(F, x);
-            float fx = (n.n ? n.pts[0].p.x : gp.x) - x.c.x, fy = (n.n ? n.pts[0].p.y : gp.y) - x.c.y; const float fl = std::hypot(fx, fy);
-            const bool longLeg = std::hypot(gp.x - x.c.x, gp.y - x.c.y) >= T.legMinU;
-            if (fl > 1.0f) { fx /= fl; fy /= fl; if (subj && longLeg && n.legLong && F.now - n.legAt < static_cast<double>(T.oscSec) && fx * n.legDx + fy * n.legDy < -0.5f) { ++F.t.pathOsc;
-                    if (F.trace) std::fprintf(F.trace, "%7.2f  REVERSAL %s: a new leg to (%.0f, %.0f) heads back %.1f s after the last began toward (%.0f, %.0f)\n", F.now, x.c.name.c_str(), gp.x, gp.y, F.now - n.legAt, n.legG0x, n.legG0y); }
-                n.legDx = fx; n.legDy = fy; }
-            n.legLong = longLeg;
-            n.legAt = F.now; n.legSx = x.c.x; n.legSy = x.c.y; n.legG0x = gp.x; n.legG0y = gp.y; n.walked = 0.0f; n.legOpen = true;
-            if (subj) { ++F.t.pathLegs; if (!n.reach) ++F.t.pathUnreach; }
-        }
-        n.legGx = gp.x; n.legGy = gp.y; n.legReach = n.reach;
+        if (!n.legOpen || idleBefore || std::hypot(gp.x - n.legG0x, gp.y - n.legG0y) > T.legGoalU) {   // against the goal the leg BEGAN with: a chase is a row of short legs
+            EnvLegClose(F, x, false);
+            EnvLegStart(F, x, (n.n ? n.pts[0].p.x : gp.x) - x.c.x, (n.n ? n.pts[0].p.y : gp.y) - x.c.y, std::hypot(gp.x - x.c.x, gp.y - x.c.y), gp.x, gp.y, len, n.reach); }
+        n.legReach = n.reach;
         if (n.n == 0) EnvLegEnd(F, x, LegEnd::Unreachable);   // no mesh near the goal, or no route of any kind
     }
 
-    inline void EnvMove(Fight& F, Body& x, float tx, float ty, float speed, bool away) {
-        Nav& n = x.nav; const EnvTuning& T = g_envT;
+    // THE FALLBACK POINT of a backpedal or a flight (review F3). The engine's fallback and back-off are PATHED moves (Docs/research dodge-research.md:155),
+    // not a push along a bearing, so he does not walk into a wall and keep walking. From him, nine straight walks fanned over the half circle that
+    // leads away from what he leaves, each up to awayU long. The one that ends farthest from it wins, when it gains at least awayGainU. When none
+    // does he is CORNERED and stands (counted apart: Tally::pathCorneredSec, never as stuck).
+    inline bool EnvAwayPick(const Fight& F, const Body& x, float fromX, float fromY, EQ::Vec3& out, std::int32_t& outTri) {
+        const EnvTuning& T = g_envT; const EQ::View v = EnvViewOf(F); const EQ::Walker who = WalkerOf(x); const EQ::Vec3 pos{ x.c.x, x.c.y, x.c.z };
+        const float base = std::atan2(x.c.y - fromY, x.c.x - fromX), now0 = std::hypot(x.c.x - fromX, x.c.y - fromY); float best = now0 + T.awayGainU; bool have = false;
+        for (int i = 0; i < 9; ++i) { const float a = base + static_cast<float>(((i + 1) / 2) * ((i & 1) ? 1 : -1)) * 0.3927f;   // 0, +-22.5, +-45, +-67.5, +-90 degrees: straight back first
+            const EQ::Walk w = EQ::WalkLine(v, x.nav.tri, pos, { pos.x + std::cos(a) * T.awayU, pos.y + std::sin(a) * T.awayU, pos.z }, who);
+            const float d = std::hypot(w.end.x - fromX, w.end.y - fromY); if (d > best + 1.0f) { best = d; out = w.end; outTri = w.tri; have = true; } }
+        return have;
+    }
+
+    inline void EnvMove(Fight& F, Body& x, float tx, float ty, float speed, bool away, const Body* to, const EnvPoint* point) {
+        Nav& n = x.nav; const EnvTuning& T = g_envT; const bool subj = x.ctl == 0;
         if (n.tri < 0) { EnvAdopt(F, x); if (n.tri < 0) return; }
         if (F.now < n.dropUntil) return;   // falling
         const float step = speed * TM::dt; const bool idleBefore = F.now - n.wantAt > 0.5;
         if (F.now - n.wantAt > 3.0 * static_cast<double>(TM::dt)) { n.progAt = F.now; n.px = x.c.x; n.py = x.c.y; n.stuckSince = -1; n.stuckNoted = false; }
-        n.wantAt = F.now; bool arrived = false;
-        if (away || !g_v4.path) { EnvTryStep(F, x, tx, ty, step); if (away) { n.n = n.i = 0; n.legOpen = false; } }
-        else if (F.now >= n.holdUntil) {
-            EQ::Vec3 gp; std::uint32_t who = 0; const std::int32_t gt = EnvGoal(F, x, tx, ty, gp, who); n.goalBody = who;
-            // the offense approach's drop cap (apmf/OffenseApproach.cpp): past it the foe is not walked to again this fight
-            if (g_v4.caststart && x.ctl >= 0 && who) { const Ctl& c = F.ctl[static_cast<std::size_t>(x.ctl)]; if (std::find(c.apprBlocked.begin(), c.apprBlocked.end(), who) != c.apprBlocked.end()) return; }
-            const bool spent = n.n == 0 || n.i >= n.n, stale = n.stamp != F.doorStamp;
-            if (spent || stale || (gt != n.goalTri && F.now - n.pathAt >= static_cast<double>(T.repathSec))) EnvPlan(F, x, gt, gp, idleBefore);
-            else if (gt == n.goalTri && n.reach && !n.cut && n.pts[n.n - 1].kind == EQ::Corner::Goal) n.pts[n.n - 1].p = gp;
-            if (n.i < n.n) {
-                const EQ::PathPoint c = n.pts[n.i];
-                EnvTryStep(F, x, c.p.x, c.p.y, step);
-                if (n.i < n.n && std::hypot(c.p.x - x.c.x, c.p.y - x.c.y) < 6.0f) {   // (a BLOCKED end inside the step emptied the route)
-                    if (c.kind == EQ::Corner::DropStart && n.i + 1 < n.n && n.pts[n.i + 1].kind == EQ::Corner::DropLand) {
-                        n.dropUntil = F.now + static_cast<double>(T.dropSec); n.dropTo = n.pts[n.i + 1].p; n.dropTri = n.pts[n.i + 1].tri; n.i = static_cast<std::uint8_t>(n.i + 2); if (x.ctl == 0) ++F.t.pathDrops; }
-                    else ++n.i;
-                    if (n.i >= n.n) { if (n.reach && !n.cut) arrived = true; else if (!n.cut) EnvLegEnd(F, x, n.blocked ? LegEnd::Blocked : LegEnd::Unreachable); }
+        n.wantAt = F.now; bool arrived = false, cornered = false;
+        if (!g_v4.path) EnvTryStep(F, x, tx, ty, step);
+        else if (away) {
+            const float fromX = 2.0f * x.c.x - tx, fromY = 2.0f * x.c.y - ty;   // every away caller asks for (him + (him - what he leaves))
+            if (!n.away || F.now >= n.awayUntil || std::hypot(n.goal.x - x.c.x, n.goal.y - x.c.y) < 12.0f) {
+                EQ::Vec3 p; std::int32_t pt = -1; const bool was = n.away && n.n > 0; n.awayUntil = F.now + static_cast<double>(T.awayPickSec);
+                if (EnvAwayPick(F, x, fromX, fromY, p, pt)) { if (!was) { EnvLegClose(F, x, false); EnvLegStart(F, x, p.x - x.c.x, p.y - x.c.y, std::hypot(p.x - x.c.x, p.y - x.c.y), p.x, p.y, 0.0f, true); }
+                    n.goal = p; n.goalTri = pt; n.pts[0] = { p, pt, EQ::Corner::Goal }; n.n = 1; n.i = 0; n.reach = true; }
+                else { n.n = n.i = 0; if (n.legOpen) EnvLegClose(F, x, false); }
+                n.away = true; n.goalBody = 0; }
+            if (n.n) EnvTryStep(F, x, n.goal.x, n.goal.y, step); else cornered = true;
+            if (subj) { F.t.pathAwaySec += TM::dt; if (cornered) F.t.pathCorneredSec += TM::dt; }
+        }
+        else {
+            EQ::Vec3 gp; const std::int32_t gt = EnvGoal(F, x, tx, ty, to, point, gp); n.goalBody = to ? to->c.id : 0;
+            // the offense approach's drop cap (apmf/OffenseApproach.cpp): past it the foe is not walked to again this fight. He still WANTS to (the stuck window runs)
+            const bool capped = g_v4.caststart && x.ctl >= 0 && to && std::find(F.ctl[static_cast<std::size_t>(x.ctl)].apprBlocked.begin(), F.ctl[static_cast<std::size_t>(x.ctl)].apprBlocked.end(), to->c.id) != F.ctl[static_cast<std::size_t>(x.ctl)].apprBlocked.end();
+            if (!capped && F.now >= n.holdUntil) {
+                const bool spent = n.n == 0 || n.i >= n.n || n.away, stale = n.stamp != F.doorStamp;
+                if (spent || stale || (gt != n.goalTri && F.now - n.pathAt >= static_cast<double>(T.repathSec))) EnvPlan(F, x, gt, gp, idleBefore);
+                else if (gt == n.goalTri && n.reach && !n.cut && n.pts[n.n - 1].kind == EQ::Corner::Goal) { n.pts[n.n - 1].p = gp; n.goal = gp; }
+                if (n.i < n.n) {
+                    const EQ::PathPoint c = n.pts[n.i];
+                    EnvTryStep(F, x, c.p.x, c.p.y, step);
+                    if (n.i < n.n && std::hypot(c.p.x - x.c.x, c.p.y - x.c.y) < 6.0f && std::fabs(c.p.z - x.c.z) < T.levelU) {   // AT the corner: its height too (a BLOCKED end inside the step emptied the route)
+                        if (c.kind == EQ::Corner::DropStart && n.i + 1 < n.n && n.pts[n.i + 1].kind == EQ::Corner::DropLand) {
+                            n.dropUntil = F.now + static_cast<double>(T.dropSec); n.dropTo = n.pts[n.i + 1].p; n.dropTri = n.pts[n.i + 1].tri; n.i = static_cast<std::uint8_t>(n.i + 2); if (subj) ++F.t.pathDrops; }
+                        else ++n.i;
+                        if (n.i >= n.n) { if (n.reach && !n.cut) arrived = true; else if (!n.cut) EnvLegEnd(F, x, n.blocked ? LegEnd::Blocked : LegEnd::Unreachable); }
+                    }
+                    else if (n.i < n.n && std::hypot(c.p.x - x.c.x, c.p.y - x.c.y) < 6.0f) { n.n = n.i = 0; n.pathAt = -1e9; }   // over or under the corner, not at it: the route is void, ask again from where he really is
                 }
+                if (!arrived && n.legOpen && n.reach && std::hypot(n.goal.x - x.c.x, n.goal.y - x.c.y) < 24.0f && std::fabs(n.goal.z - x.c.z) < T.levelU) arrived = true;   // at his goal (a mover that stops a step short never reaches the last corner)
             }
         }
-        // stuck (2.5): under stuckU of ground in stuckSec while a leg wants him to move
-        if (!arrived && !away && g_v4.path && n.legOpen && n.reach && std::hypot(n.goal.x - x.c.x, n.goal.y - x.c.y) < 24.0f) arrived = true;   // at his goal (a mover that stops a step short never reaches the last corner)
-        if (arrived) EnvLegClose(F, x);
-        if (arrived || F.now < n.dropUntil) { n.progAt = F.now; n.px = x.c.x; n.py = x.c.y; }
+        if (arrived) EnvLegClose(F, x, true);
+        // stuck (2.5): under stuckU of ground in stuckSec while a leg wants him to move. Standing cornered is his choice and is counted apart.
+        if (arrived || cornered || F.now < n.dropUntil) { n.progAt = F.now; n.px = x.c.x; n.py = x.c.y; }
         if (std::hypot(x.c.x - n.px, x.c.y - n.py) > T.stuckU) { n.px = x.c.x; n.py = x.c.y; n.progAt = F.now; n.stuckNoted = false; n.stuckSince = -1; }
         else if (F.now - n.progAt > static_cast<double>(T.stuckSec)) {
-            if (x.ctl == 0) F.t.pathStuckSec += TM::dt;
+            if (subj) F.t.pathStuckSec += TM::dt;
             if (n.stuckSince < 0) n.stuckSince = F.now;
             if (!n.stuckNoted) { n.stuckNoted = true; if (F.now >= n.holdUntil) EnvLegEnd(F, x, LegEnd::Stuck); }
             if (x.ctl >= 0 && F.now - n.stuckSince > 30.0) { ++F.t.envStuckForever; n.stuckSince = F.now; }

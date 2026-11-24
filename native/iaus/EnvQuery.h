@@ -83,6 +83,7 @@ namespace MFO::Iaus::Env {
         std::span<const Door> doors;
         std::span<const Wall> walls;
         std::span<const std::uint32_t> weak;   // per triangle: an id shared by everything any link joins. Empty = not labelled
+        std::span<const std::uint32_t> walk;   // per triangle: an id shared by everything Walk edges join (doors count as open). Empty = not labelled
         const Grid*   grid = nullptr;
         bool          interior = true;
         bool          portalsOpen = false;     // something enabled the enable / disable portals
@@ -109,7 +110,8 @@ namespace MFO::Iaus::Env {
         float dropPerU      = 0.5f;
         float blockPenalty  = 1.0e6f;  // an edge he cannot open. A path that needs one is BLOCKED there
         float cornerInset   = 0.6f;    // corners stand this share of his radius inside the portal's end
-        int   maxExpand     = 0;       // triangles closed before the search gives up (0 = no cap)
+        int   maxExpand     = 20000;   // triangles closed before the search gives up and returns the nearest point it reached (0 = no cap). A loaded
+                                       // area is a few thousand triangles: the cap bounds one search on a mesh that is larger or broken
     };
     inline constexpr PathTuning kPathTuning{};
 
@@ -155,7 +157,6 @@ namespace MFO::Iaus::Env {
         std::vector<Step> corridor;
         struct Portal { Vec3 l, r; std::int32_t tri; };
         std::vector<Portal> portals;
-        std::vector<std::uint32_t> seen;                       // CastRay: walls already tested
         struct Cross { float t; bool leaving; };
         std::vector<Cross> cross;
     };
@@ -171,9 +172,12 @@ namespace MFO::Iaus::Env {
     [[nodiscard]] float OutsideBy(const View& a_v, std::int32_t a_tri, float a_x, float a_y);
 
     // ── a straight walk ──
-    struct Walk { Vec3 end; std::int32_t tri = -1; bool reached = false; Edge hit = Edge::Wall; std::int32_t hitTri = -1; std::int8_t hitEdge = -1; std::int32_t door = -1; };
-    // From a_from (inside a_tri) toward a_to in x, y. Crosses Walk edges only. A closed door he would step onto stops it
-    // (door = its index), and so does a triangle his body class is closed out of.
+    // reached = the walk got to a_to's x, y. THAT IS NOT "he is there": on stacked floors the same x, y exists on every storey. zMiss is the height of
+    // where the walk ended less a_to.z, and At() is the answer to "did he arrive at that point". Use At() whenever a_to carries a real height.
+    struct Walk { Vec3 end; std::int32_t tri = -1; bool reached = false; Edge hit = Edge::Wall; std::int32_t hitTri = -1; std::int8_t hitEdge = -1; std::int32_t door = -1; float zMiss = 0.0f;
+                  [[nodiscard]] bool At(float a_tol = 16.0f) const { return reached && zMiss <= a_tol && zMiss >= -a_tol; } };
+    // From a_from (inside a_tri) toward a_to in x, y. Crosses Walk edges only. A closed door stops it (door = its index): at the door's leaf when
+    // the row carries one, else at the edge of the door's triangle. A triangle his body class is closed out of stops it too.
     [[nodiscard]] Walk WalkLine(const View& a_v, std::int32_t a_tri, Vec3 a_from, Vec3 a_to, const Walker& a_who);
 
     // ── route search (PathSearch.cpp) ──
@@ -184,7 +188,16 @@ namespace MFO::Iaus::Env {
     // ── sight ──
     enum class Blocker : std::uint8_t { None = 0, Wall, Face, Terrain, Door };
     struct Sight { bool clear = true; Blocker by = Blocker::None; float t = 1.0f; };
-    [[nodiscard]] Sight CastRay(const View& a_v, Vec3 a_from, Vec3 a_to, Scratch& a_s, const SightTuning& a_t = kSightTuning);
+    // a_endMargin: the ray is aimed AT a body, whose own capsule must not be the thing called a wall (native Sightline.cpp ends its rays 48 short).
+    // A wall, a door or a floor met from ABOVE within that margin of the end is ignored. A floor met from BELOW always blocks: cutting the ray short
+    // instead would let a look straight up end under the floor the target stands on and read as clear.
+    [[nodiscard]] Sight CastRay(const View& a_v, Vec3 a_from, Vec3 a_to, Scratch& a_s, const SightTuning& a_t = kSightTuning, float a_endMargin = 0.0f);
+
+    // Does the walk a -> b cross this door's leaf (x, y)? a_t = where, as a share of a -> b. False for a row with no leaf.
+    [[nodiscard]] bool LeafCrossed(const Door& a_d, const Vec3& a_a, const Vec3& a_b, float& a_t);
+    // A LIVE SNAPSHOT MUST BE CHECKED ONCE, WHEN IT IS BUILT. The queries index the arrays without bounds checks. nullptr = every vertex, neighbour, door and
+    // grid index is in range and the label tables are empty or one per triangle. Else what is wrong: the builder must refuse the snapshot.
+    [[nodiscard]] const char* Invalid(const View& a_v);
 
     // ── derived tables, built once per snapshot ──
     void BuildGrid(Grid& a_g, std::span<const Vec3> a_verts, std::span<const Tri> a_tris);

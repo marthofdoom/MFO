@@ -64,6 +64,9 @@ namespace Sim {
         float eyeFrac = 0.90f, torsoFrac = 0.55f, feetU = 16.0f, bodyH = 120.0f, targetMargin = 48.0f;   // native Sightline.cpp: eye -> feet / torso / head, each ray ends 48 short
         float spawnGroupU = 1500.0f;                 // MODEL: spawn points this near each other are one encounter
         float snapU = 400.0f;                        // a goal off the mesh is taken to the nearest mesh point within this
+        float levelU = 24.0f;                        // he is AT a corner or a goal only within this of its height
+        float storeyU = 64.0f;                       // a point of "his own storey" lies within this of his height (EQ::SightTuning::stepH)
+        float awayU = 320.0f, awayGainU = 40.0f, awayPickSec = 0.5f;   // the fallback point of a backpedal or a flight: how far it looks, the least it must gain, how long a pick stands
     };
     inline EnvTuning g_envT;
 
@@ -83,7 +86,7 @@ namespace Sim {
         [[nodiscard]] bool Any() const { return env || path || bodies || los || caststart || interrupt || drops || foedrops; }
     };
     inline V4 g_v4;
-    inline bool g_seatsAll = false;   // --seats all: the lab as if Harbinger seated every row (section 5)
+    inline bool g_seatsOld = false;   // --seats old: the game before Harbinger ABI 46 (Stagger, Disarm, TargetEffect, Paralyze, Reanimate never start). Default: every row seated
 
     inline EQ::SightTuning g_sightT;   // --sight walls=off|terrain=off|gap=<u>: one layer at a time, so each layer's error can be read alone (2.4)
 
@@ -97,14 +100,14 @@ namespace Sim {
         double blockSince = -1, passUntil = 0; std::uint32_t blocker = 0;                                          // a body in his way
         std::int32_t door = -1; double doorAt = 0;                                                               // the door he is opening
         double dropUntil = 0; EQ::Vec3 dropTo; std::int32_t dropTri = -1;                                          // a drop in flight
-        double legAt = -1e9; float legDx = 0, legDy = 0, legSx = 0, legSy = 0, legGx = 0, legGy = 0, legG0x = 0, legG0y = 0, walked = 0; bool legOpen = false, legReach = false, legLong = false;
+        double legAt = -1e9; float legDx = 0, legDy = 0, legSx = 0, legSy = 0, legGx = 0, legGy = 0, legG0x = 0, legG0y = 0, walked = 0; bool legOpen = false, legReach = false, legLong = false, away = false, exact = false /* his last leg ended STUCK: the next route is searched from where he stands */; float legLen = 0; double awayUntil = 0;
         float blockX = 0, blockY = 0; bool hadBlock = false;
     };
 
     struct EnvPoint { EQ::Vec3 p; std::int32_t tri = -1; std::uint32_t base = 0; std::uint8_t kind = 0; };
 
     struct SimEnv {
-        std::string name, cls, set, file; bool interior = true, pool = true;
+        std::string name, cls, set, file; bool interior = true, pool = true; std::uint64_t hash = 0;   // hash: of the file's bytes (the library hash of a run is built from these)
         std::vector<EQ::Vec3> verts;
         std::vector<EQ::Tri>  tris;        // the TRUTH: what a body can walk
         std::vector<EQ::Tri>  planTris;    // what a planner reads, when the file carries defects (else empty = the truth)
@@ -117,13 +120,15 @@ namespace Sim {
 
         [[nodiscard]] EQ::View View(const std::vector<EQ::Door>& doors, std::uint64_t stamp, bool plan = false) const {
             EQ::View v; v.verts = verts; v.tris = plan && !planTris.empty() ? std::span<const EQ::Tri>(planTris) : std::span<const EQ::Tri>(tris); v.doors = doors; v.walls = walls;
-            v.weak = weak; v.grid = &grid; v.interior = interior; v.stamp = stamp; return v;
+            v.weak = weak; v.walk = walk; v.grid = &grid; v.interior = interior; v.stamp = stamp; return v;
         }
 
         // ── the route cache (iaus-sim-v4.md 2.7). A route is asked CENTROID TO CENTROID, so its value depends on the key alone: a miss on
         // any thread computes the same corners, and a run is the same at 1 thread and at 16. The mover swaps the last corner for his own goal. ──
         struct Route { std::array<EQ::PathPoint, 6> pts; std::uint8_t n = 0; bool reach = false, blocked = false, any = false, cut = false; std::int32_t blockDoor = -1; float length = 0.0f; std::uint16_t drops = 0; std::int32_t from = -1, to = -1; std::uint64_t key2 = 0; };
         struct Shard { std::mutex m; std::unordered_map<std::uint64_t, Route> map; };
+        static constexpr std::size_t kShardCap = 4096; static constexpr long kRouteCap = 1'500'000;   // about 150 bytes a route: 40 MB a place at most, 220 MB in all
+        static inline std::atomic<long> g_routeTotal{ 0 };
         mutable std::array<Shard, 64> cache;
         mutable std::atomic<std::uint64_t> hits{ 0 }, misses{ 0 };
         static std::uint64_t Mix(std::uint64_t z) { z += 0x9E3779B97F4A7C15ULL; z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL; z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL; return z ^ (z >> 31); }
@@ -141,7 +146,10 @@ namespace Sim {
             if (EQ::FindPath(v, q, scratch, path)) { r.any = true; r.reach = path.reachable; r.blocked = path.blocked; r.blockDoor = path.blockDoor; r.length = path.length; r.drops = path.drops;
                 r.n = static_cast<std::uint8_t>(std::min<std::size_t>(path.pts.size(), r.pts.size())); for (std::uint8_t i = 0; i < r.n; ++i) r.pts[i] = path.pts[i];
                 r.cut = path.pts.size() > r.pts.size(); }   // a cut route: he asks again at its last kept corner
-            { std::lock_guard<std::mutex> lk(sh.m); if (sh.map.size() > 32768) sh.map.clear(); sh.map[key] = r; }
+            // THE CAP (review F12): a shard holds at most kShardCap routes, and all places together at most kRouteCap. Past either the shard is emptied.
+            // A route is a pure value of its key, so dropping one changes nothing but time.
+            { std::lock_guard<std::mutex> lk(sh.m); if (sh.map.size() >= kShardCap || g_routeTotal.load(std::memory_order_relaxed) >= kRouteCap) { g_routeTotal.fetch_sub(static_cast<long>(sh.map.size()), std::memory_order_relaxed); sh.map.clear(); }
+              if (sh.map.emplace(key, r).second) g_routeTotal.fetch_add(1, std::memory_order_relaxed); }
             return r;
         }
 
@@ -154,7 +162,9 @@ namespace Sim {
             const EQ::View v = View(doors0, 0); (*d)[static_cast<std::size_t>(from)] = 0.0f; at[static_cast<std::size_t>(from)] = EQ::Centroid(v, from); pq.push({ 0.0f, from });
             while (!pq.empty()) { const N n = pq.top(); pq.pop(); const std::size_t ti = static_cast<std::size_t>(n.second); if (n.first > (*d)[ti]) continue;
                 const EQ::Tri& T = tris[ti];
-                for (int k = 0; k < 3; ++k) { if (T.kind[k] != EQ::Edge::Walk || T.nb[k] < 0) continue; if (const std::int32_t dr = tris[static_cast<std::size_t>(T.nb[k])].door; dr >= 0 && doors0[static_cast<std::size_t>(dr)].state == EQ::DoorState::Locked) continue;   // a locked door is a wall for placement
+                for (int k = 0; k < 3; ++k) { if (T.kind[k] != EQ::Edge::Walk || T.nb[k] < 0) continue; { const std::int32_t dn = tris[static_cast<std::size_t>(T.nb[k])].door; float lt;   // a locked door is a wall for placement: its triangle when it has no leaf, else the walk across its leaf
+                        if (dn >= 0 && !doors0[static_cast<std::size_t>(dn)].leaf && doors0[static_cast<std::size_t>(dn)].state == EQ::DoorState::Locked) continue;
+                        if (T.door >= 0 && doors0[static_cast<std::size_t>(T.door)].state == EQ::DoorState::Locked && EQ::LeafCrossed(doors0[static_cast<std::size_t>(T.door)], at[ti], { 0.5f * (verts[T.v[k]].x + verts[T.v[(k + 1) % 3]].x), 0.5f * (verts[T.v[k]].y + verts[T.v[(k + 1) % 3]].y), 0.0f }, lt)) continue; }
                     const EQ::Vec3& a = verts[T.v[k]]; const EQ::Vec3& b = verts[T.v[(k + 1) % 3]];
                     const EQ::Vec3 mid{ 0.5f * (a.x + b.x), 0.5f * (a.y + b.y), 0.5f * (a.z + b.z) }; const float g = n.first + std::hypot(mid.x - at[ti].x, mid.y - at[ti].y, mid.z - at[ti].z);
                     const std::size_t ni = static_cast<std::size_t>(T.nb[k]); if (g < (*d)[ni]) { (*d)[ni] = g; at[ni] = mid; pq.push({ g, T.nb[k] }); } } }
@@ -169,6 +179,7 @@ namespace Sim {
         mfoenv::Env f; std::string e;
         if (!f.load(path.c_str(), &e)) { if (err) *err = e; return nullptr; }
         auto E = std::make_shared<SimEnv>(); E->file = path;
+        { std::ifstream hin(path, std::ios::binary); std::uint64_t h = 1469598103934665603ULL; char buf[65536]; while (hin) { hin.read(buf, sizeof buf); for (std::streamsize i = 0; i < hin.gcount(); ++i) { h ^= static_cast<unsigned char>(buf[i]); h *= 1099511628211ULL; } } E->hash = h; }
         { const std::string& m = f.metaJson(); JP jp{ m }; J j; if (!m.empty() && m[0] == '{') j = jp.val();
           E->name = j["name"].s; E->cls = j["class"].s; E->set = j["set"].s; E->interior = j["interior"].has() ? j["interior"].yes() : true; E->pool = j["pool"].has() ? j["pool"].yes() : true;
           if (E->name.empty()) { const std::size_t s = path.find_last_of('/'); E->name = path.substr(s == std::string::npos ? 0 : s + 1); } }
@@ -231,6 +242,7 @@ namespace Sim {
         for (std::size_t i = 0; i < nt; ++i) { const EQ::Tri& T = E->tris[i]; const EQ::Vec3& a = E->verts[T.v[0]]; const EQ::Vec3& b = E->verts[T.v[1]]; const EQ::Vec3& c = E->verts[T.v[2]];
             E->triArea[i] = 0.5f * std::fabs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)); if (E->walk[i] == 0) { E->area0 += E->triArea[i]; ++E->tris0; } }
         const EQ::View v = E->View(E->doors0, 0);
+        if (const char* bad = EQ::Invalid(v)) { if (err) *err = bad; return nullptr; }   // the queries index without bounds checks: a view is checked once, here
         for (std::uint32_t i = 0; i < f.refCount(); ++i) { const mfoenv::Ref& r = f.ref(i); if (r.flags & mfoenv::kStartsDisabled) continue;
             const bool entry = r.kind == mfoenv::kDoorRef && (r.flags & mfoenv::kTeleport), actor = r.kind == mfoenv::kActor, loot = r.kind == mfoenv::kContainer || r.kind == mfoenv::kItem;
             if (!entry && !actor && !loot) continue;
@@ -250,6 +262,10 @@ namespace Sim {
         std::vector<std::shared_ptr<SimEnv>> all;     // everything loaded, scenario-only fixtures included
         std::vector<const SimEnv*> draw;              // what an ordinary fight draws from
         std::vector<EnvSkip> skipped; std::string label = "fixtures";
+        // THE LIBRARY HASH of this run (review F13): over the files an ordinary fight draws from, in name order. In the headline, the baseline's meta line
+        // and the results file, so a compare across two libraries is refused like a compare across two worlds.
+        [[nodiscard]] std::uint64_t Hash() const { std::vector<std::pair<std::string, std::uint64_t>> v; for (const SimEnv* e : draw) v.push_back({ e->name, e->hash }); std::sort(v.begin(), v.end());
+            std::uint64_t h = 0x9E3779B97F4A7C15ULL; for (const auto& kv : v) h = SimEnv::Mix(h ^ kv.second); return h; }
         [[nodiscard]] const SimEnv* ByName(const std::string& n) const { for (const auto& e : all) if (e->name == n) return e.get(); return nullptr; }
         bool Add(const std::string& path, bool toDraw) { std::string err; auto E = LoadEnv(path, &err); if (!E) { skipped.push_back({ path, err }); return false; }
             if (const char* why = EnvUnusable(*E)) { skipped.push_back({ path, why }); return false; }

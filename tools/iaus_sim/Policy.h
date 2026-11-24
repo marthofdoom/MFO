@@ -202,10 +202,6 @@ namespace Sim {
             if (F.now - r.at > static_cast<double>((std::max)(0.0f, a_t.fireLineKeepSec))) continue;
             const auto n = std::find_if(sn.willWork.begin(), sn.willWork.end(), [&](const SpellTargetNote& w) { return w.spell == r.spell && w.target == r.foe; });
             if (n != sn.willWork.end()) n->answer = Tri::No; else sn.willWork.push_back({ r.spell, r.foe, Tri::No }); }
-        if (g_v4.caststart) for (std::uint64_t h : c.csHeld) for (const Body& o : F.b) {   // SIM V4: a held-off (spell, target) reads as "will not work": the picker stops ranking it (MODEL of the game's refusal, which costs the rule its turn)
-            if (o.role != Role::Foe || !Fight::Up(o) || ((h & 0xFFFFFFFFull) != 0 && (h & 0xFFFFFFFFull) != o.c.id)) continue; const std::uint32_t sp = static_cast<std::uint32_t>(h >> 32);
-            const auto n = std::find_if(sn.willWork.begin(), sn.willWork.end(), [&](const SpellTargetNote& w) { return w.spell == sp && w.target == o.c.id; });
-            if (n != sn.willWork.end()) n->answer = Tri::No; else sn.willWork.push_back({ sp, o.c.id, Tri::No }); }
         for (const SpellTarget& w : (F.g10Sticky ? c.asked : c.wants)) {   // G10: only the pairs the last decision ranked on top have an answer (main); sticky = experiment
             const Body* d = F.Find(w.target); if (!d) continue;
             for (std::size_t i = 0; i < c.book.entries.size(); ++i) if (c.book.entries[i].form == w.spell) sn.willWork.push_back({ w.spell, w.target, F.WillWork(c.build->spells[i], *d) });
@@ -422,7 +418,7 @@ namespace Sim {
                 thrashed = true;
             }
             const std::uint32_t target = hostile ? tg->c.id : (k.target ? k.target : x.c.id);
-            if (g_v4.caststart && hostile && c.CastHeld(k.form, tg->c.id)) return Fired::Declined;   // SIM V4: held off this fight (cast/CastOn.cpp:470 "offense claim never started this fight: held off")
+            if (g_v4.caststart && hostile && c.CastHeld(k.form, tg->c.id)) { if (subj) ++t.castHeldTurns; return Fired::Declined; }   // SIM V4: held off this fight (cast/CastOn.cpp:470 "offense claim never started this fight: held off"). The picker still ranks it and the refusal COSTS THE TURN, as in the game (review F4)
             if (hostile) {   // cast/Fire.cpp:430: a spell that can never affect this target is passed over, transparently, once the mirror has a verdict
                 const SpellTarget pr{ k.form, tg->c.id }; const bool known = std::find(c.wwMirror.begin(), c.wwMirror.end(), pr) != c.wwMirror.end();
                 if (!known) c.wwMirror.push_back(pr);

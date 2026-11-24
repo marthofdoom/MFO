@@ -216,7 +216,7 @@ namespace MFO::Iaus::Env {
         Walk w; w.tri = a_tri; w.end = a_from;
         if (a_tri < 0) return w;
         const float dx = a_to.x - a_from.x, dy = a_to.y - a_from.y, len = std::hypot(dx, dy);
-        if (len < 1e-4f) { w.reached = true; return w; }
+        if (len < 1e-4f) { w.reached = true; w.zMiss = a_from.z - a_to.z; return w; }
         std::int32_t cur = a_tri; float tcur = 0.0f; const float back = std::min(0.5f / len, 0.5f); bool seam = false;
         for (int iter = 0; iter < 512; ++iter) {
             const Tri& T = a_v.tris[static_cast<std::size_t>(cur)];
@@ -229,37 +229,70 @@ namespace MFO::Iaus::Env {
                 const float t = ((p[k]->x - a_from.x) * nx + (p[k]->y - a_from.y) * ny) / den;
                 if (t < bt) { bt = t; bk = k; }
             }
-            if (bk < 0 || bt >= 1.0f) { w.reached = true; w.tri = cur; w.end = { a_to.x, a_to.y, HeightAt(a_v, cur, a_to.x, a_to.y) }; if (seam) OntoTri(a_v, w); return w; }
+            const bool closedLeaf = T.door >= 0 && a_v.doors[static_cast<std::size_t>(T.door)].leaf && a_v.doors[static_cast<std::size_t>(T.door)].state != DoorState::Open;
+            if (closedLeaf) { float tl; const Vec3 b2{ a_to.x, a_to.y, a_from.z };   // the leaf stands somewhere on this triangle: he stops AT it, the rest of the triangle is floor
+                if (LeafCrossed(a_v.doors[static_cast<std::size_t>(T.door)], a_from, b2, tl) && tl >= tcur - 1e-4f && tl <= std::min(bt, 1.0f) + 1e-4f) { const float te = std::max(tcur, tl - 2.0f * back);
+                    w.tri = cur; w.door = T.door; w.hit = Edge::Wall; w.end.x = a_from.x + dx * te; w.end.y = a_from.y + dy * te; w.end.z = HeightAt(a_v, cur, w.end.x, w.end.y); w.zMiss = w.end.z - a_to.z; if (seam) OntoTri(a_v, w); return w; } }
+            if (bk < 0 && OutsideBy(a_v, cur, a_to.x, a_to.y) > 1.0f) { w.tri = cur; w.end.x = a_from.x + dx * tcur; w.end.y = a_from.y + dy * tcur; w.end.z = HeightAt(a_v, cur, w.end.x, w.end.y); w.zMiss = w.end.z - a_to.z; return w; }   // a degenerate triangle has no way out and does not hold the goal: not reached
+            if (bk < 0 || bt >= 1.0f) { w.reached = true; w.tri = cur; w.end = { a_to.x, a_to.y, HeightAt(a_v, cur, a_to.x, a_to.y) }; if (seam) OntoTri(a_v, w); w.zMiss = w.end.z - a_to.z; return w; }
             bt = std::max(bt, tcur);
             const Edge kind = T.kind[bk]; const std::int32_t n = T.nb[bk];
             bool cross = kind == Edge::Walk && n >= 0;
             if (cross) { const Tri& N = a_v.tris[static_cast<std::size_t>(n)];
                 if (a_who.large && (N.flags & kTriNoLarge)) cross = false;
-                else if (N.door >= 0 && a_v.doors[static_cast<std::size_t>(N.door)].state != DoorState::Open) { cross = false; w.door = N.door; } }
+                else if (N.door >= 0 && !a_v.doors[static_cast<std::size_t>(N.door)].leaf && a_v.doors[static_cast<std::size_t>(N.door)].state != DoorState::Open) { cross = false; w.door = N.door; } }
             if (!cross) { const float te = std::max(tcur, bt - back); w.tri = cur; w.hit = kind; w.hitTri = cur; w.hitEdge = static_cast<std::int8_t>(bk);
-                w.end.x = a_from.x + dx * te; w.end.y = a_from.y + dy * te; w.end.z = HeightAt(a_v, cur, w.end.x, w.end.y); if (seam) OntoTri(a_v, w); return w; }
+                w.end.x = a_from.x + dx * te; w.end.y = a_from.y + dy * te; w.end.z = HeightAt(a_v, cur, w.end.x, w.end.y); if (seam) OntoTri(a_v, w); w.zMiss = w.end.z - a_to.z; return w; }
             cur = n; tcur = bt; seam = true;
         }
-        w.tri = cur; w.end.x = a_from.x + dx * tcur; w.end.y = a_from.y + dy * tcur; w.end.z = HeightAt(a_v, cur, w.end.x, w.end.y); OntoTri(a_v, w);
+        w.tri = cur; w.end.x = a_from.x + dx * tcur; w.end.y = a_from.y + dy * tcur; w.end.z = HeightAt(a_v, cur, w.end.x, w.end.y); OntoTri(a_v, w); w.zMiss = w.end.z - a_to.z;
         return w;
     }
 
-    Sight CastRay(const View& a_v, Vec3 a_from, Vec3 a_to, Scratch& a_s, const SightTuning& a_t) {
+    bool LeafCrossed(const Door& a_d, const Vec3& a_a, const Vec3& a_b, float& a_t) {
+        if (!a_d.leaf) return false;
+        const float dx = a_b.x - a_a.x, dy = a_b.y - a_a.y, ex = a_d.bx - a_d.ax, ey = a_d.by - a_d.ay, den = Cross2(dx, dy, ex, ey); if (std::fabs(den) < 1e-9f) return false;
+        const float t = Cross2(a_d.ax - a_a.x, a_d.ay - a_a.y, ex, ey) / den, u = Cross2(a_d.ax - a_a.x, a_d.ay - a_a.y, dx, dy) / den;
+        if (t < 0.0f || t > 1.0f || u < 0.0f || u > 1.0f) return false;
+        a_t = t; return true;
+    }
+
+    const char* Invalid(const View& a_v) {
+        const std::size_t nv = a_v.verts.size(), nt = a_v.tris.size(), nd = a_v.doors.size();
+        for (const Tri& t : a_v.tris) { for (int k = 0; k < 3; ++k) { if (t.v[k] >= nv) return "a triangle names a vertex past the table"; if (t.nb[k] < -1 || (t.nb[k] >= 0 && static_cast<std::size_t>(t.nb[k]) >= nt)) return "a triangle names a neighbour past the table";
+                if (static_cast<std::uint8_t>(t.kind[k]) > static_cast<std::uint8_t>(Edge::Border)) return "an edge kind out of range"; }
+            if (t.door < -1 || (t.door >= 0 && static_cast<std::size_t>(t.door) >= nd)) return "a triangle names a door past the table"; }
+        for (const Door& d : a_v.doors) if (d.tri < -1 || (d.tri >= 0 && static_cast<std::size_t>(d.tri) >= nt)) return "a door names a triangle past the table";
+        for (const Vec3& p : a_v.verts) if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) return "a vertex is not finite";
+        if (!a_v.weak.empty() && a_v.weak.size() != nt) return "the weak labels are not one per triangle";
+        if (!a_v.walk.empty() && a_v.walk.size() != nt) return "the walk labels are not one per triangle";
+        if (a_v.grid) { const Grid& g = *a_v.grid; const std::size_t cells = static_cast<std::size_t>(std::max(0, g.nx)) * static_cast<std::size_t>(std::max(0, g.ny));
+            if (g.nx < 0 || g.ny < 0 || !(g.cell > 0.0f)) return "the grid has no size";
+            if (cells) { if (g.triStart.size() != cells + 1 || g.wallStart.size() != cells + 1) return "the grid's row tables do not match its cells";
+                if (g.triStart.back() != g.triItems.size() || g.wallStart.back() != g.wallItems.size()) return "the grid's rows do not match its items";
+                for (std::size_t c = 0; c < cells; ++c) if (g.triStart[c] > g.triStart[c + 1] || g.wallStart[c] > g.wallStart[c + 1]) return "the grid's rows are not in order";
+                for (std::uint32_t i : g.triItems) if (i >= nt) return "the grid names a triangle past the table";
+                for (std::uint32_t i : g.wallItems) if (i >= a_v.walls.size()) return "the grid names a wall past the table"; } }
+        return nullptr;
+    }
+
+    Sight CastRay(const View& a_v, Vec3 a_from, Vec3 a_to, Scratch& a_s, const SightTuning& a_t, float a_endMargin) {
         Sight out;
         if (!a_v.grid || a_v.grid->nx <= 0) return out;
         const Grid& g = *a_v.grid;
         const float dx = a_to.x - a_from.x, dy = a_to.y - a_from.y, dz = a_to.z - a_from.z, len2d = std::hypot(dx, dy);
+        const float len3 = std::sqrt(dx * dx + dy * dy + dz * dz), tEnd = len3 > 1e-3f ? 1.0f - a_endMargin / len3 : 1.0f;   // past tEnd the ray is inside the target's own margin
         auto block = [&](Blocker by, float t) { if (out.clear || t < out.t) { out.clear = false; out.by = by; out.t = t; } };
         // closed doors: the door stands on its triangle, wallH high
         for (const Door& d : a_v.doors) { if (d.state == DoorState::Open || d.tri < 0) continue;
             if (d.leaf) { const float ex = d.bx - d.ax, ey = d.by - d.ay, den = Cross2(dx, dy, ex, ey); if (std::fabs(den) < 1e-9f) continue;
                 const float t = Cross2(d.ax - a_from.x, d.ay - a_from.y, ex, ey) / den, u = Cross2(d.ax - a_from.x, d.ay - a_from.y, dx, dy) / den;
-                if (t > 0.0f && t < 1.0f && u >= 0.0f && u <= 1.0f) { const float rz = a_from.z + t * dz; if (rz >= d.z0 - a_t.wallBelow && rz <= d.z1) block(Blocker::Door, t); }
+                if (t > 0.0f && t < tEnd && u >= 0.0f && u <= 1.0f) { const float rz = a_from.z + t * dz; if (rz >= d.z0 - a_t.wallBelow && rz <= d.z1) block(Blocker::Door, t); }
                 continue; }
             const Tri& T = a_v.tris[static_cast<std::size_t>(d.tri)]; const Vec3* p[4] = { &a_v.verts[T.v[0]], &a_v.verts[T.v[1]], &a_v.verts[T.v[2]], &a_v.verts[T.v[0]] };
             for (int k = 0; k < 3; ++k) { const float ex = p[k + 1]->x - p[k]->x, ey = p[k + 1]->y - p[k]->y, den = Cross2(dx, dy, ex, ey); if (std::fabs(den) < 1e-9f) continue;
                 const float t = Cross2(p[k]->x - a_from.x, p[k]->y - a_from.y, ex, ey) / den, u = Cross2(p[k]->x - a_from.x, p[k]->y - a_from.y, dx, dy) / den;
-                if (t <= 0.0f || t >= 1.0f || u < 0.0f || u > 1.0f) continue;
+                if (t <= 0.0f || t >= tEnd || u < 0.0f || u > 1.0f) continue;
                 const float ez = p[k]->z + u * (p[k + 1]->z - p[k]->z), rz = a_from.z + t * dz;
                 if (rz >= ez - a_t.wallBelow && rz <= ez + a_t.wallH) { block(Blocker::Door, t); break; } } }
         if (!out.clear) return out;
@@ -269,7 +302,7 @@ namespace MFO::Iaus::Env {
                 for (std::uint32_t i = g.wallStart[static_cast<std::size_t>(c)]; i < g.wallStart[static_cast<std::size_t>(c) + 1]; ++i) {
                     const Wall& w = a_v.walls[g.wallItems[i]]; const float ex = w.bx - w.ax, ey = w.by - w.ay, den = Cross2(dx, dy, ex, ey); if (std::fabs(den) < 1e-9f) continue;
                     const float t = Cross2(w.ax - a_from.x, w.ay - a_from.y, ex, ey) / den, u = Cross2(w.ax - a_from.x, w.ay - a_from.y, dx, dy) / den;
-                    if (t <= 0.0f || t >= 1.0f || u < 0.0f || u > 1.0f) continue;
+                    if (t <= 0.0f || t >= tEnd || u < 0.0f || u > 1.0f) continue;
                     const float ez = w.az + u * (w.bz - w.az), rz = a_from.z + t * dz;
                     if (rz < ez + w.lo || rz > ez + w.hi) continue;
                     if (w.kind == WallKind::Face) { face = true; faceT = std::min(faceT, t); continue; }
@@ -292,7 +325,10 @@ namespace MFO::Iaus::Env {
                 for (std::uint32_t i = g.triStart[static_cast<std::size_t>(c)]; i < g.triStart[static_cast<std::size_t>(c) + 1]; ++i) {
                     const Tri& T = a_v.tris[g.triItems[i]]; const Vec3& a = a_v.verts[T.v[0]]; const Vec3& b = a_v.verts[T.v[1]]; const Vec3& cc = a_v.verts[T.v[2]];
                     if ((a.z < zlo && b.z < zlo && cc.z < zlo) || (a.z > zhi && b.z > zhi && cc.z > zhi)) continue;
-                    float t; if (SegTri(a_from, a_to, a, b, cc, t)) { block(Blocker::Terrain, t); return true; }
+                    float t; if (!SegTri(a_from, a_to, a, b, cc, t)) continue;
+                    if (t >= tEnd) { float nz = Cross2(b.x - a.x, b.y - a.y, cc.x - a.x, cc.y - a.y), nx = (b.y - a.y) * (cc.z - a.z) - (b.z - a.z) * (cc.y - a.y), ny = (b.z - a.z) * (cc.x - a.x) - (b.x - a.x) * (cc.z - a.z);
+                        if (nz < 0.0f) { nx = -nx; ny = -ny; nz = -nz; } if (dx * nx + dy * ny + dz * nz <= 0.0f) continue; }   // from above, at his feet: the floor he stands on
+                    block(Blocker::Terrain, t); return true;
                 }
                 return false; });
         }

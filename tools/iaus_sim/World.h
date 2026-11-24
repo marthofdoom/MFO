@@ -25,7 +25,7 @@ namespace Sim {
 
     // SIM V4 (iaus_sim/EnvWorld.h, included at the end of this file): what a fight with an environment calls instead of the plane.
     struct Fight; struct Body;
-    inline void EnvMove(Fight& F, Body& x, float tx, float ty, float speed, bool away);
+    inline void EnvMove(Fight& F, Body& x, float tx, float ty, float speed, bool away, const Body* to, const EnvPoint* point);
     inline bool EnvSees(const Fight& F, const Body& a, const Body& o);
     inline bool EnvSeesFrom(const Fight& F, const Body& who, float px, float py, const Body& o);
     inline bool EnvStandable(const Fight& F, const Body& who, float px, float py);
@@ -33,6 +33,7 @@ namespace Sim {
     inline void EnvShove(Fight& F, Body& x, float dx, float dy);
     inline void EnvStep(Fight& F);
     inline bool EnvMeleeClear(const Fight& F, const Body& a, const Body& o);
+    inline bool EnvInBlast(const Fight& F, float cx, float cy, float cz, float r, const Body& o);
 
     // ── timing (seconds). MODEL values unless a source is named; every row is in the doc's model table ──
     struct TM {
@@ -173,7 +174,7 @@ namespace Sim {
 
     struct Occluder { float x, y, r; };
     // SIM V3: an ACTIVE area (ClickUp 1dfcuabd246). follows = it moves with its owner (a cloak); else it stays at the cast point.
-    struct Area { float x = 0, y = 0, r = 0; double until = 0; std::uint32_t src = 0; bool follows = false, hostile = false; float perSec = 0, armor = 0; int av = -1; int spell = -1; };
+    struct Area { float x = 0, y = 0, r = 0; double until = 0; std::uint32_t src = 0; bool follows = false, hostile = false; float perSec = 0, armor = 0; int av = -1; int spell = -1; float z = 0; };   // z: SIM V4, the height of its centre
     struct Spawn { double at = 0; std::shared_ptr<const ActorSpec> spec; float x = 0, y = 0; std::string tag; float dmgScale = 1; };   // a foe that joins later (waves)
 
     // Per-fight counters. `subject` = follower 0 unless stated.
@@ -268,10 +269,10 @@ namespace Sim {
         // reversals (a new leg heading back within oscSec) / drops taken / doors opened / routes asked. Seconds stuck, seconds with his attack on a foe he
         // can neither reach nor see, units walked. detour = walked over straight line, per leg that had a route (sum, n, and a histogram in quarters for p90).
         long   pathLegs = 0, pathUnreach = 0, pathBlocked = 0, pathReblock = 0, pathStuckLegs = 0, pathOsc = 0, pathDrops = 0, pathDoors = 0, pathPlans = 0, detourN = 0, detourHist[16] = {};
-        double pathStuckSec = 0, pathHoldUnreachSec = 0, pathWalked = 0, detourSum = 0;
+        double pathStuckSec = 0, pathHoldUnreachSec = 0, pathWalked = 0, detourSum = 0, pathAwaySec = 0, pathCorneredSec = 0;   // away: seconds backing off or fleeing; cornered: of those, with no point farther from what he leaves
         long   envBad = 0, envStuckForever = 0;   // EVERY body: steps with a NaN or off-mesh position (a bug, must be 0) / a follower stuck 30 s on end
         // SIM V4 cast starts (iaus-sim-v4.md 5): claims on a row no seat starts, never-started releases (short / long window), spells held off for the fight, casts a stagger or a control effect ended
-        long   castUnseated = 0, castNeverShort = 0, castNeverLong = 0, castHeldOff = 0, castInterrupted = 0, foeCastInterrupted = 0, castOccRelease = 0; double neverSec = 0;
+        long   castUnseated = 0, castNeverShort = 0, castNeverLong = 0, castHeldOff = 0, castInterrupted = 0, foeCastInterrupted = 0, castOccRelease = 0, castHeldTurns = 0; double neverSec = 0;   // castHeldTurns: decisions lost to a held-off spell
         long   apprDrops = 0, apprBlocked = 0;    // offense approach: ENGINE DROPPED endings (a timed backoff each) / foes blocked for the fight past the drop cap
         std::vector<std::string> killOrder;
     };
@@ -949,12 +950,13 @@ namespace Sim {
         }
 
         // ── the engine's combat AI (MODEL from the combat style) ──
-        void Move(Body& x, float tx, float ty, float speed, bool away = false) {   // away: a backpedal or a flight, straight from what he leaves (SIM V4 reads it; the plane does not)
-            const float dx = tx - x.c.x, dy = ty - x.c.y, d = std::hypot(dx, dy); if (d < 1e-3f) return;
+        // away: a backpedal or a flight from what he leaves. to: the BODY he walks to (its storey is the goal's). point: an explicit mesh point. SIM V4 reads the three, the plane none.
+        void Move(Body& x, float tx, float ty, float speed, bool away = false, const Body* to = nullptr, const EnvPoint* point = nullptr) {
+            const float dx = tx - x.c.x, dy = ty - x.c.y, d = std::hypot(dx, dy); if (d < 1e-3f && !(env && (to || point))) return;   // (SIM V4: a goal straight over or under him is still a walk)
             if (x.airborne || x.perch) return;   // SIM V3: on the wing he flies his circuit (FlightStep), on a ledge he stays on it; nothing walks him
             x.ranLast = speed >= 0.9f * x.spec->run;   // MODEL: combat movement is at the engine's RUN speed and a crouched run is still IsRunning (probe P1 logs it); a backpedal is not
             if (x.sneaking) speed *= 0.55f;   // MODEL: the sneak gait (the crouched run)
-            if (env) { EnvMove(*this, x, tx, ty, speed, away); return; }   // SIM V4: along the mesh (EnvWorld.h)
+            if (env) { EnvMove(*this, x, tx, ty, speed, away, to, point); return; }   // SIM V4: along the mesh (EnvWorld.h)
             const float k = std::min(speed * TM::dt, d) / d; x.c.x += dx * k; x.c.y += dy * k; x.movedAt = now;
             if (arenaR > 0.0f) { const float ax = x.c.x - arenaX, ay = x.c.y - arenaY, ad = std::hypot(ax, ay);   // --space: a wall stops him (backpedal, kite, flee)
                 if (ad > arenaR) { x.c.x = arenaX + ax * arenaR / ad; x.c.y = arenaY + ay * arenaR / ad; } }
@@ -1020,7 +1022,7 @@ namespace Sim {
         [[nodiscard]] bool LeashTurn(Body& x, const Ctl* c, const Body& tg) {
             if (!c || !(c->leash > 0.0f) || Dist(x, b[0]) <= c->leash || Dist(tg, b[0]) <= c->leash) return false;
             if (env && Dist(x, b[0]) <= c->leash + kLeashStandU) return true;   // SIM V4: just past the radius he STANDS (the engine does not pursue past it). The plane's rule steps in and out of it every third of a second
-            Move(x, b[0].c.x, b[0].c.y, x.spec->run); if (x.ctl == 0) ++t.leashTurns; return true;
+            Move(x, b[0].c.x, b[0].c.y, x.spec->run, false, &b[0]); if (x.ctl == 0) ++t.leashTurns; return true;
         }
         // Card H4 (native/iaus/Reposition.h SpellRange, the game's own function): the distance the spell in his hand is fought at. 0 = none
         // (no spell in hand, a heal in hand, a weapon drawn, a class that does not cast): the engine's own movement, as before.
@@ -1217,16 +1219,16 @@ namespace Sim {
             for (std::size_t i = 0; i < areas.size();) {
                 Area& a = areas[i]; Body* o = Find(a.src);
                 if (now >= a.until || !o || !o->alive) { areas[i] = areas.back(); areas.pop_back(); continue; }
-                if (a.follows) { a.x = o->c.x; a.y = o->c.y; }
+                if (a.follows) { a.x = o->c.x; a.y = o->c.y; a.z = o->c.z; }
                 const bool mine = o->ctl == 0; if (mine) t.areaUpSec += TM::dt;
-                for (Body& q : b) { if (!Up(q) || std::hypot(q.c.x - a.x, q.c.y - a.y) > a.r) continue;
+                for (Body& q : b) { if (!Up(q) || (env ? !EnvInBlast(*this, a.x, a.y, a.z, a.r, q) : std::hypot(q.c.x - a.x, q.c.y - a.y) > a.r)) continue;   // SIM V4: in 3D, and not through a wall or a floor
                     if (a.hostile) {
                         if (q.Party() != o->Party()) { if (mine) t.areaFoeSec += TM::dt;
                             const float el = a.av >= 0 ? std::clamp(ResistOf(q, a.av) / 100.0f, -1.0f, 1.0f) : 0.0f; Hurt(q, a.perSec * TM::dt * (1.0f - el) * (1.0f - std::clamp(ResistOf(q, kAvResistMagic) / 100.0f, -1.0f, 1.0f)), o, false); }
                         else if (&q != o && mine) t.areaAllySec += TM::dt;   // an ally stands in his hostile area (a cloak does not burn a friend; the tally is the positioning question)
                     } else if (q.Party() == o->Party()) q.armorBuff = std::max(q.armorBuff, a.armor);
                 }
-                if (mine && !a.hostile && !a.follows && Up(*o) && std::hypot(o->c.x - a.x, o->c.y - a.y) > a.r) t.areaOutSec += TM::dt;
+                if (mine && !a.hostile && !a.follows && Up(*o) && (env ? !EnvInBlast(*this, a.x, a.y, a.z, a.r, *o) : std::hypot(o->c.x - a.x, o->c.y - a.y) > a.r)) t.areaOutSec += TM::dt;
                 ++i;
             }
         }
@@ -1253,7 +1255,7 @@ namespace Sim {
                 if (x.ctl == 0 && iaus) { ++t.areaOwnCasts; for (const Area& a : areas) if (a.src == me) { ++t.areaRecast; break; } }
                 for (std::size_t i = 0; i < areas.size();) { if (areas[i].src == me && areas[i].spell == si) { areas[i] = areas.back(); areas.pop_back(); } else ++i; }   // the same spell again replaces its area
                 const double until = now + static_cast<double>(s->areaDur > 0.0f ? s->areaDur : 60.0f);
-                areas.push_back({ x.c.x, x.c.y, s->e.areaUnits, until, me, s->areaKind == 1, s->areaDps > 0.0f, s->areaDps, s->areaArmor, s->e.resistAv, si });
+                areas.push_back({ x.c.x, x.c.y, s->e.areaUnits, until, me, s->areaKind == 1, s->areaDps > 0.0f, s->areaDps, s->areaArmor, s->e.resistAv, si }); areas.back().z = x.c.z;
                 if (x.ctl >= 0) ctl[static_cast<std::size_t>(x.ctl)].active[static_cast<std::size_t>(si)].push_back({ me, until });
                 if (trace) std::fprintf(trace, "%7.2f  AREA %s: %s, %.0f units, %s, %.0f s\n", now, x.c.name.c_str(), s->e.name.c_str(), s->e.areaUnits, s->areaKind == 1 ? "moves with him" : "fixed here", until - now);
                 return;
@@ -1319,7 +1321,7 @@ namespace Sim {
             if (s->e.areaUnits > 0) {   // everyone inside the blast, friend or foe (marth: never splash the party)
                 if (a->ctl == 0 && sh.fromIaus) ++t.areaCasts;
                 const float cx = Up(*d) ? d->c.x : sh.x, cy = Up(*d) ? d->c.y : sh.y;
-                for (auto& o : b) { if (!Up(o) || &o == a) continue; if (std::hypot(o.c.x - cx, o.c.y - cy) > s->e.areaUnits) continue;
+                for (auto& o : b) { if (!Up(o) || &o == a) continue; if (env ? !EnvInBlast(*this, cx, cy, d->c.z, s->e.areaUnits, o) : std::hypot(o.c.x - cx, o.c.y - cy) > s->e.areaUnits) continue;
                     if (o.Party() == a->Party()) { if (a->ctl == 0 && sh.fromIaus) ++t.splashAllyHits; SpellHit(*a, *s, o, false, 0.5f); }   // friendly fire at half (MODEL)
                     else SpellHit(*a, *s, o, sh.fromIaus); }
             } else if (!aimedMiss) SpellHit(*a, *s, *d, sh.fromIaus);
@@ -1351,7 +1353,7 @@ namespace Sim {
                     // SIM V4 `caststart` (iaus-sim-v4.md 5; cast/CastOn.cpp OffenseNeverStartedFightLong / ...WindowMs): an offense claim on a row no seat
                     // starts NEVER fires. It holds his hand for the short window, is released, and the spell is held off for the fight on every
                     // target. --seats all = the lab as if Harbinger seated every row.
-                    if (g_v4.caststart && nat == 0 && x.ctrlLive && !g_seatsAll && RowNeverStarts(s.row) && s.e.source == SpellSource::Spell) { Ctl& dc = ctl[static_cast<std::size_t>(x.ctl)];
+                    if (g_v4.caststart && nat == 0 && x.ctrlLive && g_seatsOld && RowNeverStarts(s.row) && s.e.source == SpellSource::Spell) { Ctl& dc = ctl[static_cast<std::size_t>(x.ctl)];
                         x.hitAt = -1; x.actEnd = now + static_cast<double>(kNeverShortSec); x.claimUntil = x.actEnd; dc.csHeld.push_back(static_cast<std::uint64_t>(s.e.form) << 32);
                         if (x.ctl == 0) { ++t.castUnseated; ++t.castNeverShort; ++t.castHeldOff; t.neverSec += kNeverShortSec; }
                         if (trace) std::fprintf(trace, "%7.2f  NEVER STARTED %s: %s keys the %s row, no seat starts it. Released after %.1f s, held off this fight\n", now, x.c.name.c_str(), s.e.name.c_str(), kSimRowName[s.row], static_cast<double>(kNeverShortSec));
@@ -1486,7 +1488,7 @@ namespace Sim {
             if (c && c->drawn == PostureKind::Staff && now >= x.think) {   // a drawn staff is fired by the engine AI while it has a charge
                 for (std::size_t i = 0; i < c->book.entries.size(); ++i) { const SpellEntry& e = c->book.entries[i];
                     if (e.source != SpellSource::Staff || !e.charged) continue;
-                    if (!los || d > 2000.0f) { Move(x, tg->c.x, tg->c.y, x.spec->run); return; }
+                    if (!los || d > 2000.0f) { Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); return; }
                     if (LofGuarded(x, c->build->spells[i])) if (const Body* blocker = LofBlocker(x, *tg, c->build->spells[i].e.areaUnits)) { StrafeFrom(x, *tg, *blocker); break; }   // SIM V3: the staff's start is refused too
                     StartCast(x, static_cast<int>(i), c->build->spells[i], tg->c.id, 0.0f, false); x.think = x.actEnd + RU(x, 28, TM::thinkMin, TM::thinkMax); return; }
             }
@@ -1500,7 +1502,7 @@ namespace Sim {
                     const float want = 750.0f;
                     float far = want * 1.4f;   // the lab's standoff before card H4
                     if (g_t2.range && c) { const float des = HandRange(x, *c, tg); if (des > 0.0f) far = std::min(far, des * Reposition::kCloseSlack); }   // H4 is a BOUND (apmf/RangeApproach.cpp, Reposition.h RangeToHold: "stay inside R"): it can make him close sooner (a touch spell, a short stream), it never holds him back from the engine's own standoff
-                    if (!los || d > far) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); }
+                    if (!los || d > far) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); }
                     else if (d < 320.0f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true);
                     return;
                 }
@@ -1512,7 +1514,7 @@ namespace Sim {
                 // distance the pick allowed (Tuning::bowWeaponRange); without one he waits.
                 const bool far = g_v3.chase && c && c->steerNoApproach && c->steer == tg->c.id;
                 if (far && !los) return;
-                if (!far && (!los || d > r.rangedDist * 1.6f)) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); return; }
+                if (!far && (!los || d > r.rangedDist * 1.6f)) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); return; }
                 if (d < r.rangedMin && st.fallback > 0.05f) { Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true); }
                 if (now >= x.think) {
                     const Weapon& w = x.spec->ranged; float draw = w.anim == 9 ? TM::crossbowReload : TM::bowNock + r.bowDraw / std::max(0.3f, w.speed) * 0.6f + RU(x, 30, TM::bowHoldMin, TM::bowHoldMax) * 0.5f;
@@ -1529,7 +1531,7 @@ namespace Sim {
             if ((g_foeStyles || g_v3.stance) && x.role == Role::Foe && now < x.backUntil) { Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true); return; }
             // melee
             const float reach = Reach(x);
-            if (c && c->leash > 0.0f && d > reach && Dist(x, b[0]) > c->leash && Dist(*tg, b[0]) > c->leash) { if (!(env && Dist(x, b[0]) <= c->leash + kLeashStandU)) Move(x, b[0].c.x, b[0].c.y, x.spec->run); return; }   // ch.23: no pursuit past the leash (SIM V4: just past it he stands)
+            if (c && c->leash > 0.0f && d > reach && Dist(x, b[0]) > c->leash && Dist(*tg, b[0]) > c->leash) { if (!(env && Dist(x, b[0]) <= c->leash + kLeashStandU)) Move(x, b[0].c.x, b[0].c.y, x.spec->run, false, &b[0]); return; }   // ch.23: no pursuit past the leash (SIM V4: just past it he stands)
             // THE 128 APPROACH UP A LEDGE (field 11-17, scheduler/IausSource.cpp: when every foe is out of the blade's reach the offense approach is filed at the
             // touch standoff 128 on the foe's reference and the ENGINE paths it, "which is what climbs a tower"). MODEL: a ledge with a way up
             // (FightSpec::perchPath) is climbed once he is within 128 units of the point under it, along a path three times its height (ASSUMPTION: a
@@ -1538,8 +1540,8 @@ namespace Sim {
                 x.c.z = std::min(tg->c.z, x.c.z + x.spec->run * TM::dt / 3.0f); x.climbAt = now; x.movedAt = now; if (x.c.z < tg->c.z) return; }
             else if (c && !env && x.c.z > 0.0f && tg->perch && c->steer == tg->c.id) x.climbAt = now;   // on the ledge with him: he stays up
             float slotX = tg->c.x, slotY = tg->c.y; if (g_v3.stance) SlotPoint(x, *tg, reach * 0.8f, slotX, slotY);   // SIM V3: attackers spread around their target
-            if (d > reach * 0.9f || tg->c.outOfMeleeReach || (env && !EnvMeleeClear(*this, x, *tg))) { if (!tg->c.outOfMeleeReach) Move(x, slotX, slotY, x.spec->run); else if (d > 400) Move(x, tg->c.x, tg->c.y, x.spec->run * 0.5f); return; }
-            if (now < x.think) { if ((slotX != tg->c.x || slotY != tg->c.y) && std::hypot(slotX - x.c.x, slotY - x.c.y) > 60.0f) Move(x, slotX, slotY, x.spec->run * 0.55f); return; }
+            if (d > reach * 0.9f || tg->c.outOfMeleeReach || (env && !EnvMeleeClear(*this, x, *tg))) { if (!tg->c.outOfMeleeReach) Move(x, slotX, slotY, x.spec->run, false, tg); else if (d > 400) Move(x, tg->c.x, tg->c.y, x.spec->run * 0.5f, false, tg); return; }
+            if (now < x.think) { if ((slotX != tg->c.x || slotY != tg->c.y) && std::hypot(slotX - x.c.x, slotY - x.c.y) > 60.0f) Move(x, slotX, slotY, x.spec->run * 0.55f, false, tg); return; }
             const bool tgBlocking = now < tg->blockUntil, tgStag = now < tg->staggerUntil, tgCasting = tg->act == Act::Cast && tg->hitAt >= 0;
             const Weapon& w = x.spec->melee;
             Act kind = Act::Swing;
@@ -1584,15 +1586,15 @@ namespace Sim {
             const float d = Dist(x, *tg); const bool los = Sees(x, *tg); const Rules& r = D->rules;
             if (x.casterMode) {   // the stance his last free step fought in (a caster with a blade drawn closes like a blade, also while he casts)
                 float far = 750.0f * 1.4f; if (g_t2.range) { const float des = HandRange(x, c, tg); if (des > 0.0f) far = std::min(far, des * Reposition::kCloseSlack); }
-                if (!los || d > far) { if (g_t2.c8 && LeashTurn(x, &c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); }
+                if (!los || d > far) { if (g_t2.c8 && LeashTurn(x, &c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); }
                 else if (d < 320.0f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true);
             } else if (c.drawn == PostureKind::Bow) {
-                if (!los || d > r.rangedDist * 1.6f) { if (g_t2.c8 && LeashTurn(x, &c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run); }
+                if (!los || d > r.rangedDist * 1.6f) { if (g_t2.c8 && LeashTurn(x, &c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); }
                 else if (d < r.rangedMin && StyleOf(x).fallback > 0.05f) Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true);
             } else if (c.drawn != PostureKind::Staff) {   // Melee, Silver, or bare hands (Brain's hasMelee)
                 const float reach = Reach(x);
-                if (c.leash > 0.0f && d > reach && Dist(x, b[0]) > c.leash && Dist(*tg, b[0]) > c.leash) { if (!(env && Dist(x, b[0]) <= c.leash + kLeashStandU)) Move(x, b[0].c.x, b[0].c.y, x.spec->run); return; }
-                if (d > reach * 0.9f && !tg->c.outOfMeleeReach) Move(x, tg->c.x, tg->c.y, x.spec->run);
+                if (c.leash > 0.0f && d > reach && Dist(x, b[0]) > c.leash && Dist(*tg, b[0]) > c.leash) { if (!(env && Dist(x, b[0]) <= c.leash + kLeashStandU)) Move(x, b[0].c.x, b[0].c.y, x.spec->run, false, &b[0]); return; }
+                if (d > reach * 0.9f && !tg->c.outOfMeleeReach) Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg);
             }
         }
 

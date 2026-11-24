@@ -360,14 +360,17 @@ namespace Sim {
     [[nodiscard]] inline float PowerStamina(const Rules& r, const Weapon& w) { return (r.powStaBase + w.weight * r.powStaMult) * r.powStaPenalty; }
 
     // SIM V4: THE ENGINE ROWS THE LAB TELLS APART (native cast/Actuation.h EngineRow, cast/Archetype.cpp kRows). Seated = any row Harbinger seats a
-    // caster for. kSimUnseated mirrors cast/Archetype.cpp kUnseatedRows; Script is not unseated but no seat STARTS it (cast/CastOn.cpp
-    // OffenseNeverStartedFightLong). To add a row: a value here, its key in SimRowOf, and (when no seat starts it) kSimNeverStarts.
+    // caster for. SEATS TODAY (Harbinger ABI 46, 2026-11-23): Stagger, Disarm, TargetEffect and Paralyze ARE seated, so by default no row is refused.
+    // `--seats old` is the game before ABI 46: kSimOldUnseated never start (cast/Archetype.cpp kUnseatedRows as it was). A Script row is never
+    // refused: it takes the measured unfired chance like any other, with the SHORT window and a fight-long hold after one failure (review F5).
+    // NOT MIRRORED YET: MFO's adopt-seats will-work (keyed effect, level caps, no reach cap) and its two-zero-fires hold (native/cast/SeatRows.h,
+    // not on main when this was written). To add a row: a value here and its key in SimRowOf.
     enum SimRow : int { kRowNone = 0, kRowSeated, kRowStagger, kRowDisarm, kRowTargetEffect, kRowParalyze, kRowScript, kRowReanimate };
     inline constexpr const char* kSimRowName[] = { "none", "seated", "Stagger", "Disarm", "TargetEffect", "Paralyze", "Script", "Reanimate" };
-    inline constexpr int kSimNeverStarts[] = { kRowStagger, kRowDisarm, kRowTargetEffect, kRowParalyze, kRowScript, kRowReanimate };
-    [[nodiscard]] inline bool RowNeverStarts(int row) { for (int r : kSimNeverStarts) if (r == row) return true; return false; }
+    inline constexpr int kSimOldUnseated[] = { kRowStagger, kRowDisarm, kRowTargetEffect, kRowParalyze, kRowReanimate };
+    [[nodiscard]] inline bool RowNeverStarts(int row) { for (int r : kSimOldUnseated) if (r == row) return true; return false; }   // read only under --seats old
     // cast/CastOn.cpp OffenseNeverStartedFightLong, by name: the SHORT window and a fight-long hold after ONE failure (also for a spell with no row).
-    [[nodiscard]] inline bool RowFightLong(int row) { return row == kRowNone || RowNeverStarts(row); }
+    [[nodiscard]] inline bool RowFightLong(int row) { return row == kRowNone || row == kRowScript; }
     inline constexpr float kNeverShortSec = 4.0f, kNeverLongSec = 6.5f;   // apmf/APMFBridge.h kHealClaimNeverObservedCapMs 4000 / kHoldLastSeenCapMs 6500
     // One effect's row (kRows, the keys the lab's extract can tell: archetype, AV, self delivered, hostile).
     [[nodiscard]] inline int SimRowOf(int arch, int av, bool self, bool hostile) {

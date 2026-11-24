@@ -67,7 +67,7 @@ namespace {
             if (t.minTgtDist < 1e8) { minTgtSum += t.minTgtDist; ++minTgtN; }
             // sim v4
             S(pathLegs); S(pathUnreach); S(pathBlocked); S(pathReblock); S(pathStuckLegs); S(pathOsc); S(pathDrops); S(pathDoors); S(pathPlans); S(detourN); for (int k = 0; k < 16; ++k) S(detourHist[k]);
-            S(pathStuckSec); S(pathHoldUnreachSec); S(pathWalked); S(detourSum); S(envBad); S(envStuckForever);
+            S(pathStuckSec); S(pathHoldUnreachSec); S(pathWalked); S(detourSum); S(envBad); S(envStuckForever); S(pathAwaySec); S(pathCorneredSec); S(castHeldTurns);
             S(castUnseated); S(castNeverShort); S(castNeverLong); S(castHeldOff); S(castInterrupted); S(foeCastInterrupted); S(castOccRelease); S(neverSec); S(apprDrops); S(apprBlocked);
             S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined); S(scrollsUsed); S(extActions); S(moveOrderSec);
 #undef S
@@ -158,6 +158,7 @@ namespace {
           m["stuck%"] = 100.0 * s.pathStuckSec / up; m["reblock/f"] = double(s.pathReblock) / n; m["osc/min"] = double(s.pathOsc) / mins; m["unreach%"] = pct(double(s.pathUnreach), double(s.pathLegs));
           m["detour"] = s.detourN ? s.detourSum / double(s.detourN) : -1; { long acc = 0; double p90 = -1; for (int k = 0; k < 16 && s.detourN; ++k) { acc += s.detourHist[k]; if (double(acc) >= 0.9 * double(s.detourN)) { p90 = 1.0 + 0.25 * double(k + 1); break; } } m["detour.p90"] = p90; }
           m["holdUnreach.s/f"] = s.pathHoldUnreachSec / n; m["blocked/f"] = double(s.pathBlocked) / n; m["stuckLegs/f"] = double(s.pathStuckLegs) / n; m["legs/f"] = double(s.pathLegs) / n; m["plans/f"] = double(s.pathPlans) / n;
+          m["away%"] = 100.0 * s.pathAwaySec / up; m["cornered%"] = 100.0 * s.pathCorneredSec / up; m["cs.heldTurns/f"] = double(s.castHeldTurns) / n;
           m["doors/f"] = double(s.pathDoors) / n; m["drops/f"] = double(s.pathDrops) / n; m["walked/f"] = s.pathWalked / n; m["env.bad"] = double(s.envBad); m["env.stuckForever"] = double(s.envStuckForever);
           m["cs.unseated/f"] = double(s.castUnseated) / n; m["cs.neverShort/f"] = double(s.castNeverShort) / n; m["cs.neverLong/f"] = double(s.castNeverLong) / n; m["cs.heldOff/f"] = double(s.castHeldOff) / n; m["cs.never.s/f"] = s.neverSec / n;
           m["cs.intr/f"] = double(s.castInterrupted) / n; m["cs.foeIntr/f"] = double(s.foeCastInterrupted) / n; m["cs.occRel/f"] = double(s.castOccRelease) / n; m["appr.drop/f"] = double(s.apprDrops) / n; m["appr.block/f"] = double(s.apprBlocked) / n; }
@@ -257,7 +258,7 @@ namespace {
         if (!g_v3.Any() && !g_v4.Any()) return "";
         std::string o = std::string(lead) + (g_v4.Any() ? "world=v4" : "world=v3");
         if (g_v4.Any()) { std::string d; for (const V4Flag& f : kV4Flags) if ((g_v4.*(f.m)) != f.def) d += std::string(d.empty() ? "" : ",") + f.name + (f.def ? "=off" : "=on");
-            if (!d.empty()) o += "[" + d + "]"; if (g_v4.env) o += "+env=" + g_envLabel; if (g_seats != "today") o += "+seats=" + g_seats; o += g_sightTag; } std::string off; for (const V3Flag& f : kV3Flags) if (!(g_v3.*(f.m))) off += std::string(off.empty() ? "" : ",") + f.name + "=off";
+            if (!d.empty()) o += "[" + d + "]"; if (g_v4.env) { char hx[24]; std::snprintf(hx, sizeof hx, "#%08llx", static_cast<unsigned long long>(g_envPool.Hash() & 0xFFFFFFFFull)); o += "+env=" + g_envLabel + hx; } if (g_seats != "today") o += "+seats=" + g_seats; o += g_sightTag; } std::string off; for (const V3Flag& f : kV3Flags) if (!(g_v3.*(f.m))) off += std::string(off.empty() ? "" : ",") + f.name + "=off";
         if (!off.empty()) o += "(" + off + ")";
         if (g_v3.chase && g_waiver != 2) o += g_waiver == 1 ? "+waiver=self" : "+waiver=none"; if (g_v3.delivery && g_deliveryOld) o += "+delivery=old";
         if (!g_mirror) o += "+mirror=off"; if (g_v3.chase && g_engageOnSight) o += "+engage-on-sight"; if (g_v3.delivery && g_deliverSec[0] >= 0.0f) o += "+deliver-sec"; if (g_v3.delivery && g_deliverSec[0] < 0.0f && g_deliverUnfired != 1.0f) o += "+deliver-unfired"; if (g_v3.blockdir && g_blockArc != 180.0f) o += "+block-arc"; if (g_v3.sidestep && g_sideStep == 2) o += "+side-step=away"; if (g_casterPressure) o += "+caster-pressure";
@@ -419,7 +420,8 @@ namespace {
     int g_damageBracket = 0;   // --damage-bracket <name>: which strength bracket the report's fights are drawn in (default natural)
     // ── SIM V4: THE PATHING GATE (iaus-sim-v4.md 2.5, 8.5). `--path-report N`: N natural fights per class and per ENVIRONMENT CLASS of the run's
     // pool, the six odd-pathing numbers, each against its bound. A bound is the ORACLE's value on the same fights plus the row's margin when
-    // `--path-oracle K` plays the first K fights of each cell with the class oracle too (the ORCPATH lines, the ORCSURV pattern of Playstyles.h).
+    // `--path-oracle K` plays the first K fights of each cell with the class oracle too (the ORCPATH lines, the ORCSURV pattern of Playstyles.h),
+    // and the gate then reads IAUS on those same K fights. NOT A TUNE GATE YET: until an oracle pass has written measured bounds the driver must not read it.
     // Without it the bound is the row's own value. THOSE VALUES ARE PLACEHOLDERS: no oracle pass has measured them on this world yet (that is one of
     // the pre-tune measurements, iaus-sim-v4.md 10.3 item 3). To change a gate: edit kPathBounds, nothing else. `--path-gate` makes a FAIL the exit code.
     struct PathBound { const char* metric; double bound, margin; const char* why; };
@@ -440,20 +442,20 @@ namespace {
         int fails = 0, cells = 0; long bad = 0, forever = 0; double cpu = 0; long fightsRun = 0;
         for (const std::string& ec : ecs) {
             std::vector<const SimEnv*> sub; for (const SimEnv* e : g_envPool.draw) if (e->cls == ec) sub.push_back(e);
-            struct Cell { Agg iaus, orc; }; std::vector<Cell> cell(scope.size()); std::mutex mx; std::atomic<int> next{ 0 }; const int jobs = static_cast<int>(scope.size()) * n;
+            struct Cell { Agg iaus, pair /* IAUS on the fights the oracle also played (review F9) */, orc; }; std::vector<Cell> cell(scope.size()); std::mutex mx; std::atomic<int> next{ 0 }; const int jobs = static_cast<int>(scope.size()) * n;
             auto work = [&]() { tl_envDraw = &sub; for (;;) { const int job = next.fetch_add(1); if (job >= jobs) break; const int ci = job / n, f = job % n; int gi = 0; for (std::size_t i = 0; i < all.size(); ++i) if (all[i].name == scope[static_cast<std::size_t>(ci)].name) gi = static_cast<int>(i);
                     Rng R; R.g.seed(seed * 1000003ULL + std::uint64_t(gi) * 7919 + std::uint64_t(f) * 32452843ULL + 0x9A7A11ULL);
                     Fight F = RandomFight(D, scope[static_cast<std::size_t>(ci)], 1 + f % 5, kBrackets[0], R, t1); F.estimates = estimates; F.scrollRoad = scrollRoad; Fight G = F;
                     if (const char* tr = std::getenv("SIM_PATHTRACE"); tr && std::atoi(tr) == job && ec == (std::getenv("SIM_PATHTRACE_ENV") ? std::getenv("SIM_PATHTRACE_ENV") : ec)) F.trace = stdout;   // diagnostic: one fight's event trace (use --threads 1)
                     const auto t0 = std::chrono::steady_clock::now(); RunMode(F); const double sec = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); const double u = Utility(F);
                     double uO = 0; const bool orc = f < oracleN; if (orc) { OraclePolicy O; O.cfg = oc; O.cfg.allFollowers = false; RunFight(G, O); uO = Utility(G); }
-                    std::scoped_lock lk(mx); Cell& c = cell[static_cast<std::size_t>(ci)]; c.iaus.uSum += u; c.iaus.Add(F.t, false); cpu += sec; ++fightsRun; if (orc) { c.orc.uSum += uO; c.orc.Add(G.t, false); } }
+                    std::scoped_lock lk(mx); Cell& c = cell[static_cast<std::size_t>(ci)]; c.iaus.uSum += u; c.iaus.Add(F.t, false); cpu += sec; ++fightsRun; if (orc) { c.orc.uSum += uO; c.orc.Add(G.t, false); c.pair.uSum += u; c.pair.Add(F.t, false); } }
                 tl_envDraw = nullptr; };
             { std::vector<std::thread> th; for (int i = 0; i < threads; ++i) th.emplace_back(work); for (auto& x : th) x.join(); }
             std::printf("\n%-28s (%zu place%s)  %9s %9s %9s %9s %9s %9s %9s %7s\n", ec.c_str(), sub.size(), sub.size() == 1 ? "" : "s", "stuck%", "reblock/f", "osc/min", "unreach%", "detour90", "holdUnr.s", "U", "gate");
-            for (std::size_t ci = 0; ci < scope.size(); ++ci) { const auto m = Metrics(cell[ci].iaus); std::map<std::string, double> mo; if (oracleN > 0) mo = Metrics(cell[ci].orc);
+            for (std::size_t ci = 0; ci < scope.size(); ++ci) { const auto m = Metrics(cell[ci].iaus); std::map<std::string, double> mo, mp; if (oracleN > 0) { mo = Metrics(cell[ci].orc); mp = Metrics(cell[ci].pair); }
                 bad += static_cast<long>(m.at("env.bad")); forever += static_cast<long>(m.at("env.stuckForever")); std::string why; ++cells;
-                for (const PathBound& b : kPathBounds) { const double v = m.at(b.metric), lim = oracleN > 0 ? std::max(0.0, mo.at(b.metric)) + b.margin : b.bound;
+                for (const PathBound& b : kPathBounds) { const double v = oracleN > 0 ? mp.at(b.metric) : m.at(b.metric), lim = oracleN > 0 ? std::max(0.0, mo.at(b.metric)) + b.margin : b.bound;
                     if (oracleN > 0) std::printf("ORCPATH %s %s %s  iaus %.3f  oracle %.3f  bound %.3f\n", scope[ci].name.c_str(), ec.c_str(), b.metric, v, mo.at(b.metric), lim);
                     if (v > lim) { char t[96]; std::snprintf(t, sizeof t, "%s%s %.2f > %.2f", why.empty() ? "" : ", ", b.metric, v, lim); why += t; } }
                 if (m.at("env.bad") > 0) why += std::string(why.empty() ? "" : ", ") + "env.bad"; if (m.at("env.stuckForever") > 0) why += std::string(why.empty() ? "" : ", ") + "stuck forever";
@@ -770,7 +772,7 @@ int main(int argc, char** argv) {
 }
 static int RealMain(int argc, char** argv) {
     int disengageReport = 0, stealLab = 0;
-    std::string envFile, envSet, envClass; bool envTest = false, envList = false, pathGate = false; int pathReport = 0, pathOracle = 0;   // SIM V4
+    std::string envFile, envSet, envClass; bool envTest = false, envList = false, pathGate = false; int pathReport = 0, pathOracle = 0, soloWalk = 0;   // SIM V4
     std::vector<std::string> curveSpecs;
     int potCalibN = 0; std::string potWorthPath;
     const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, listUses = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = -1, gapScen = 2, ratingN = -1; bool ratingOnly = false, gapDump = false; int logiN = 0, logiK = 8; std::string logiPolicy = "baseline"; std::string logiUses; bool logiScore = false; int declineN = 0, damageN = 0;
@@ -794,12 +796,13 @@ static int RealMain(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--env-class") && i + 1 < argc) envClass = argv[++i];
         else if (!std::strcmp(argv[i], "--env-test")) envTest = true;
         else if (!std::strcmp(argv[i], "--env-list")) envList = true;
+        else if (!std::strcmp(argv[i], "--solo-walk") && i + 1 < argc) soloWalk = std::max(1, std::atoi(argv[++i]));
         else if (!std::strcmp(argv[i], "--path-report") && i + 1 < argc) pathReport = std::max(1, std::atoi(argv[++i]));
         else if (!std::strcmp(argv[i], "--path-oracle") && i + 1 < argc) pathOracle = std::max(0, std::atoi(argv[++i]));
         else if (!std::strcmp(argv[i], "--path-gate")) pathGate = true;
         else if (!std::strcmp(argv[i], "--sight") && i + 1 < argc) { const std::string v = argv[++i]; g_sightTag = "+sight=" + v;   // one sight layer at a time (2.4): walls=off | terrain=off | gap=<units>
             if (v == "walls=off") g_sightT.walls = false; else if (v == "terrain=off") g_sightT.terrain = false; else if (!v.compare(0, 4, "gap=")) g_sightT.gapU = g_sightT.gapExteriorU = static_cast<float>(std::atof(v.c_str() + 4)); else { std::fprintf(stderr, "--sight walls=off|terrain=off|gap=<units>\n"); return 2; } }
-        else if (!std::strcmp(argv[i], "--seats") && i + 1 < argc) { g_seats = argv[++i]; if (g_seats != "today" && g_seats != "all") { std::fprintf(stderr, "--seats today|all\n"); return 2; } g_seatsAll = g_seats == "all"; }
+        else if (!std::strcmp(argv[i], "--seats") && i + 1 < argc) { g_seats = argv[++i]; if (g_seats != "today" && g_seats != "old") { std::fprintf(stderr, "--seats today|old\n"); return 2; } g_seatsOld = g_seats == "old"; }
         else if (!std::strcmp(argv[i], "--v3") && i + 1 < argc) { std::string v = argv[++i]; std::size_t p0 = 0;
             while (p0 <= v.size()) { const std::size_t q = v.find(',', p0); const std::string tok = v.substr(p0, q == std::string::npos ? std::string::npos : q - p0); const std::size_t eq = tok.find('=');
                 const std::string nm = tok.substr(0, eq), val = eq == std::string::npos ? "on" : tok.substr(eq + 1); bool known = false;
@@ -963,7 +966,7 @@ static int RealMain(int argc, char** argv) {
     const std::vector<SimClass> t1(allClasses.begin(), allClasses.begin() + 3);
     if (printClasses) { PrintClassTable(allClasses); return 0; }
     // SIM V4: the places of this run. The fixtures are always loaded (the scenarios name them). --env / --env-set replace what an ordinary fight draws from.
-    if (g_v4.env || envTest || envList || pathReport) {
+    if (g_v4.env || envTest || envList || pathReport || soloWalk) {
         if (!LoadFixtures(g_envPool)) { std::fprintf(stderr, "cannot load the fixture environments from %s:", g_envDir.c_str()); for (const EnvSkip& k : g_envPool.skipped) std::fprintf(stderr, " %s (%s)", k.file.c_str(), k.why.c_str()); std::fprintf(stderr, "\n(python3 tools/iaus_sim/envs/make_fixtures.py writes them; SIM_ENV_DIR points elsewhere)\n"); return 2; }
         if (!envFile.empty() || !envSet.empty()) { g_envPool.draw.clear(); const std::size_t sk0 = g_envPool.skipped.size();
             if (!envFile.empty()) { if (!g_envPool.Add(envFile, true)) { std::fprintf(stderr, "--env %s: %s\n", envFile.c_str(), g_envPool.skipped.back().why.c_str()); return 2; } if (g_envPool.draw.empty()) g_envPool.draw.push_back(g_envPool.all.back().get()); g_envLabel = g_envPool.all.back()->name; }
@@ -974,6 +977,7 @@ static int RealMain(int argc, char** argv) {
                 std::printf("ENV %-44s %-28s %s tris %6zu comps %4u comp0 %5.1f%% doors %3zu entries %3zu spawns %3zu walls %6zu faces %5zu%s%s\n", e->name.c_str(), e->cls.c_str(), e->interior ? "int" : "ext", e->tris.size(), comps, 100.0 * double(e->tris0) / double(e->tris.size()), e->doors0.size(), e->entries.size(), e->spawns.size(), solid, face, e->defects ? " DEFECTS" : "", e->pool ? "" : " scenario-only"); }
             return 0; }
         if (envTest) return RunEnvTests(D, allClasses);
+        if (soloWalk) return RunSoloWalk(D, allClasses, soloWalk);
     }
     {   // B711: a class name that matches nothing is an error, never a silently empty scope
         const auto known = [&](const std::string& n) { for (const SimClass& c : allClasses) if (c.name == n) return true; return false; };
