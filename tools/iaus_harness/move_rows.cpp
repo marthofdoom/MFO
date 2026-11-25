@@ -693,6 +693,53 @@ namespace {
         }
     }
 
+    void LightRows() {
+        std::printf("\n== movement: light (S4) ==\n");
+        namespace L = Light; const Tuning& t = ShippedTuning(); const auto m = Build(kRoom);
+        {   // the field
+            L::Field f; L::Add(f, { { 100, 100, 0 }, 80.0f, 1.0 }); L::Add(f, { { 110, 100, 0 }, 10.0f, 2.0 }); L::Add(f, { { 110, 90, 0 }, 99.0f, 1.5 });
+            Row(f.samples.size() == 1 && f.samples[0].level == 10.0f, "one sample a cell, the freshest");
+            Row(L::At(f, { 110, 100, 0 }, 2.0, t).level == 10.0f && L::At(f, { 110, 100, 0 }, 2.0, t).conf > 0.9f, "a place beside a sample has its level");
+            Row(!L::At(f, { 110 + t.lightNearU, 100, 0 }, 2.0, t).Known() && !L::At(f, { 110, 100, t.lightStoreyU + 1 }, 2.0, t).Known(), "far off, or on another floor: unknown");
+            Row(!L::At(f, { 110, 100, 0 }, 2.0 + t.lightMaxAgeSec, t).Known() && !L::At(f, { 110 + 0.9f * t.lightNearU, 100, 0 }, 2.0, t).Known(), "too old, or worth too little: unknown, never a level");
+            L::Add(f, { { 300, 100, 0 }, 70.0f, 2.0 }); Row(L::At(f, { 280, 100, 0 }, 2.0, t).level == 70.0f && L::At(f, { 130, 100, 0 }, 2.0, t).level == 10.0f, "the nearest one answers");
+            L::Add(f, { { 1, 1, 1 }, std::numeric_limits<float>::quiet_NaN(), 2.0 }); L::Add(f, { { std::numeric_limits<float>::infinity(), 1, 1 }, 1.0f, 2.0 }); L::Add(f, { { 5000, 1, 1 }, -3.0f, 2.0 }); Row(f.samples.size() == 2, "a reader's bad number is no sample");
+            for (int i = 0; i < 600; ++i) L::Add(f, { { 1000.0f + 200.0f * static_cast<float>(i), 0, 0 }, 5.0f, 3.0 + i });
+            Row(f.samples.size() == L::kFieldSamples && f.samples.back().t == 602.0, "the memory is bounded, the oldest goes");
+            L::Decay(f, 602.0, t); Row(!f.samples.empty() && std::all_of(f.samples.begin(), f.samples.end(), [&](const auto& s) { return 602.0 - s.t < static_cast<double>(t.lightMaxAgeSec); }), "old samples are dropped");
+        }
+        {   // the engine's formula: the light term and the rest of it
+            L::DetectGmst g; L::DetectIn in; in.dist = 300; in.targetIsOsTarget = true; in.sneakingT = true; in.skillO = 30; in.skillT = 30; in.light = 0.0f; const auto dark = L::DetectLevel(g, in); in.light = 100.0f; const auto lit = L::DetectLevel(g, in);
+            const float d = 0.88f * 0.88f;
+            Row(std::fabs((lit.score - dark.score) - d * (L::DetectLightTerm(100.0f, false, g) - L::DetectLightTerm(0.0f, false, g))) < 1.0e-3f && lit.level > dark.level, "the score's light part is the light term times the distance factor");
+            Row(L::DetectLightTerm(1000.0f, false, g) == L::DetectLightTerm(g.lightMax, false, g) && L::DetectLightTerm(100.0f, true, g) > L::DetectLightTerm(100.0f, false, g), "... capped, and the exterior has its own factor");
+            in.losGeom = false; Row(L::DetectLevel(g, in).light == 0.0f, "no line of sight, no light part"); in.losGeom = true; in.invisible = true; Row(L::DetectLevel(g, in).light == 0.0f, "... nor for the invisible");
+        }
+        // the pass
+        const auto fight = [&](bool dark, float left, float right) {   // left half / right half of the room at these levels (< 0 = not known)
+            PartyPicture p; p.caps.pin = true; p.party = { Who(0x81, At(5, 6), { Act(Family::Disengage, 0, 0.8f, 0.0f, Sight::None) }) }; p.party[0].wantsDark = dark; p.party[0].sneakSkill = 40.0f; p.party[0].kinds = KindBit(SpotKind::Stay) | KindBit(SpotKind::Cover);
+            p.foes = { Bad(0x91, At(5, 3), 0x81) }; p.foes[0].faceY = 1.0f; p.foes[0].skill = 30.0f;
+            for (int y = 1; y < 8; ++y) for (int x = 1; x < 11; ++x) if (const float l = x < 6 ? left : right; l >= 0.0f) Light::Add(p.lightField, { At(static_cast<float>(x), static_cast<float>(y)), l, 0.0 });
+            return p; };
+        Tuning pin = t; pin.spotPinKinds = 1.0f;
+        const auto run = [&](PartyPicture p) { const auto r = Window(m, p, pin); return std::pair{ p, r }; };
+        {
+            const auto [pd, rd] = run(fight(true, 5.0f, 90.0f)); const auto [pl, rl] = run(fight(true, 90.0f, 5.0f)); const auto [pn, rn] = run(fight(false, 90.0f, 5.0f)); const auto [pu, ru] = run(fight(true, -1.0f, -1.0f)); const auto [p0, r0] = run(fight(false, -1.0f, -1.0f));
+            const auto x = [](const Ran& r) { return Of(r, 0x81)->p.x / kCell; };
+            Row(Of(rd, 0x81)->spot >= 0 && Of(rl, 0x81)->spot >= 0 && x(rd) < 6.0f && x(rl) > 6.0f, "who wants the dark takes cover on the dark side, whichever it is");
+            Row(Same(rn.as, r0.as), "a member who does not want the dark reads no light at all");
+            Row(Of(ru, 0x81)->key == Of(r0, 0x81)->key && Of(ru, 0x81)->score == Of(r0, 0x81)->score, "unknown light everywhere: the same place and the same score as without the layer");
+            PartyPicture k = fight(true, 90.0f, 90.0f); Env::Scratch s; std::vector<RayAsk> q; std::vector<Assignment> as; MP::Freeze(k, m.Get(), pin); while (!MP::Phase1(k, m.Get(), s, &NoClass, pin, q, 1.0e9f)) {} PartyPicture j = k;
+            for (const auto& sp : k.pool) k.light.push_back({ sp.key, 1.0f });
+            MP::Phase3(k, &NoClass, pin, as); const float with = as[0].score; MP::Phase3(j, &NoClass, pin, as); Row(with > as[0].score, "a sampler's answer at the spot wins over the field");
+        }
+        {   // the facts through the score
+            const Profile p; SpotFacts f; f.pathSec = 1.0f; const float u = ScoreSpot(f, Family::Step, p, t);
+            SpotFacts a = f, b = f, c = f; a.detected = 0.0f; b.detected = 1.0f; c.pathLitSec = 2.0f;
+            Row(ScoreSpot(a, Family::Step, p, t) > ScoreSpot(b, Family::Step, p, t) && ScoreSpot(c, Family::Step, p, t) < u, "a place he is detected at, and a walk over lit floor, score lower");
+        }
+    }
+
     // ── golden vectors ──
     struct Scene { std::string name; std::function<std::pair<MD::Mesh, PartyPicture>()> make; std::vector<std::pair<std::string, float>> tuning = {}; };
     std::vector<Scene> Scenes() {
@@ -713,6 +760,10 @@ namespace {
                 for (int i = 0; i < 2; ++i) Trust::Note(p.trust, Trust::Sign::NoGround, 0x61, At(5.4f, 2), At(9, 2), -4.0 + 2.0 * i);
                 Trust::Note(p.trust, Trust::Sign::LengthFar, 0x62, At(9, 6), At(10, 6), -1.0, 900.0f, 1700.0f); p.trust.refused.push_back({ 0x62, KeyOfPoint(20, 0), -1.0 });
                 p.trust.trail.push_back({ At(3, 5), -1.0 }); return std::pair{ m, p }; } },
+            { "light", [] { PartyPicture p = RoomFight(); p.caps.pin = true; p.t = 1.0; p.exterior = true;   // S4: a hunted thief in a half lit room, a sampler's answer, another member who reads none of it
+                p.party[1].top[0] = Act(Family::Disengage, 0, 0.8f, 0.0f, Sight::None); p.party[1].nTop = 1; p.party[1].wantsDark = true; p.party[1].sneakSkill = 45.0f; p.foes[0].target = 0x12; p.foes[0].faceY = 1.0f; p.foes[0].skill = 35.0f; p.foes[1].skill = 20.0f; p.foes[1].faceX = 0.6f; p.foes[1].faceY = 0.8f;
+                for (int y = 1; y < 8; ++y) for (int x = 1; x < 9; ++x) Light::Add(p.lightField, { At(static_cast<float>(x), static_cast<float>(y)), 7.0f + 9.0f * static_cast<float>(x), 0.1 * y });
+                p.light.push_back({ KeyOfPoint(3, 0), 44.0f }); return std::pair{ Build(kRoom), p }; }, { { "t.spotPinKinds", 1.0f } } },
             { "class_room", [] { PartyPicture p = RoomFight(); for (auto& m : p.party) m.classId = 1; p.foes[0].target = 0x12; return std::pair{ Build(kRoom), p }; } },
         };
     }
@@ -755,13 +806,13 @@ namespace {
             Row(asked && exact && worst <= 1.0e-4f, b);
             ++cases;
         }
-        Row(err.empty() && cases == 24, "every golden case was read");
+        Row(err.empty() && cases == 27, "every golden case was read");
     }
 }
 
 int MoveRows(const char* a_golden, bool a_write) {
     g_bad = 0;
-    Determinism(); Tunables(); Scoring(); Behaviour(); Budgets(); Review(); TrustRows(); Golden(a_golden, a_write);
+    Determinism(); Tunables(); Scoring(); Behaviour(); Budgets(); Review(); TrustRows(); LightRows(); Golden(a_golden, a_write);
     return g_bad;
 }
 

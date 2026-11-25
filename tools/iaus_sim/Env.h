@@ -86,11 +86,11 @@ namespace Sim {
         bool interrupt = false;  // a stagger or a control effect on a charging caster ends the cast
         bool summons = false;    // a summon is its own actor (the list's NPC record), the engine's summon limit, eviction, the native gate (World.h LandSummon, SummonGate)
         bool hazards = false;    // what a spell's hazard does to who stands in it (World.h SpawnHazard, HazardStep)
-        bool light = false;      // S4 (movement-plan.md 3.4): a place's light layer, light spells, and every light fact (iaus/Light.h). OFF by default: every number of it is a placeholder
+        bool light = false;      // S4 (movement-plan.md 3.4): a place's light layer, light spells, and every light fact (iaus/Light.h). A place without a layer keeps the fight's one level
         bool drops = false;      // followers take the navmesh's drop links (NOT observed in game: off)
         bool foedrops = false;   // foes take them
         void AllOff() { *this = V4{}; }
-        void Defaults() { env = path = bodies = los = caststart = interrupt = summons = hazards = true; drops = foedrops = false; }
+        void Defaults() { env = path = bodies = los = caststart = interrupt = summons = hazards = light = true; drops = foedrops = false; }
         [[nodiscard]] bool Any() const { return env || path || bodies || los || caststart || interrupt || summons || hazards || light || drops || foedrops; }
     };
     inline V4 g_v4;

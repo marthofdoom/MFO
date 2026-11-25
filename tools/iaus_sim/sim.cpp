@@ -269,7 +269,7 @@ namespace {
     // SIM V4: the world's v4 part. " world=v4" when every default switch is on, plus what differs and where the places come from.
     struct V4Flag { const char* name; bool V4::* m; bool def; };
     inline constexpr V4Flag kV4Flags[] = { { "env", &V4::env, true }, { "path", &V4::path, true }, { "bodies", &V4::bodies, true }, { "los", &V4::los, true }, { "caststart", &V4::caststart, true }, { "interrupt", &V4::interrupt, true }, { "summons", &V4::summons, true }, { "hazards", &V4::hazards, true },
-                                           { "light", &V4::light, false }, { "drops", &V4::drops, false }, { "foedrops", &V4::foedrops, false } };
+                                           { "light", &V4::light, true }, { "drops", &V4::drops, false }, { "foedrops", &V4::foedrops, false } };
     std::string g_envLabel = "fixtures", g_seats = "today", g_sightTag;
     std::string WorldTag(const char* lead) {
         if (!g_v3.Any() && !g_v4.Any()) return "";
