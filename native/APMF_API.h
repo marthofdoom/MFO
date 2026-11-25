@@ -90,10 +90,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v47, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v48, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 47;
+    inline constexpr std::uint32_t kABIVersion = 48;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -862,6 +862,10 @@ namespace APMF_API {
                                     //   loud). Harbinger does not test the point: choosing a reachable one is
                                     //   the client's. GetCombatApproachState reports target 0 and the distance
                                     //   to the point. REFUSED at the call: a non-finite pos, a non-zero target.
+        kApproach_Strict = 1u << 2, // ABI v48. A STRICT MOVEMENT ORDER: the engine's own movement choice is answered
+                                    //   for this actor, so he goes to the point and stands on it. Requires
+                                    //   kApproach_Point | kApproach_Hold. See "ABI v48: STRICT MOVEMENT ORDER". Gate
+                                    //   on abiVersion >= 48 AND kMoveCaps_Strict: an APMF under v48 ignores the bit.
     };
 
     // ── Travel flags (kIntent_Travel's param.ival, ABI v10) ─────────────────────
@@ -2501,6 +2505,8 @@ namespace APMF_API {
         kApproachState_Refused     = 13,  // ENDED: a Repoint declared target 0, the actor itself, or a radius
                                           //   that is not a positive finite number (RequestEx refuses these
                                           //   synchronously; a Repoint is only seen on the game thread)
+        kApproachState_Unreachable = 14,  // ENDED (ABI v48, kApproach_Strict only): three counted blocks inside 10 s
+                                          //   with no progress toward the point
     };
 
     // GetCombatApproachState output. EXACT LAYOUT (byte-shared): 48 bytes, every field 4 bytes.
@@ -3328,12 +3334,13 @@ namespace APMF_API {
         std::uint32_t castSeats;     // +120 ABI v46: CastSeatCoverage bits, what this install's cast seats cover
                                      //      (every query, whatever its call). Was reserved[0]: an APMF under
                                      //      v46 writes 0 here, so read it only when abiVersion >= 46
-        std::uint32_t reserved;      // +124 zero (was reserved[1])
+        std::uint32_t moveCaps;      // +124 ABI v48: MoveCaps bits, what strict movement serves on this install (every
+                                     //      query). Was reserved[1]: an APMF under v48 writes 0 here
     };
     static_assert(sizeof(APMF_ServeInfo) == 128, "APMF_ServeInfo is 128 bytes, byte-shared with clients");
     static_assert(offsetof(APMF_ServeInfo, why) == 24, "APMF_ServeInfo layout is frozen");
     static_assert(offsetof(APMF_ServeInfo, castSeats) == 120, "APMF_ServeInfo layout is frozen");
-    static_assert(offsetof(APMF_ServeInfo, reserved) == 124, "APMF_ServeInfo layout is frozen");
+    static_assert(offsetof(APMF_ServeInfo, moveCaps) == 124, "APMF_ServeInfo layout is frozen");
     inline constexpr std::uint32_t kServeInfoV35Size = 128;
 
     // The v35 interface: APMF_API_v34's members verbatim (prefix EXTENSION), then ONE appended slot.
@@ -3962,6 +3969,170 @@ namespace APMF_API {
     // A Reanimate spell is served only with kCastFlag_CorpseTarget. A row whose coverage bit is clear, or a seat
     // whose facet another source outranks, keeps the engine's own answers: the bit does nothing there.
     // SERVED when APMF_ServeInfo::castSeats has kCastSeat_FireOnce ([CastSeats] EnableFireOnce, default 1).
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ABI v48: STRICT MOVEMENT ORDER (ch.24, kApproach_Strict)
+    // ═════════════════════════════════════════════════════════════════════════════
+    // A kIntent_CombatApproach claim with kApproach_Strict | kApproach_Point | kApproach_Hold carries an ORDER. While
+    // the actor fights, every time the engine asks itself what his MOVEMENT should be (4 times a second) Harbinger
+    // answers: go to the point, or stand. Only movement: his attacks, spells, blocks, target and equipment decide as
+    // in any fight. Flee and Hide are refused while the order stands. Flight, leaving water and essential down are
+    // the engine's and pass (MovePass). His own attacks may carry him off the point (a lunge): past leashR he is
+    // walked back at once. A higher-priority combat area (a package's hold position), a ch.23 leash and the ranking
+    // in APMF_Sources.ini win as for any ch.24 claim, the order then waits (kMovePhase_Yielded / NotCarried).
+    //
+    // FILING: RequestEx(actor, kIntent_CombatApproach, basis, {ival = Strict|Point|Hold, pos = the point,
+    // fval = leashR}). That is the implicit order {kMove_Stand, pos, leashR = fval, arriveR = kMoveDefaultArriveR}.
+    // SetMoveOrder changes it in place. Release ends it, the engine's next choice (0.25 s) is its own again.
+    // REFUSED at the call (kInvalidHandle, CanServe's `why`): the facet is not served ([MoveOrder] bStrictOrders=0, a
+    // runtime it is not verified on, a seat that failed its check), Strict without Point | Hold, fval below
+    // kMoveDefaultArriveR, the actor holds a combat substrate, or kMoveMaxOrders orders are live.
+    // It is never quietly served as a plain area claim.
+    // WHAT IS SERVED: APMF_ServeInfo::moveCaps, then SetMoveOrder's answer (kMoveOrder_ModeNotServed).
+    inline constexpr float         kMoveDefaultArriveR = 24.0f;
+    inline constexpr float         kMoveMinArriveR     = 8.0f;
+    inline constexpr std::uint32_t kMoveMaxWaypoints   = 7;
+    inline constexpr std::uint32_t kMoveMaxOrders      = 64;
+
+    // APMF_MoveOrder::mode. APPEND-ONLY.
+    enum MoveMode : std::uint32_t {
+        kMove_Free      = 0,   // the engine's own movement inside R (the plain ch.24 area)
+        kMove_Stand     = 1,   // go to pos, stand there, walk back when past leashR
+        kMove_GoTo      = 2,   // the same, and arrivedCount goes up once per order
+        kMove_Kite      = 3,   // as GoTo, always facing the foe
+        kMove_Disengage = 4,   // RESERVED: refused (kMoveOrder_ModeNotServed)
+        kMove_Path      = 5,   // 2 to kMoveMaxWaypoints points in order, stands at the last (kMoveCaps_Path)
+    };
+
+    // APMF_MoveOrder::flags. APPEND-ONLY. Any other bit is refused.
+    enum MoveFlags : std::uint32_t {
+        kMove_AttackInPlace = 1u << 0,   // refuse attacks whose end point is outside the leash (kMoveCaps_AttackInPlace).
+                                         //   Without it lunges are allowed and he is walked back
+        kMove_NoDodge       = 1u << 1,   // RESERVED: refused (kMoveOrder_BadFlags)
+        kMove_HoldAttacks   = 1u << 2,   // RESERVED: refused (kMoveOrder_BadFlags)
+    };
+
+    // GetMoveOrderState's answer. APPEND-ONLY.
+    enum MovePhase : std::uint32_t {
+        kMovePhase_None        = 0,   // no live strict order on this actor (none filed, or not in combat)
+        kMovePhase_Pending     = 1,   // live, the engine has not asked yet
+        kMovePhase_Travelling  = 2,   // on the way to the point
+        kMovePhase_Standing    = 3,   // inside, standing
+        kMovePhase_Returning   = 4,   // carried past leashR, walking back
+        kMovePhase_Blocked     = 5,   // the engine's path failed: he stands until the next try
+        kMovePhase_Yielded     = 6,   // something the order never overrides owns the movement (a higher-priority
+                                      //   combat area, flight, leaving water)
+        kMovePhase_NotCarried  = 7,   // his combat area does not carry the point: the engine's own movement runs
+        kMovePhase_Unreachable = 8,   // the claim is ending (kApproachState_Unreachable)
+    };
+
+    // SetMoveOrder's answer. APPEND-ONLY.
+    enum MoveOrderResult : std::uint32_t {
+        kMoveOrder_Ok            = 0,
+        kMoveOrder_NotInstalled  = 1,    // strict orders are not served on this install
+        kMoveOrder_BadHandle     = 2,    // not a live ch.24 claim (a claim is found from its first sweep on, about
+                                         //   100 ms after filing)
+        kMoveOrder_NotStrict     = 3,    // the claim has no kApproach_Strict
+        kMoveOrder_BadSize       = 4,    // null, or size below kMoveOrderV48Size
+        kMoveOrder_BadMode       = 5,
+        kMoveOrder_ModeNotServed = 6,    // a known mode this APMF does not serve through SetMoveOrder
+        kMoveOrder_BadFlags      = 7,    // an unknown or reserved flag, one this install does not serve, or a
+                                         //   non-zero faceTarget / reserved word
+        kMoveOrder_BadRadii      = 8,    // not finite, negative, arriveR < kMoveMinArriveR, or leashR < arriveR
+        kMoveOrder_BadPoint      = 9,    // not finite or beyond 4,000,000 units
+        kMoveOrder_BadWaypoint   = 10,   // an index / count out of range or out of sequence, or not 0 outside kMove_Path
+        kMoveOrder_WrongThread   = 11,   // not the game's main thread
+    };
+
+    // APMF_MoveOrderInfo::lastBlockWhy. APPEND-ONLY.
+    enum MoveBlockWhy : std::uint32_t {
+        kMoveBlock_None       = 0,
+        kMoveBlock_PathBuild  = 1,   // no path could be built
+        kMoveBlock_PathFollow = 2,   // a path was built and lost
+        kMoveBlock_ShortPath  = 3,   // the path ended outside leashR
+    };
+
+    // APMF_MoveOrderInfo::passedThrough: what the engine was let through for at its last choice. APPEND-ONLY.
+    enum MovePass : std::uint32_t {
+        kMovePass_EssentialDown = 1u << 0,
+        kMovePass_Flight        = 1u << 1,
+        kMovePass_ExitWater     = 1u << 2,
+    };
+
+    // APMF_ServeInfo::moveCaps. APPEND-ONLY.
+    enum MoveCaps : std::uint32_t {
+        kMoveCaps_Strict        = 1u << 0,   // kApproach_Strict is served (the implicit Stand order at least)
+        kMoveCaps_Path          = 1u << 1,   // kMove_Path
+        kMoveCaps_AttackInPlace = 1u << 2,   // kMove_AttackInPlace
+    };
+
+    // SetMoveOrder input. EXACT LAYOUT (byte-shared): 64 bytes, every field 4 bytes. The CALLER zero-initialises it
+    // and sets `size`. A larger struct is read up to 64.
+    struct APMF_MoveOrder {
+        std::uint32_t size;            // +0   sizeof(APMF_MoveOrder)
+        std::uint32_t mode;            // +4   a MoveMode
+        std::uint32_t flags;           // +8   MoveFlags
+        float         pos[3];          // +12  the point (kMove_Path: this call's waypoint). Not read for kMove_Free
+        float         leashR;          // +24  0 = the claim's R (param.fval)
+        float         arriveR;         // +28  0 = kMoveDefaultArriveR
+        RE::FormID    faceTarget;      // +32  must be 0 in ABI v48
+        std::uint32_t waypointIndex;   // +36  kMove_Path: which waypoint this call carries, 0 based. Else 0
+        std::uint32_t waypointCount;   // +40  kMove_Path: 2..kMoveMaxWaypoints. The order goes live with the call whose
+                                       //      index is count - 1, every earlier index sent in order for that count
+        std::uint32_t reserved[5];     // +44  zero
+    };
+    inline constexpr std::uint32_t kMoveOrderV48Size = 64;
+    static_assert(sizeof(APMF_MoveOrder) == 64, "APMF_MoveOrder is 64 bytes, byte-shared with clients");
+    static_assert(alignof(APMF_MoveOrder) == 4, "APMF_MoveOrder aligns to 4");
+    static_assert(offsetof(APMF_MoveOrder, pos)           == 12, "pos at +12");
+    static_assert(offsetof(APMF_MoveOrder, leashR)        == 24, "leashR at +24");
+    static_assert(offsetof(APMF_MoveOrder, faceTarget)    == 32, "faceTarget at +32");
+    static_assert(offsetof(APMF_MoveOrder, waypointIndex) == 36, "waypointIndex at +36");
+    static_assert(offsetof(APMF_MoveOrder, reserved)      == 44, "reserved at +44");
+
+    // GetMoveOrderState output. EXACT LAYOUT (byte-shared): 64 bytes, every field 4 bytes. The CALLER sets `size`;
+    // APMF fills the v48 fields when `size` >= kMoveOrderInfoV48Size (64, never changes) and writes nothing into a
+    // smaller struct. Counters run since the order (`gen`) went live and start over when it changes or resumes.
+    struct APMF_MoveOrderInfo {
+        std::uint32_t size;             // +0   the CALLER sets = sizeof(APMF_MoveOrderInfo)
+        std::uint32_t mode;             // +4   a MoveMode
+        std::uint32_t phase;            // +8   a MovePhase (the same value the call returns)
+        std::uint32_t flags;            // +12  MoveFlags
+        float         dist;             // +16  actor -> current target, 3D, at the engine's last choice (-1 = none yet)
+        std::uint32_t sinceMs;          // +20  ms of unpaused game time in this phase
+        std::uint32_t blockedCount;     // +24  counted blocks
+        std::uint32_t lastBlockWhy;     // +28  a MoveBlockWhy
+        std::uint32_t passedThrough;    // +32  MovePass bits at the engine's last choice
+        std::uint32_t waypoint;         // +36  kMove_Path: the current waypoint
+        std::uint32_t arrivedCount;     // +40  kMove_GoTo / Kite / Path: 1 once arrived, per order
+        std::uint32_t displacedCount;   // +44  times he was carried past leashR and walked back
+        std::uint32_t ownerHandle;      // +48  the claim
+        std::uint32_t gen;              // +52  the order's sequence (changes with every accepted order)
+        float         stopError;        // +56  distance at which a short stop was accepted, else 0
+        std::uint32_t displacedBlocks;  // +60  excused blocks (his body was busy: attack, stagger, scripted move)
+    };
+    inline constexpr std::uint32_t kMoveOrderInfoV48Size = 64;
+    static_assert(sizeof(APMF_MoveOrderInfo) == 64, "APMF_MoveOrderInfo is 64 bytes, byte-shared with clients");
+    static_assert(alignof(APMF_MoveOrderInfo) == 4, "APMF_MoveOrderInfo aligns to 4");
+    static_assert(offsetof(APMF_MoveOrderInfo, phase)         == 8,  "phase at +8");
+    static_assert(offsetof(APMF_MoveOrderInfo, dist)          == 16, "dist at +16");
+    static_assert(offsetof(APMF_MoveOrderInfo, passedThrough) == 32, "passedThrough at +32");
+    static_assert(offsetof(APMF_MoveOrderInfo, arrivedCount)  == 40, "arrivedCount at +40");
+    static_assert(offsetof(APMF_MoveOrderInfo, ownerHandle)   == 48, "ownerHandle at +48");
+    static_assert(offsetof(APMF_MoveOrderInfo, stopError)     == 56, "stopError at +56");
+
+    // The v48 interface: APMF_API_v38's members verbatim (prefix EXTENSION, v39..v47 added no slot), then TWO
+    // appended slots. BYTE-SHARED with MFO: mirror it byte-identically. Gate on `abiVersion >= 48` (INVARIANTS #14b).
+    struct APMF_API_v48 : APMF_API_v38 {
+        // Change the order of a live strict claim in place (no re-file, no arbitration). GAME MAIN THREAD ONLY.
+        // Returns a MoveOrderResult; anything but kMoveOrder_Ok changed nothing. A throw inside returns
+        // kMoveOrder_NotInstalled.
+        std::uint32_t (*SetMoveOrder)(Handle claim, const APMF_MoveOrder* order);
+
+        // The strict order on `actor`. Returns a MovePhase and, when `out` is non-null and `out->size` covers the v48
+        // layout, fills `*out`. ANY THREAD, lock-free. A throw inside returns kMovePhase_None, nothing written.
+        std::uint32_t (*GetMoveOrderState)(RE::FormID actor, APMF_MoveOrderInfo* out);
+    };
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the
     // base type; a client that asked for ABI >= N checks p->abiVersion and casts up

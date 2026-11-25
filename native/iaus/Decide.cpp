@@ -1,9 +1,11 @@
 // iaus/Decide.cpp -- one tick's decision (design 4.4-4.8 and 5.1): ranking with ties, momentum, the commitment
 // window, the act floor, the rapport-sharpness pick, the walk order, and the Mind bookkeeping. PURE (iaus/Core.h).
 #include "iaus/Iaus_internal.h"
+#include "iaus/Light.h"   // S4: whom a light goes to first
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <tuple>
 
@@ -25,6 +27,33 @@ namespace MFO::Iaus {
 
         auto TieKey(const Candidate& c) {
             return std::make_tuple(static_cast<int>(c.family), static_cast<int>(c.f.posture), c.form, c.target);
+        }
+    }
+
+    namespace {
+        // S4: what a light never comes before (marth: "never above heal or ward"). The one reader of that.
+        bool HealOrWard(const Candidate& c) {
+            return detail::IsHeal(c) || c.family == Family::CastWard || (c.family == Family::Scroll && c.scrollOf == Family::CastWard);
+        }
+        // S4: the lights of a ranked board, put in the order of their tiers (Light::CastTier), in a tier by a_key (the score before any cap), on the places and the
+        // scores the lights hold on it. Everything else stays where it is.
+        void OrderLights(std::vector<Scored>& r, std::span<const Candidate> cands, const std::vector<float>& a_key) {
+            std::vector<std::size_t> pos;
+            for (std::size_t i = 0; i < r.size(); ++i) if (cands[r[i].idx].f.lightBuff) pos.push_back(i);
+            if (pos.size() < 2) return;
+            std::vector<Scored> e;
+            std::vector<float> slot;
+            for (const std::size_t i : pos) { e.push_back(r[i]); slot.push_back(r[i].score); }
+            std::sort(slot.begin(), slot.end(), std::greater<>{});
+            std::stable_sort(e.begin(), e.end(), [&](const Scored& a, const Scored& b) {
+                const int ta = Light::CastTier(cands[a.idx].f), tb = Light::CastTier(cands[b.idx].f);
+                return ta != tb ? ta < tb : a_key[a.idx] > a_key[b.idx];
+            });
+            for (std::size_t i = 0; i < pos.size(); ++i) {
+                if (e[i].score > 0.0f) e[i].base *= slot[i] / e[i].score;
+                e[i].score = slot[i];
+                r[pos[i]] = e[i];
+            }
         }
     }
 
@@ -82,13 +111,14 @@ namespace MFO::Iaus {
         auto scoreOne = [&](std::size_t i, float bestHeal, bool allowPrune) {
             const Candidate& c = cands[i];
             const bool running = m.hasRunning && KeyOf(c) == m.running;
-            const float mom = running ? t.momentum : 1.0f;
+            const bool spotAct = in.hasSpotAction && !running && KeyOf(c) == in.spotAction;   // 8.1: the action his place was chosen for (a bonus, never an order)
+            const float mom = running ? t.momentum : spotAct ? (std::max)(1.0f, t.spotActionMomentum) : 1.0f;
             // P5 cutoff: the act floor, or the keep-th best so far minus tieEps (keep = max(k, maxTries): the walk
             // needs the top maxTries for its transparent fall-backs, not just the rapport pool; the tieEps slack
             // because a tie cluster can promote a candidate just under the k-th by current target or cost). The
             // RUNNING candidate is never pruned: the commitment window and momentum need its exact score, and a
             // pruned running decision made the verdict depend on candidate order (review round 1, finding 1).
-            const bool prune = allowPrune && !running;
+            const bool prune = allowPrune && !running && !spotAct && !c.f.lightBuff;   // S4: a light is never pruned, the tiers below read every one
             const float cutoff = prune ? (std::max)(t.actFloor, top.Kth() - t.tieEps) : 0.0f;
             const auto o = detail::Score(c, m, p, t, in.rapportRank, bestHeal, mom, cutoff, nullptr);
             if (o.vetoed) {
@@ -110,11 +140,13 @@ namespace MFO::Iaus {
                 const float aw = fi < kFamilies ? t.actionWeight[fi] : 0.0f;
                 if (aw > 0.0f) d.bestHeal = (std::max)(d.bestHeal, o.score / mom / aw);
             }
-            if (o.score < t.actFloor) return;
-            top.Add(o.score);
+            if (o.score < t.actFloor && !(c.f.lightBuff && o.score > 0.0f)) return;   // S4: a light under the floor is dropped after the tiers are read
+            if (!c.f.lightBuff) top.Add(o.score);   // S4: a light may be capped below, so it never prunes another
             d.ranked.push_back(Scored{ static_cast<std::uint16_t>(i), o.score, o.score / mom, o.focus, running });
         };
 
+        bool anyLight = false;   // S4: a light buff is on the board (never in the DLL until G6)
+        for (std::size_t i = 0; i < lim && !anyLight; ++i) anyLight = cands[i].f.lightBuff;
         // Pass 1: everything but the heal-dependent families. Heals (spells and heal scrolls) are never pruned:
         // Retreat and the health drink read the best heal score, so it must be exact.
         for (std::size_t i = 0; i < lim; ++i) {
@@ -124,7 +156,8 @@ namespace MFO::Iaus {
             // A damage-class offense is never P5-pruned: the buff cap below reads the best offense score, and a pruned (below-cutoff because
             // of uncapped buffs) offense would leave it at -1 (Opus review 2026-11-13, finding 3).
             const bool exactOffense = f == Family::CastOffense && cands[i].f.damageClass;
-            scoreOne(i, 0.0f, !detail::IsHeal(cands[i]) && !exactOffense);
+            const bool exactWard = anyLight && HealOrWard(cands[i]);   // S4: the light cap below reads the best ward
+            scoreOne(i, 0.0f, !detail::IsHeal(cands[i]) && !exactOffense && !exactWard);
         }
         // Pass 2: Retreat, DrinkHealth.
         for (std::size_t i = 0; i < lim; ++i)
@@ -153,6 +186,56 @@ namespace MFO::Iaus {
                 }
         }
 
+        // S4: LIGHTS. Whom, then under what. Tiers (Light::CastTier): the player whose light is known, members whose light is known, then whose light nobody
+        // knows, the player before members there too. A tier is no weight: no score, no search and no rapport roll gets past it.
+        bool healOrWard = false;   // one is ranked: no light is picked on this tick
+        int firstTier = Light::kCastTiers;
+        std::vector<float> lightKey;   // a light's score before the cap under heals and wards, by candidate
+        if (anyLight) {
+            std::array<float, static_cast<std::size_t>(Light::kCastTiers)> best{};
+            float known = kInf;
+            const auto tierOf = [&](const Scored& sc) { return static_cast<std::size_t>(Light::CastTier(cands[sc.idx].f)); };
+            const auto rescore = [](Scored& sc, float v) { sc.base *= v / sc.score; sc.score = v; };
+            // each known recipient's best light, when it clears the floor: one who stands nearly lit, or a dear second light, says nothing about the others
+            for (const Scored& sc : d.ranked) {
+                if (!cands[sc.idx].f.lightBuff || tierOf(sc) >= 2) continue;
+                float own = 0.0f;
+                for (const Scored& o : d.ranked)
+                    if (cands[o.idx].f.lightBuff && cands[o.idx].target == cands[sc.idx].target && tierOf(o) < 2) own = (std::max)(own, o.score);
+                if (own >= t.actFloor) known = (std::min)(known, own);
+            }
+            for (Scored& sc : d.ranked) {
+                if (!cands[sc.idx].f.lightBuff) continue;
+                if (tierOf(sc) >= 2 && sc.score > known) rescore(sc, known);   // UNKNOWN IS NOT DARK: no more wanted than the least wanted known one
+                auto& b = best[tierOf(sc)];
+                b = (std::max)(b, sc.score);
+            }
+            // The player first: his best light is worth what a member's is, so a light that would go out goes to him, however much less he needs it.
+            for (const std::size_t pl : { std::size_t{ 0 }, std::size_t{ 2 } })
+                if (best[pl] > 0.0f && best[pl] < best[pl + 1])
+                    for (Scored& sc : d.ranked)
+                        if (cands[sc.idx].f.lightBuff && tierOf(sc) == pl && sc.score == best[pl]) { rescore(sc, best[pl + 1]); break; }
+            std::erase_if(d.ranked, [&](const Scored& sc) { return cands[sc.idx].f.lightBuff && sc.score < t.actFloor; });
+            lightKey.assign(cands.size(), 0.0f);
+            float under = kInf;
+            for (const Scored& sc : d.ranked) {
+                const Candidate& c = cands[sc.idx];
+                if (c.f.lightBuff) { lightKey[sc.idx] = sc.score; firstTier = (std::min)(firstTier, Light::CastTier(c.f)); }
+                if (HealOrWard(c)) { healOrWard = true; under = (std::min)(under, sc.score); }
+            }
+            // Never above a heal or a ward: under EVERY one that cleared the floor, by more than a tie (the best may yet be declined by its road).
+            if (healOrWard) {
+                const float cap = (std::max)(0.0f, under - 2.0f * t.tieEps);
+                for (Scored& sc : d.ranked)
+                    if (cands[sc.idx].f.lightBuff && sc.score > cap) { rescore(sc, cap); ++d.buffCapped; }
+            }
+        }
+        // A light that is not this tick's: it is only an order fall-back, it is never rolled, and running it holds no window.
+        const auto lightYields = [&](const Scored& sc) {
+            const Candidate& c = cands[sc.idx];
+            return c.f.lightBuff && (healOrWard || Light::CastTier(c.f) > firstTier);
+        };
+
         // Rank, then break ties (4.8): within |dS| < tieEps of a cluster head, the running decision, then the
         // current target, then the higher effect per second, then the lower magicka cost per cast, then the lower (family, posture, form, target) key.
         auto& r = d.ranked;
@@ -168,6 +251,7 @@ namespace MFO::Iaus {
                           [&](const Scored& a, const Scored& b) {
                               const Candidate& ca = cands[a.idx];
                               const Candidate& cb = cands[b.idx];
+                              if (healOrWard && ca.f.lightBuff != cb.f.lightBuff) return cb.f.lightBuff;   // S4: the cap above can reach 0
                               if (a.running != b.running) return a.running;
                               if (ca.f.currentTarget != cb.f.currentTarget) return ca.f.currentTarget;
                               // 11-17b (field Jesper: every spell of a family tied and the CHEAPEST won, which is a concentration stream's per-second
@@ -183,6 +267,7 @@ namespace MFO::Iaus {
             }
             i = j;
         }
+        if (anyLight) OrderLights(r, cands, lightKey);
 
         if (r.empty()) { d.verdict = Verdict::Idle; return d; }   // (4.6) nothing above the floor
 
@@ -192,10 +277,12 @@ namespace MFO::Iaus {
             if (r[i].running) { runPos = static_cast<int>(i); break; }
 
         const float best = r[0].score;
-        std::size_t pool = 0;
-        for (std::size_t i = 0; i < r.size() && pool < static_cast<std::size_t>((std::max)(1, sh.k)); ++i) {
-            if (r[i].score >= sh.floor * best - 1e-6f) pool = i + 1;
-            else break;
+        std::size_t pool = 0, places = 0;
+        for (std::size_t i = 0; i < r.size() && places < static_cast<std::size_t>((std::max)(1, sh.k)); ++i) {
+            if (!(r[i].score >= sh.floor * best - 1e-6f)) break;
+            if (lightYields(r[i])) continue;   // S4: it takes no place of the pool
+            pool = i + 1;
+            ++places;
         }
 
         auto stepFor = [&](std::size_t pos) {
@@ -208,12 +295,13 @@ namespace MFO::Iaus {
         // preempt margin INSIDE the commitment window only. Outside the window every tick is a normal 5.1 rapport
         // pick over the pool; the roll is a pure function of (seed, proposed epoch), so it repeats until a new
         // decision fires (no dither), and landing on the running candidate simply continues it.
-        const bool inWindow = runPos >= 0 && (in.now - m.firedAt) < in.commitWindowSec;
+        const bool inWindow = runPos >= 0 && !lightYields(r[static_cast<std::size_t>(runPos)]) && (in.now - m.firedAt) < in.commitWindowSec;
         std::vector<std::size_t> eligible;
         std::vector<float> scores;
         float bar = -1.0f;
         if (inWindow) bar = r[static_cast<std::size_t>(runPos)].score * (1.0f + t.preemptMargin);
         for (std::size_t i = 0; i < pool; ++i) {
+            if (lightYields(r[i])) continue;
             if (inWindow && (static_cast<int>(i) == runPos || !(r[i].score > bar))) continue;
             eligible.push_back(i);
             scores.push_back(r[i].score);
@@ -253,6 +341,44 @@ namespace MFO::Iaus {
         };
         for (const Scored& s : d.ranked) if (s.running) { put(s); break; }
         for (const Scored& s : d.ranked) if (!s.running) put(s);
+        return n;
+    }
+
+    std::size_t TopRanked(const Decision& d, std::span<const Candidate> cands, std::array<RankedAction, 3>& out, const MoveAsk& ask) {
+        const Tuning& t = ask.tuning;
+        std::vector<Scored> far;   // the best of each target
+        for (std::size_t i = 0; i < ask.cands.size() && i < ask.sight.size(); ++i) {
+            const Candidate& c = ask.cands[i];
+            const auto o = detail::Score(c, ask.mind, ask.profile, t, d.rapportRank, 0.0f, 1.0f, 0.0f, nullptr);
+            if (o.vetoed) continue;
+            float s = o.score;
+            for (const Scored& r : d.ranked) {   // never over a patient he reaches from here (his own heal goes with him)
+                const Candidate& h = cands[r.idx];
+                if (detail::IsHeal(h) && !h.f.recipientSelf && r.score >= t.moveHealYield * o.score) s = (std::min)(s, r.score - 2.0f * t.tieEps);
+            }
+            if (!(s >= t.actFloor)) continue;
+            const auto same = std::find_if(far.begin(), far.end(), [&](const Scored& q) { return ask.cands[q.idx].target == c.target; });
+            const Scored mine{ static_cast<std::uint16_t>(i), s, s, o.focus, false };
+            if (same == far.end()) far.push_back(mine);
+            else if (s > same->score || (s == same->score && TieKey(c) < TieKey(ask.cands[same->idx]))) *same = mine;
+        }
+        if (far.empty()) return TopRanked(d, cands, out);
+        std::sort(far.begin(), far.end(), [&](const Scored& a, const Scored& b) { return a.score != b.score ? a.score > b.score : TieKey(ask.cands[a.idx]) < TieKey(ask.cands[b.idx]); });
+        struct Row { RankedAction a; bool held; };
+        std::vector<Row> rows;
+        for (const Scored& s : d.ranked) {
+            if (s.idx >= cands.size()) continue;
+            const Candidate& c = cands[s.idx];
+            const float score = c.f.lightBuff ? (std::max)(0.0f, (std::min)(s.score, far.front().score - 2.0f * t.tieEps)) : s.score;   // a light is never above a heal
+            rows.push_back({ RankedAction{ c.family, c.scrollOf, c.form, c.target, score, c.f.reach, c.f.meleeRange, c.f.sight }, s.running && !c.f.lightBuff });
+        }
+        for (const Scored& s : far) {
+            const Candidate& c = ask.cands[s.idx];
+            rows.push_back({ RankedAction{ c.family, c.scrollOf, c.form, c.target, s.score, c.f.reach, c.f.meleeRange, ask.sight[s.idx], true }, false });
+        }
+        std::stable_sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.held != b.held ? a.held : a.a.score > b.a.score; });
+        const std::size_t n = (std::min)(rows.size(), out.size());
+        for (std::size_t i = 0; i < n; ++i) out[i] = rows[i].a;
         return n;
     }
 

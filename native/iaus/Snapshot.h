@@ -91,6 +91,11 @@ struct SpellEntry {
                                                 // delivery-flip proxy on the claim road, or MFO's ConcProxy for a concentration spell
                                                 // (Actuation::BuffServedAtAlly / HealServedAtAlly, filled by iaus/Candidates.cpp each lap,
                                                 // never by the book). false = himself only
+        // S4 (iaus/Light.h): a LIGHT effect on its recipient (archetype kLight, 12), and how far it shines. false until the book reads it (G6): no light fact applies.
+        bool          light = false;
+        float         lightRadius = 0.0f;
+        std::vector<std::uint32_t> allyRoadOn;  // the recipients a proxy road serves NOW, when the filler asks each (G6). allyRoad above = the old filler's one answer for all
+        [[nodiscard]] bool AllyRoadTo(std::uint32_t a_id) const { return allyRoad || std::find(allyRoadOn.begin(), allyRoadOn.end(), a_id) != allyRoadOn.end(); }
         // Estimates (iaus/Estimate.h): one cast on an unresisting target, after his perks. 0 = not measured.
         float         damage = 0.0f;            // health damage (a damage-over-time effect counted for its duration)
         float         heal = 0.0f;              // healing
@@ -223,6 +228,7 @@ struct SpellEntry {
         bool backOffPressed = false;  // batch I (Q-T2-3): the Mercenary backs off when two or more foes press him. Knight and Warrior keep no
                                       // way out by design. false with the tree OFF
         bool sneakClass = false;      // Flag::kSneakAlways: a sneak class (card G3's hide run). false with the tree OFF
+        bool darkClass = false;       // Classes::WantsDark: a class that sneaks, for LIGHT (the sneak classes and the Nightblade). What fills Combatant::sneakClass. false with the tree OFF
         bool weaponMelee = true;      // the class weapon set holds a melee weapon (dagger / 1H / 2H)
         bool weaponBow = true;
         bool weaponCrossbow = true;
@@ -241,6 +247,9 @@ struct SpellEntry {
     [[nodiscard]] inline bool ChaseWaived(std::uint32_t a_foeId, std::uint32_t a_heldId, std::uint32_t a_entryId, bool a_fightsHimOrPlayer) {
         return a_foeId != 0 && (a_foeId == a_heldId || a_foeId == a_entryId) && a_fightsHimOrPlayer;
     }
+
+    // S4: a Light effect live on somebody (iaus/Light.h MayEnd: whose may be ended).
+    struct LiveLight { std::uint32_t spell = 0, caster = 0; bool fromItem = false; };
 
     // ── One actor ─────────────────────────────────────────────────────────────────────────────────────────
     struct Combatant {
@@ -292,6 +301,13 @@ struct SpellEntry {
         float grossPerSec = 0.0f;           // 11-17g: health it has been HIT for per second over the last Tuning::grossWindowSec, heals not subtracted (0 = none seen)
         float maxHit = 0.0f;                // 11-17g: the largest burst (one lap's gross damage) it took in the last Tuning::maxHitWindowSec, absolute health (0 = none seen)
         bool  beingHealed = false;          // a heal by ANOTHER party member is in flight on it (a party claim: no second heal)
+        // S4 (iaus/Light.h). Every default is "not read": nothing in the DLL fills these yet (G6).
+        bool  sneaking = false, hideRun = false, invisible = false;   // he wants the dark NOW (the player too)
+        bool  sneakClass = false;           // ClassGate::darkClass: his CLASS is one that sneaks (crouched or not): no light is ever cast on him, and ours on him is ended
+        float darkAgoSec = kInf;            // seconds since he last wanted the dark
+        float light = -1.0f;                // the light level where he stands, < 0 = unknown (never dark)
+        Tri   inPlayerView = Tri::Unknown;  // the player sees him
+        std::vector<LiveLight> lights;      // the Light effects live on him
         Sight sight = Sight::Unknown;       // the follower's OWN ray to it (spells, bows)
         Sight sightEngine = Sight::Unknown; // the engine basis (a melee swing)
         float occludedSec = 0.0f;           // seconds the OWN ray has been Occluded without a break (0 = not; Tuning::occlusionHoldSec)
@@ -388,6 +404,10 @@ struct SpellEntry {
                                           // the strike distance stay on meleeReach (they are not a weapon's reach).
         float chaseCap = 4096.0f;         // Confidence::ChaseRadius
         float combatSec = 0.0f;           // seconds since this fight started for him
+
+        bool  moveAsk = false;            // a movement pass will read this lap's ranking (TopRanked): heals past their reach or round a corner are then kept apart as
+                                          // MOVE-ONLY candidates (Generated::moveOnly), and a heal says its reach. false (the DLL until G2): not one is made
+        bool  decastRoad = false;         // S4: a light of ours can be ended (the G6 Harbinger call). false (today): no Decast candidate is made
 
         std::vector<SpellTargetNote> willWork;      // G10 answers for the pairs asked last lap (Unknown passes)
         std::vector<SpellTargetNote> liveStreams;   // (spell, recipient) with a live direct stream: answer = Yes

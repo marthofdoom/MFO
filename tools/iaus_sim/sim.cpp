@@ -269,7 +269,7 @@ namespace {
     // SIM V4: the world's v4 part. " world=v4" when every default switch is on, plus what differs and where the places come from.
     struct V4Flag { const char* name; bool V4::* m; bool def; };
     inline constexpr V4Flag kV4Flags[] = { { "env", &V4::env, true }, { "path", &V4::path, true }, { "bodies", &V4::bodies, true }, { "los", &V4::los, true }, { "caststart", &V4::caststart, true }, { "interrupt", &V4::interrupt, true }, { "summons", &V4::summons, true }, { "hazards", &V4::hazards, true },
-                                           { "drops", &V4::drops, false }, { "foedrops", &V4::foedrops, false } };
+                                           { "light", &V4::light, true }, { "drops", &V4::drops, false }, { "foedrops", &V4::foedrops, false } };
     std::string g_envLabel = "fixtures", g_seats = "today", g_sightTag;
     std::string WorldTag(const char* lead) {
         if (!g_v3.Any() && !g_v4.Any()) return "";
@@ -845,6 +845,8 @@ static int RealMain(int argc, char** argv) {
                 if (q == std::string::npos) break; p0 = q + 1; } }
         else if (!std::strcmp(argv[i], "--move-fault") && i + 1 < argc) { g_moveFault = MoveFaultByName(argv[++i]); if (!g_moveFault) { std::fprintf(stderr, "--move-fault:"); for (const MoveFaultRow& r : kMoveFaults) std::fprintf(stderr, " %s", r.name); std::fprintf(stderr, "\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--spot-test")) spotTest = true;
+        else if (!std::strcmp(argv[i], "--decast-road")) g_decastRoad = true;   // S4
+        else if (!std::strcmp(argv[i], "--light-sampler") && i + 1 < argc) g_lightT.sampler = std::strcmp(argv[++i], "off") != 0;
         else if (!std::strcmp(argv[i], "--spot-fights") && i + 1 < argc) g_spotFights = std::max(1, std::atoi(argv[++i]));
         else if (!std::strcmp(argv[i], "--env") && i + 1 < argc) envFile = argv[++i];
         else if (!std::strcmp(argv[i], "--env-set") && i + 1 < argc) envSet = argv[++i];

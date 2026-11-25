@@ -124,7 +124,7 @@ namespace Sim {
             g.weaponMelee = any || (d.weapons & (C::Weapon::kDagger | C::Weapon::kOneHand | C::Weapon::kTwoHand)) != 0;
             g.weaponBow = any || (d.weapons & C::Weapon::kBow) != 0; g.weaponCrossbow = any || (d.weapons & C::Weapon::kCrossbow) != 0; g.weaponStaff = any || (d.weapons & C::Weapon::kStaff) != 0;
             g.disengage = (d.flags & C::Flag::kDisengage) != 0; c.shortLeash = (d.flags & C::Flag::kShortLeash) != 0;
-            c.sneakAlways = (d.flags & C::Flag::kSneakAlways) != 0; g.sneakClass = c.sneakAlways;   /* SpellBook::GateFor: Flag::kSneakAlways with the tree on (card G3's hide run) */ c.nearPlayer = (d.flags & C::Flag::kNearPlayer) != 0; c.goIn = static_cast<int>(d.goIn); c.partyPct = d.partyHealthyPct;
+            c.sneakAlways = (d.flags & C::Flag::kSneakAlways) != 0; g.sneakClass = c.sneakAlways; g.darkClass = C::WantsDark(d.flags);   /* SpellBook::GateFor: Flag::kSneakAlways with the tree on (card G3's hide run) */ c.nearPlayer = (d.flags & C::Flag::kNearPlayer) != 0; c.goIn = static_cast<int>(d.goIn); c.partyPct = d.partyHealthyPct;
             c.pureMage = d.line == C::Line::Mage;
             if (g_v3.casterhold) g.casterLine = d.line == C::Line::Mage;   // SIM V3: SpellBook::GateFor (iaus/SpellBook.cpp:688), marth 11-13 "Mage line only"; off = the game before 0ed9c705
             if (const Playstyle* ps = ActivePlaystyle(c.name)) { c.forbid = ps->forbid; c.playstyle = ps->does; }

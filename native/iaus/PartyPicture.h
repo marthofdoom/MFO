@@ -12,6 +12,7 @@
 #include "iaus/Core.h"
 #include "iaus/EnvQuery.h"
 #include "iaus/EnvTrust.h"
+#include "iaus/Light.h"
 
 #include <array>
 #include <cstdint>
@@ -72,7 +73,9 @@ namespace MFO::Iaus::Move {
         std::uint32_t kinds = 0xFFFFFFFFu;             // SpotKindsFor(his ClassGate)
         Env::Walker who; float speed = 370.0f;
         Env::Vec3 anchor; float leash = 0.0f;          // 0 = no leash
-        bool  wantsDark = false;                       // S4: read only for SpotFacts::light
+        bool  wantsDark = false;                       // S4 (Light::WantsNow or a sneak class): the light facts are read for him, and for nobody else
+        float sneakSkill = -1.0f;                      // S4: his Sneak, perks included (DetectIn::skillT). < 0 = not read: spot_detected does not apply
+        bool  invisible = false;
         Commit commit;
         std::uint32_t marks = 0;                       // the holder's INBOX: set at any time, also between Freeze and Adopt. Freeze takes it, Adopt never touches it
         // frozen by MovePass::Freeze
@@ -81,9 +84,10 @@ namespace MFO::Iaus::Move {
         std::array<std::uint64_t, 2> portals{}; std::uint8_t exits = 0;
         bool  fixed = false;                           // committed and unmarked: a fixed assignment this window
     };
-    struct Foe { FormID id = 0; Env::Vec3 p; std::int32_t tri = -1; float ageSec = 0.0f; FormID target = 0; float faceX = 0.0f, faceY = 0.0f; };   // facing: unit, 0 0 = unknown
+    struct Foe { FormID id = 0; Env::Vec3 p; std::int32_t tri = -1; float ageSec = 0.0f; FormID target = 0; float faceX = 0.0f, faceY = 0.0f;   // facing: unit, 0 0 = unknown
+        float skill = -1.0f; };                        // S4: its perception skill (DetectIn::skillO). < 0 = not read
     struct Area { Env::Vec3 p; float r = 0.0f; };                    // an active hostile area
-    struct LightAt { SpotKey key = 0; float level = 0.0f; };         // Keyed by the pool: a sampler fills it after Phase1, before Phase3. INPUT HOOK (S4 / G6): a sampled level at a spot. Absent = unknown, never dark
+    struct LightAt { SpotKey key = 0; float level = 0.0f; };         // A POINT SAMPLER's answer at a pooled spot (S4 / G6, probe L1): filled after Phase1, before Phase3. Absent = the field below answers, or nobody (unknown, never dark)
 
     // ── budgets. THE ONE TABLE ──
     // 32 facts is the RATE of new sight answers a window buys. 24 spots is the POOL whose sight is asked at all. A firing spot needs its target's fact and up to two
@@ -126,7 +130,7 @@ namespace MFO::Iaus::Move {
     struct ExitMemo { float exitU = -1.0f; std::vector<std::uint16_t> open; };                     // per spot point (KeyOfPoint), for a plain Walker: the open octants (OpenOctants), 0xFFFF = not worked out
 
     // The pass's working memory for one window. Nothing outside MovePass.cpp / Spots.cpp reads it.
-    struct SpotPoint { SpotKey key = 0; Env::Vec3 p; std::int32_t tri = -1; float walk = 0.0f; };
+    struct SpotPoint { SpotKey key = 0; Env::Vec3 p; std::int32_t tri = -1; float walk = 0.0f; float lit = 0.0f; };   // lit: what its known light adds to its rank (S4, for who wants the dark)
     struct Work {
         enum class Stage : std::uint8_t { Flood, Generate, Merge, Place, Select, Offer, Queue, Paths, Asks, Done } stage = Stage::Done;
         std::size_t cursor = 0;
@@ -162,6 +166,9 @@ namespace MFO::Iaus::Move {
         std::vector<Foe>    foes;
         std::vector<Area>   areas;
         std::vector<LightAt> light;
+        Light::Field lightField;                       // S4: what the actors' own levels (and any sampler) told lately. The holder adds between windows, Freeze ages it
+        bool exterior = false;                         // S4: for the detection formula
+        Light::DetectGmst detect;                      // S4: the list's own numbers
         RoadCaps caps;
         Env::SightTuning sight;                        // the geometry rays' rules (what is worth asking). Shipped = Env::kSightTuning; the sim's sight layers are switches
         // THE TRUST TABLE (S3). The holder writes it whenever it lives something (Trust::Leg, Note, Walked), and takes `log` to print. The pass reads the copy

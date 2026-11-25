@@ -28,6 +28,8 @@ T_SCALARS = ("t.momentum", "t.postureMomentum", "t.preempt", "t.actFloor", "t.so
              "t.moveDecisionSec", "t.spotPinKinds", "t.spotMomentum", "t.spotPreempt", "t.spotRadius", "t.spotSplitArea", "t.spotEyeU", "t.spotHighU",
              "t.spotPortalU", "t.spotPortalStandU", "t.spotExitU", "t.spotPeelU", "t.spotArriveU", "t.spotFactMoveU", "t.spotFactMaxAgeSec",
              "t.spotKeptAgeSec", "t.spotUnknownExposure",
+             "t.moveHealYield", "t.spotActionMomentum",
+             "t.lightNearU", "t.lightStoreyU", "t.lightMaxAgeSec", "t.lightMinConf", "t.lightLitLevel", "t.lightGenU", "t.lightDarkHoldSec",
              "t.concChannelSec", "t.handRedrawSec", "t.spellCastSec", "t.fireLineKeepSec",
              "t.occClaimRelease", "t.offApproachBackoff", "t.offApproachDropCap", "t.sharedRadiusMargin", "t.preemptSettle",
              "t.dyingSelfHp", "t.dyingAllyHp", "t.dyingHitsToDown", "t.urgencyHitsDiv", "t.burstWindowSec", "t.grossWindowSec", "t.maxHitWindowSec")

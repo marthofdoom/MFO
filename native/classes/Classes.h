@@ -83,8 +83,12 @@ namespace MFO::Classes {
         inline constexpr std::uint16_t kDisengage    = 1 << 2;   // may disengage with regular movement (H3: Thief and mage lines)
         inline constexpr std::uint16_t kSpellRange   = 1 << 3;   // range follows the equipped spell (H4)
         inline constexpr std::uint16_t kSneakAlways  = 1 << 4;   // sneak regardless of player action (G1)
+        inline constexpr std::uint16_t kDarkClass    = 1 << 6;   // counts as a sneaking class for LIGHT only (marth 11-24: the Nightblade). Never read alone: WantsDark below
         inline constexpr std::uint16_t kDamage       = 1 << 5;   // a destruction caster (marth 2026-11-13): IAUS keeps a buff at or below the best viable attack. Data only, never serialized
     }
+    // THE ONE READER of "a class that sneaks, for light" (iaus/Light.h): never lit, a light of ours on it is ended. kSneakAlways keeps its own uses (the stance, the
+    // hide run, the sneak rows), which kDarkClass does not touch. To add a class, give it kDarkClass.
+    [[nodiscard]] constexpr bool WantsDark(std::uint16_t a_flags) { return (a_flags & (Flag::kSneakAlways | Flag::kDarkClass)) != 0; }
 
     // Hybrid / T4 go-in rule id (card C9). None = no special rule (the class's normal package decides).
     enum class GoIn : std::uint8_t {

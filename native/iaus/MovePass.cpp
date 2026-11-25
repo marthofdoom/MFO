@@ -62,6 +62,12 @@ namespace MFO::Iaus::MovePass {
             return side(a, b, c) * side(a, b, d) < 0.0f && side(c, d, a) * side(c, d, b) < 0.0f;
         }
 
+        Env::Vec3 Between(const Env::Vec3& a, const Env::Vec3& b, float k) { return { a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k, a.z + (b.z - a.z) * k }; }
+        float LitShare(const PartyPicture& pic, const Env::Vec3& p, const Tuning& t) {   // 0 = dark or not known, 1 = lit
+            const auto l = Light::At(pic.lightField, p, pic.t, t);
+            return l.Known() && t.lightLitLevel > 0.0f ? (std::min)(1.0f, l.level / t.lightLitLevel) : 0.0f;
+        }
+
         // THE ONE FILLER of SpotFacts. Static: what no other member's choice changes. a_pair / a_spot null = stay here.
         SpotFacts FillStatic(const PartyPicture& pic, const Member& m, const RankedAction& a, const Spot* spot, const Work::Pair* pair, const Tuning& t) {
             SpotFacts f;
@@ -102,7 +108,35 @@ namespace MFO::Iaus::MovePass {
                 for (const Area& r : pic.areas) if (Dist(at, r.p) < r.r) f.inHostileArea = Iaus::Tri::Yes;
             }
             if (m.leash > 0.0f) f.leashX = Dist(at, m.anchor) / m.leash;
-            if (m.wantsDark) for (const LightAt& l : pic.light) if (l.key == key) f.light = l.level;
+            if (m.wantsDark) {   // S4. Unknown stays NOT APPLICABLE: never dark
+                for (const LightAt& l : pic.light) if (l.key == key && l.level >= 0.0f) f.light = l.level;
+                if (f.light < 0.0f) f.light = Light::At(pic.lightField, at, pic.t, t).level;
+                if (pair && pair->path.nVia) {   // the walk as the engine would take it: the claim names a place, not a way
+                    float known = 0.0f, lit = 0.0f;   // half of every piece is lit as its one end is, half as its other. What nobody knows is in neither sum
+                    Env::Vec3 from = m.p; Light::Read a = Light::At(pic.lightField, from, pic.t, t);
+                    for (std::size_t i = 0; i < pair->path.nVia; ++i) {
+                        const Light::Read b = Light::At(pic.lightField, pair->path.via[i], pic.t, t); const float half = 0.5f * Dist(from, pair->path.via[i]);
+                        for (const Light::Read* r : { static_cast<const Light::Read*>(&a), &b }) if (r->Known()) { known += half; if (r->level >= t.lightLitLevel) lit += half; }
+                        from = pair->path.via[i]; a = b;
+                    }
+                    if (known > 0.0f) f.pathLitSec = f.pathSec * lit / known;
+                }
+                if (f.light >= 0.0f && m.sneakSkill >= 0.0f) {   // the engine's own formula, crouched and still there, per foe that may see the place
+                    float worst = -1.0f;
+                    for (const Foe& e : pic.foes) {
+                        if (e.skill < 0.0f) continue;
+                        Light::DetectIn in; in.dist = Dist(e.p, at); in.exterior = pic.exterior; in.targetIsOsTarget = e.target == m.id; in.oHasTarget = e.target != 0;
+                        in.skillO = e.skill; in.skillT = m.sneakSkill; in.sneakingT = true; in.invisible = m.invisible; in.light = f.light;
+                        const float dx = at.x - e.p.x, dy = at.y - e.p.y, d = std::sqrt(dx * dx + dy * dy);
+                        if (d > 1.0f && (e.faceX != 0.0f || e.faceY != 0.0f)) in.angleDeg = std::acos((std::clamp)((e.faceX * dx + e.faceY * dy) / d, -1.0f, 1.0f)) * 57.29578f;   // unknown = straight ahead
+                        const auto s = Sees(pic, key, e.id); in.losGeom = s != Iaus::Tri::No;
+                        const int level = Light::DetectLevel(pic.detect, in).level;   // a whole number: a last bit of libm does not reach the rank
+                        const float x = level > 0 ? (std::min)(1.0f, static_cast<float>(level) / (std::max)(1.0f, pic.detect.barSneak)) : 0.0f;
+                        worst = (std::max)(worst, s == Iaus::Tri::Unknown ? x * t.spotUnknownExposure : x);
+                    }
+                    f.detected = worst;
+                }
+            }
             if (spot && !pic.trustNow.Clean()) {   // where he stands now is nobody's plan: staying hands him back to the engine, and is never priced
                 if (const auto l = Trust::Of(pic.trustNow, spot->p); l != Trust::Level::Trusted) f.spotRegionTrust = static_cast<float>(l);
                 if (pair) if (const auto l = Trust::RouteLevel(pic.trustNow, m.p, { pair->path.via.data(), pair->path.nVia }); l != Trust::Level::Trusted) f.pathRegionTrust = static_cast<float>(l);
@@ -167,7 +201,7 @@ namespace MFO::Iaus::MovePass {
             const Spot* s = si >= 0 ? &pic.pool[static_cast<std::size_t>(si)] : nullptr;
             Triple x{ mi, ai, si, mask, pair, 1.0f, FillStatic(pic, m, m.top[ai], s, pair, t) };
             x.incumbent = s && m.commit.on && m.commit.key == s->key;
-            x.scale = KindWeight(mask, profiles(m.classId)) * (x.incumbent ? t.spotMomentum : 1.0f);
+            x.scale = !s && m.top[ai].moveOnly ? 0.0f : KindWeight(mask, profiles(m.classId)) * (x.incumbent ? t.spotMomentum : 1.0f);   // a move-only action does not work from here
             return x;
         }
         std::int32_t TriOf(const PartyPicture& pic, const Triple& x) { return x.spot >= 0 ? pic.pool[static_cast<std::size_t>(x.spot)].tri : -1; }
@@ -321,17 +355,28 @@ namespace MFO::Iaus::MovePass {
                     const std::size_t from = pts.size();
                     Points(v, tri, t, pts, pic.mesh.get());
                     const Env::Vec3 c = pic.mesh->cen[static_cast<std::size_t>(tri)];
-                    for (std::size_t i = from; i < pts.size(); ++i) pts[i].walk = tri == m.tri ? Dist(m.p, pts[i].p) : d + Dist(c, pts[i].p);
+                    for (std::size_t i = from; i < pts.size(); ++i) {
+                        pts[i].walk = tri == m.tri ? Dist(m.p, pts[i].p) : d + Dist(c, pts[i].p);
+                        if (m.wantsDark && !pic.lightField.samples.empty())   // only the best few are kept or tested: a lit place must not crowd a dark one out. Unknown adds nothing
+                            pts[i].lit = t.lightGenU * (LitShare(pic, pts[i].p, t) + (LitShare(pic, Between(m.p, pts[i].p, 0.25f), t) + LitShare(pic, Between(m.p, pts[i].p, 0.5f), t) + LitShare(pic, Between(m.p, pts[i].p, 0.75f), t)) / 3.0f);   // the place, and the straight way to it
+                    }
                 }
             thread_local std::vector<R> found; found.clear();
-            for (const Cand& k : pts) { float r = 0.0f; if (row.gen(g, k, r) && std::isfinite(r)) found.push_back({ QDist(r), k }); }
+            // a place his leg was refused at is not looked at, so it takes no room of the sorted part below (S3 review R1)
+            for (const Cand& k : pts) { float r = 0.0f; if (row.gen(g, k, r) && std::isfinite(r) && !Trust::Refused(pic.trustNow, m.id, k.key)) found.push_back({ QDist(r + k.lit), k }); }
             // only the first geomPerGen are ever looked at, and the order is total (a key is one point)
             const auto upTo = found.begin() + static_cast<std::ptrdiff_t>((std::min)(found.size(), static_cast<std::size_t>((std::max)(B.geomPerGen, B.perGen))));
             std::partial_sort(found.begin(), upTo, found.end(), [](const R& x, const R& y) { return x.q != y.q ? x.q < y.q : x.c.key < y.c.key; });
+            // A move-only action round a corner: every near place fails the sight test, so the tests are spread over the whole walk (nearest first still)
+            if (g.act.moveOnly && g.act.sight == Sight::Occluded && row.check && found.size() > static_cast<std::size_t>(B.geomPerGen)) {
+                std::sort(upTo, found.end(), [](const R& x, const R& y) { return x.q != y.q ? x.q < y.q : x.c.key < y.c.key; });
+                const auto step = [&](std::size_t i) { return i * found.size() / static_cast<std::size_t>(B.geomPerGen); };
+                for (std::size_t i = 0; i < static_cast<std::size_t>(B.geomPerGen); ++i) found[i] = found[step(i)];
+                found.resize(static_cast<std::size_t>(B.geomPerGen));
+            }
             int kept = 0, tested = 0;
             for (const R& x : found) {
                 if (kept >= B.perGen) break;
-                if (Trust::Refused(pic.trustNow, m.id, x.c.key)) continue;
                 if (row.check) { if (tested++ >= B.geomPerGen) break; if (!row.check(g, x.c, s)) continue; }
                 Spot sp; sp.key = x.c.key; sp.p = x.c.p; sp.tri = x.c.tri; sp.kinds = KindBit(row.kind);
                 w.hits.push_back({ sp, kept * 100000 + (std::min)(99999, QDist(x.c.walk)) });   // the first of every kind before the second of any, nearest first
@@ -534,6 +579,7 @@ namespace MFO::Iaus::MovePass {
         std::erase_if(pic.still, [&](const auto& s) { return !ById(pic.party, s.who) && !ById(pic.foes, s.who); });
         if (moved) Trust::Forget(pic.trust);           // a door, a cell: what was learned is about another mesh
         Trust::Decay(pic.trust, pic.t);
+        Light::Decay(pic.lightField, pic.t, t);
         pic.trustNow = pic.trust; pic.trustNow.log.clear(); pic.trustNow.said.clear();
         if (moved || pic.trustGen != pic.trust.gen) {
             pic.trustGen = pic.trust.gen; pic.paths.clear(); pic.avoid.clear();

@@ -1,10 +1,12 @@
 // iaus/Generate.cpp -- the PURE candidate generator (contract in iaus/Generate.h). Card I4.
 // Standard headers only: tools/iaus_harness/run.sh builds this file with the host compiler.
 #include "iaus/Generate.h"
+#include "iaus/Iaus_internal.h"   // detail::IsHeal
 #include "iaus/AreaCensus.h"   // M2: who an area hits
 
 #include "iaus/Disengage.h"   // card G3: "has a foe found him" (the seam to G2 Layer 1)
 #include "iaus/Estimate.h"
+#include "iaus/Light.h"         // S4: who wants the dark, whom a light goes to
 #include "iaus/Reposition.h"   // batch I: the spell range, the back-off need, the hidden step
 #include "iaus/SpellWorth.h"   // S11b: the spell-worth reader (read only while Tuning::spellWorth.live > 0)
 
@@ -198,6 +200,7 @@ namespace MFO::Iaus {
         void Holds(Ctx& x) {
             if (!x.hold) return;
             Candidate c = x.Make(Family::Sneak, nullptr);
+            if (x.s.self.light >= 0.0f) c.f.selfLight = x.s.self.light;   // S4: standing in the light is a worse place to hold
             x.Push(std::move(c));
             // G18 (batch I item 5, marth 11-12 Q-SIM-3): the hold row has no exit. Hidden with no blow ready, he steps quietly toward a foe
             // that does not detect him to gain a strike (blade) or a line of fire (bow), staying hidden: a short H3 run (Concealment Kind::Step)
@@ -211,6 +214,27 @@ namespace MFO::Iaus {
                     x.Push(std::move(st));
                 }
             }
+        }
+
+        // ── S4: end a light of ours on a stealth class, or on anybody who wants the dark now (iaus/Light.h WantsLightEnded). His own caster's decision or the wearer's, free and instant. Never one the
+        // player cast himself, never an item's. Nothing is generated while the road does not exist (the G6 call).
+        void Decasts(Ctx& x) {
+            const Snapshot& s = x.s;
+            if (!s.decastRoad) return;
+            const auto at = [&](const Combatant& r, bool self) {
+                if (!Light::WantsLightEnded(r)) return;
+                for (const LiveLight& l : r.lights) {
+                    if (!Light::MayEnd(l, s.playerId) || !Light::InParty(s, l.caster) || (!self && l.caster != s.self.id)) continue;
+                    Candidate c = x.Make(Family::Decast, nullptr);
+                    c.form = l.spell;
+                    c.target = r.id;
+                    c.targetName = r.name;
+                    c.f.lightOnStealth = true;
+                    x.Push(std::move(c));
+                }
+            };
+            at(s.self, true);
+            for (const Combatant& a : s.allies) if (Readable(a)) at(a, false);
         }
 
         // ── give ground / block / bash: lab families, each behind its road flag (Harbinger capabilities that do not exist yet) ──
@@ -622,8 +646,11 @@ namespace MFO::Iaus {
         // RECIPIENT-AWARE (review of c8ac55be): a fallback counts only when it can be cast at THIS recipient now, by the heal loop's own tests: a fire-and-forget heal
         // (not concentration, not touch) that is affordable, with a hand free, and either self-delivery for himself (vanilla Fast Healing) or, for another, aimed (or served at an
         // ally by a proxy road: allyRoad) inside its reach and not Occluded.
+        // Actuation::HealInReach's test: inside the reach and not measured Occluded.
+        bool HealReaches(const SpellEntry& e, const Combatant& a_recipient) { return !((e.reach > 0.0f && a_recipient.dist > e.reach) || a_recipient.sight == Sight::Occluded); }
         // Can this kept heal entry be cast at THIS recipient now (the heal loop's own tests)? a_fastOnly = a fire-and-forget heal only (not concentration, not touch).
-        bool HealCastableOn(const Ctx& x, const SpellEntry& o, const Combatant& a_recipient, bool a_self, bool a_fastOnly) {
+        // a_anyReach: as if he stood where every one of them reaches (the move-only heal).
+        bool HealCastableOn(const Ctx& x, const SpellEntry& o, const Combatant& a_recipient, bool a_self, bool a_fastOnly, bool a_anyReach) {
             const Snapshot& s = x.s;
             if (o.source != SpellSource::Spell || o.drop != Prune::Drop::Keep || o.nature != Prune::Nature::Heal) return false;
             if (a_fastOnly && (o.concentration || o.touch)) return false;
@@ -633,20 +660,20 @@ namespace MFO::Iaus {
             if (o.twoHanded ? anyBusy : bothBusy) return false;
             if (o.cost > 0.0f && (!poolOk || !Prune::Affordable(o.cost, pool))) return false;
             if (a_self) return true;   // his own heal: self-delivery or aimed, either lands on him
-            if (o.selfDelivery && !o.allyRoad) return false;
-            return !((o.reach > 0.0f && a_recipient.dist > o.reach) || a_recipient.sight == Sight::Occluded);
+            if (o.selfDelivery && !o.AllyRoadTo(a_recipient.id)) return false;
+            return a_anyReach || HealReaches(o, a_recipient);
         }
-        bool FastHealAvailable(const Ctx& x, const Combatant& a_recipient, bool a_self) {
+        bool FastHealAvailable(const Ctx& x, const Combatant& a_recipient, bool a_self, bool a_anyReach) {
             for (const SpellEntry& o : x.s.book.entries)
-                if (HealCastableOn(x, o, a_recipient, a_self, true)) return true;
+                if (HealCastableOn(x, o, a_recipient, a_self, true, a_anyReach)) return true;
             return false;
         }
         // His best healing per second of cast among the heals he can cast at this recipient now (Cons::HealRate's yardstick: heals are ranked among themselves,
         // never against offense). 0 = none measured.
-        float BestHealRateOn(const Ctx& x, const Combatant& a_recipient, bool a_self) {
+        float BestHealRateOn(const Ctx& x, const Combatant& a_recipient, bool a_self, bool a_anyReach) {
             float best = 0.0f;
             for (const SpellEntry& o : x.s.book.entries)
-                if (HealCastableOn(x, o, a_recipient, a_self, false)) {
+                if (HealCastableOn(x, o, a_recipient, a_self, false, a_anyReach)) {
                     float rate = EffectRate(x, o, o.heal);
                     if (const Estimate::Worth w = WorthOf(x, o, a_recipient, {}); w.known) rate = LiveBlend(x, rate, w.PerSecond());   // S11b: the same blend as the candidate's healRate
                     best = (std::max)(best, rate);
@@ -655,11 +682,11 @@ namespace MFO::Iaus {
         }
         // A concentration / touch heal holds the HEALER where he stands (the channel, or the walk to touch range): refused when the recipient is in a foe's reach and would not
         // survive, AND when the healer himself is in a foe's reach and would not survive (Jesper died of his own exposure channelling on Cicero), while a fallback exists for this recipient.
-        bool HealRefused(const Ctx& x, const SpellEntry& e, const Combatant& a_recipient, bool a_self) {
+        bool HealRefused(const Ctx& x, const SpellEntry& e, const Combatant& a_recipient, bool a_self, bool a_anyReach) {
             if (!(e.concentration || e.touch)) return false;
             const auto exposed = [&](const Combatant& c) { return Reposition::FoeCanHurtHere(x.s, c) && !Reposition::SurvivesNear(x.s, c, x.t.worth); };
             if (!exposed(a_recipient) && !(!a_self && exposed(x.s.self))) return false;
-            return FastHealAvailable(x, a_recipient, a_self);
+            return FastHealAvailable(x, a_recipient, a_self, a_anyReach);
         }
 
         // THE ONE SET OF CAST GATES a kept offense / control spell meets before any foe is looked at (Casts and CanCastOffense both read them,
@@ -956,23 +983,22 @@ namespace MFO::Iaus {
                         // right now (e.allyRoad: Harbinger's delivery-flip proxy, or MFO's ConcProxy for a concentration spell;
                         // fix/mage-buff-loop item 5, heals since 1dfcuabd309). The candidate is the SOURCE spell; the reach below
                         // is e.reach, which for a Self spell is Heal Other's (Actuation::HealReach), the same test the road makes.
-                        if (!self && e.selfDelivery && !e.allyRoad) continue;
+                        if (!self && e.selfDelivery && !e.AllyRoadTo(r->id)) continue;
                         const float hp = self ? x.selfHp : Pct(r->hp, r->hpMax);
                         if (heal && !Prune::Hurt(hp)) continue;   // hurt targets only
                         if (!heal && std::find(e.activeOn.begin(), e.activeOn.end(), r->id) != e.activeOn.end()) {
                             ++x.out.droppedTarget;                // already active
                             continue;
                         }
-                        // Actuation::HealInReach's test: inside the reach and not measured Occluded.
-                        if (!self && ((e.reach > 0.0f && r->dist > e.reach) || r->sight == Sight::Occluded)) {
-                            ++x.out.droppedTarget;
-                            continue;
-                        }
-                        if (heal && !scroll && HealRefused(x, e, *r, self)) { ++x.out.droppedTarget; x.out.healRefused = true; continue; }   // 11-17b: the heal safety rule
+                        const bool far = !self && !HealReaches(e, *r);
+                        if (far) ++x.out.droppedTarget;
+                        if (far && !(heal && s.moveAsk)) continue;   // a far heal is kept for the movement pass alone (Generated::moveOnly), when it asks
+                        if (heal && !scroll && HealRefused(x, e, *r, self, far)) { if (!far) { ++x.out.droppedTarget; x.out.healRefused = true; } continue; }   // 11-17b: the heal safety rule
                         Candidate c = base(self ? nullptr : r);
                         if (self) c.targetName = s.self.name;
                         c.f.inHealReach = Tri::Yes;
-                        c.f.sight = self ? Sight::None : r->sight;
+                        c.f.sight = self ? Sight::None : far ? Sight::Visible : r->sight;
+                        if (heal && !self && s.moveAsk) c.f.reach = (std::max)(0.0f, Finite(e.reach, 0.0f));   // what the pass plans a place by. No heal consideration reads it
                         c.f.recipientHp = hp;
                         c.f.fleeHeal = heal && self && x.fleeRun;   // card G3: his own heal while he flees is cast first
                         c.f.recipientIsPlayer = r->isPlayer;
@@ -986,7 +1012,7 @@ namespace MFO::Iaus {
                                 c.f.healRate = LiveBlend(x, c.f.healRate, w.PerSecond());
                             }
                             c.f.effectRate = c.f.healRate;
-                            c.f.bestHealRate = BestHealRateOn(x, *r, self);
+                            c.f.bestHealRate = BestHealRateOn(x, *r, self, far);
                             c.f.recipientSelf = self;
                             c.f.recipientMissing = (std::max)(0.0f, Finite(r->hpMax, 0.0f) - Finite(r->hp, 0.0f));
                             c.f.recipientTtl = self ? x.selfTtl : Estimate::Ttl(r->hp, Estimate::IncomingOn(s, *r));
@@ -997,10 +1023,17 @@ namespace MFO::Iaus {
                             c.f.alreadyActive = Note(s.liveStreams, e.form, self ? 0u : r->id) == Tri::Yes;
                         } else {
                             c.f.meleeBuff = e.meleeBuff;
+                            if (e.light) {   // S4: whom a light goes to, and to whom never
+                                c.f.lightBuff = true;
+                                c.f.recipientWantsDark = Light::WantsDark(*r, x.t);
+                                c.f.recipientLight = r->light;
+                                c.f.lightRank = Light::RecipientRank(*r);
+                            }
                             if (!scroll) c.f.handLost = HandLostShare(x, e);   // a scroll is read, never channelled
                             for (const Combatant* foe : a_foes)
                                 if (Between(*foe, *r) <= s.meleeReach) { c.f.recipientInMelee = true; break; }
                         }
+                        if (far) { x.out.moveOnlySight.push_back(r->sight); x.out.moveOnly.push_back(std::move(c)); continue; }
                         x.Push(std::move(c));
                     }
                     break;
@@ -1023,6 +1056,12 @@ namespace MFO::Iaus {
                 case Prune::Nature::Unknown: break;
                 }
             }
+            // He reaches that patient with a heal of some kind from here: nobody walks for another one.
+            for (std::size_t i = x.out.moveOnly.size(); i-- > 0;)
+                if (std::any_of(x.out.actions.begin(), x.out.actions.end(), [&](const Candidate& a) { return detail::IsHeal(a) && a.target == x.out.moveOnly[i].target; })) {
+                    x.out.moveOnly.erase(x.out.moveOnly.begin() + static_cast<std::ptrdiff_t>(i));
+                    x.out.moveOnlySight.erase(x.out.moveOnlySight.begin() + static_cast<std::ptrdiff_t>(i));
+                }
         }
 
     }
@@ -1112,6 +1151,7 @@ namespace MFO::Iaus {
         Holds(x);
         Regroups(x);
         Guards(x);
+        Decasts(x);
         if (a_s.hasBook) {
             Drinks(x);
             BuffPotions(x);
