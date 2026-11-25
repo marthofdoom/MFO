@@ -249,63 +249,16 @@ namespace MFO::SelfTest {
         return true;
     }
 
-    // MAIN THREAD. The refusal reasons are the brief's: never in a town / inhabited cell, never near essential or non-hostile NPCs.
+    // MAIN THREAD. The refusal reasons: the player already in a fight, or a town / inhabited place.
     const char* SpawnUnsafeReason(RE::Actor* a_follower) {
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player || !a_follower) return "no player / follower";
         if (player->IsInCombat()) return "the player is already in a fight";
         if (LocationTypes::Classify(player->GetCurrentLocation()) == LocationTypes::Kind::kCivilised)
             return "this is an inhabited place (town / inn / house / farm): no hostile is spawned here";
-        // The returned pointer is a function-local static buffer: MAIN THREAD only (both callers are MainThread::Post bodies),
-        // valid until the next call. A blocker is named by display name + FormID so the log says WHO refused the spawn.
-        static std::string s_why;
-        bool blocked = false;
-        constexpr float kNear2 = 3500.0f * 3500.0f;
-        constexpr RE::FormID kCurrentFollowerFaction = 0x0005C84E;   // vanilla Skyrim.esm CurrentFollowerFaction
-        auto* cff = RE::TESForm::LookupByID<RE::TESFaction>(kCurrentFollowerFaction);
-        const auto playerMountPtr = player->QLastRiddenMount().get();
-        RE::Actor* playerMount = playerMountPtr.get();   // the horse the player last rode
-        // The PARTY never blocks (followers are essential by design): the player, the test follower, tracked followers,
-        // teammates and CurrentFollowerFaction members.
-        auto isParty = [&](RE::Actor* x) {
-            return x == player || x == a_follower || Followers::IsTrackedFast(x->GetFormID()) || x->IsPlayerTeammate() ||
-                   (cff && x->IsInFaction(cff));
-        };
-        auto nameOf = [](RE::Actor* x) { const char* n = x->GetName(); return std::string(n && *n ? n : "(unnamed)"); };
-        // Diagnosis detail for the refusal line (a blocker the player cannot see is the field suspect): base, 3D, teammate, tracked, distance, cell.
-        auto detail = [&](RE::Actor* x) {
-            const auto* base = x->GetBaseObject();
-            const auto* cell = x->GetParentCell();
-            return std::format("base {:08X} 3D={} teammate={} tracked={} dist={:.0f} cell {:08X}", base ? base->GetFormID() : 0u,
-                               x->Is3DLoaded(), x->IsPlayerTeammate(), Followers::IsTrackedFast(x->GetFormID()),
-                               x->GetPosition().GetDistance(a_follower->GetPosition()), cell ? cell->GetFormID() : 0u);
-        };
-        if (auto* pl = RE::ProcessLists::GetSingleton()) {
-            pl->ForEachHighActor([&](RE::Actor* a) {
-                if (!a || a->IsDead() || a->IsDisabled() || isParty(a) || APMFBridge::IsSubstrateAnchor(a->GetFormID())) return RE::BSContainer::ForEachResult::kContinue;
-                // summons / reanimated of the player or a party member
-                if (auto cmd = a->GetCommandingActor(); cmd && isParty(cmd.get())) return RE::BSContainer::ForEachResult::kContinue;
-                // the player's last-ridden mount, or any mount a party member sits on
-                if (a == playerMount) return RE::BSContainer::ForEachResult::kContinue;
-                if (a->IsAMount()) {
-                    RE::NiPointer<RE::Actor> rider;
-                    if (a->GetMountedBy(rider) && rider && isParty(rider.get())) return RE::BSContainer::ForEachResult::kContinue;
-                }
-                if (a->GetPosition().GetSquaredDistance(a_follower->GetPosition()) > kNear2) return RE::BSContainer::ForEachResult::kContinue;
-                if (a->IsEssential() || a->IsProtected()) {
-                    s_why = std::format("an essential / protected NPC is within 3500 units: '{}' {:08X} ({})", nameOf(a), a->GetFormID(), detail(a));
-                    blocked = true;
-                    return RE::BSContainer::ForEachResult::kStop;
-                }
-                if (!a->IsHostileToActor(player)) {
-                    s_why = std::format("a non-hostile NPC is within 3500 units (inhabited area): '{}' {:08X} ({})", nameOf(a), a->GetFormID(), detail(a));
-                    blocked = true;
-                    return RE::BSContainer::ForEachResult::kStop;
-                }
-                return RE::BSContainer::ForEachResult::kContinue;
-            });
-        }
-        return blocked ? s_why.c_str() : nullptr;
+        // No NPC-proximity refusal (marth 2026-11-24: "Its not a needed check anyway"): a mod's essential NPC that trails the player refused every
+        // fight test of a whole session. The town / inhabited-place and already-in-a-fight refusals above are the gate.
+        return nullptr;
     }
 
 }
