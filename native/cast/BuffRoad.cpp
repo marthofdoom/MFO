@@ -52,6 +52,7 @@
 #include "Runtime.h"
 #include "apmf/APMFBridge.h"
 #include "SeatRows.h"   // ABI v47 FireOnceServed
+#include "iaus/Prune.h"   // SummonHoldsCastChannel
 
 namespace MFO::Actuation {
 
@@ -488,6 +489,16 @@ namespace MFO::Actuation {
         return BuffUp(recip, a_spell, BuffPlacementSpell(a_spell)) != Up::No;
     }
 
+    bool SummonHoldsCastChannel(RE::Actor* a_follower, RE::SpellItem* a_spell) {
+        if (!a_follower || !a_spell || !IsSummonSpell(a_spell)) return false;
+        // No controller, no claim road: ChooseBuffRoad would erase the per-fight g_neverFired latch on this read-only ask.
+        if (!a_follower->GetActorRuntimeData().combatController) return false;
+        // The channel is held only while the claim would actually fire: a body already up / landing, the summon limit (Up::Blocked)
+        // and a never-fired hold-off are all BuffUpTransparent, where the claim road makes no cast and no hand is held.
+        return Iaus::Prune::SummonHoldsCastChannel(ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false) == BuffRoad::Claim, Config::g_castSelf.load()) &&
+               !BuffUpTransparent(a_follower, a_spell);
+    }
+
     bool BuffServedAtAlly(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient) {
         if (!a_follower || !a_spell || !a_recipient || a_recipient == a_follower) return false;
         // A SelfHazard / ScriptRider spell leaves no active effect carrying its own spell, so neither the book's activeOn nor
@@ -520,7 +531,7 @@ namespace MFO::Actuation {
         auto say = [&](BuffRoad r, const char* why) {
             if (a_why) *a_why = why;
             if (a_log && RoadLogDue(fid, spellID, r))
-                spdlog::info("[buff] {:08X} {} ({:08X}): {} -- DIRECT road, unanimated", fid, name, spellID, why);
+                spdlog::info("[buff] {:08X} {} ({:08X}): {} -- no claim road (the [cast] / [cast-hold] line after it says what the cast does instead)", fid, name, spellID, why);
             return r;
         };
 
@@ -687,6 +698,16 @@ namespace MFO::Actuation {
         // or the situation, not a config flip: nothing to bound.
         if (const auto road = ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false, other ? recip : nullptr);
             road != BuffRoad::Claim) {
+            // THE CONTROLLER IS GONE UNDER A STANDING CLAIM (field 11-24c, buff.animated_claim_road): no seat can run it and the cap / never-fired bound
+            // below are skipped for this road, so it stood "SATISFIED IN FLIGHT" 15 s. End it through the ordinary release; the rule re-claims when a
+            // controller is back (ChooseBuffRoad answers Claim again). Never a watchdog: it is the claim's own precondition, named on a line.
+            if (road == BuffRoad::DirectNoCombat &&
+                CastLockClaimStamp(id, kHandLeft, spellID) != std::chrono::steady_clock::time_point{}) {
+                spdlog::info("[buff] {:08X} {} ({:08X}): his combat controller is gone -- the standing claim is released (no seat can run it)",
+                             id, a_spell->GetName() ? a_spell->GetName() : "?", spellID);
+                EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
+                return Outcome{ Result::NoOp, "buff claim released: no combat controller", true };
+            }
             if (road != BuffRoad::DirectDegrade ||
                 CastLockClaimStamp(id, kHandLeft, spellID) == std::chrono::steady_clock::time_point{})
                 return std::nullopt;

@@ -1963,6 +1963,8 @@ namespace {
             Check(Prune::SummonRoadFor(true, true, false, false) == G::Defer, "summon road: an IAUS summon with self casts off is deferred");
             Check(Prune::SummonRoadFor(true, false, true, true) == G::OneShot, "summon road: Harbinger absent keeps the documented direct degrade");
             Check(Prune::SummonRoadFor(false, false, false, true) == G::OneShot && Prune::SummonRoadFor(false, true, false, false) == G::OneShot, "summon road: a gambit rule is unchanged (no claim = the one-shot)");
+            Check(Prune::SummonHoldsCastChannel(true, true), "summon cast channel: the claim road holds a hand, a claim and a lock, so the scan counts it as a cast");
+            Check(!Prune::SummonHoldsCastChannel(false, true) && !Prune::SummonHoldsCastChannel(true, false), "summon cast channel: the one-shot / deferred road holds none (not a cast, as before)");
             in.selfBlast = in.targetLocation = true;
             Check(Prune::StaticDrop(in) == Prune::Drop::SelfBlast, "D2: the block names its own reason");
             in.targetLocation = false;
