@@ -23,6 +23,7 @@
 #include "EngineOps.h"       // GetStats: the [overlap] line's INVARIANTS #83 counters
 #include "MainThread.h"      // [atk-obs]: graph sink attach/detach is main-thread work (#62-class)
 #include "logistics/InvSnapshot.h"   // INVARIANTS #84: the worker snapshots' tick bracket
+#include "iaus/AreaActors.h"
 #include "iaus/EffectMirror.h"
 #include "iaus/PerkEffects.h"
 #include "logistics/GemRules.h"
@@ -257,6 +258,7 @@ namespace MFO::Diagnostics {
                 if (auto* a = ptr.get()) {
                     InvSnap::Want(a);
                     EffectMirror::WantParty(a->GetFormID());
+                    if (a->IsInCombat()) AreaActors::Want(a->GetFormID());   // M2: the bystander picture, only while somebody fights (no tick gate: not ready = the area guard is closed)
                     PerkEffects::Want(a->GetFormID());   // 1dfcuabd2pk: keep his perk-effect table built (no tick gate: no table = not known)
                 }
             }
@@ -325,6 +327,7 @@ namespace MFO::Diagnostics {
                 const auto t0 = std::chrono::steady_clock::now();
                 InvSnap::BuildPass(tick);
                 EffectMirror::BuildPass(tick);
+                AreaActors::BuildPass(tick);    // M2: nothing while no follower fights
                 PerkEffects::BuildPass(tick);   // 1dfcuabd2pk: at most ONE follower's perk-effect table per pass (inside the measured pass time)
                 const auto us = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
                                     std::chrono::steady_clock::now() - t0).count());
@@ -1288,7 +1291,7 @@ namespace MFO::Diagnostics {
                 // that had run by the time it printed, so a stalled main shows
                 // as a drains count that stops moving while ticks (or this line)
                 // keep going. Post is a documented no-op on VR: drains stay 0.
-                if ((wake % (kOverlapLogMs / kPumpMs)) == 0) { LogOverlap(); InvSnap::LogStats(); EffectMirror::LogStats(); LogStoppedStages(); }   // P0 probe + #84 counters: one line each per 60 s, always on
+                if ((wake % (kOverlapLogMs / kPumpMs)) == 0) { LogOverlap(); InvSnap::LogStats(); EffectMirror::LogStats(); AreaActors::LogStats(); LogStoppedStages(); }   // P0 probe + #84 counters: one line each per 60 s, always on
                 if (Config::g_heartbeat.load(std::memory_order_relaxed) && (wake % (kHeartbeatMs / kPumpMs)) == 0) {
                     const auto nowMs   = std::chrono::duration_cast<std::chrono::milliseconds>(
                                              std::chrono::steady_clock::now().time_since_epoch()).count();

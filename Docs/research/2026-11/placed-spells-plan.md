@@ -19,6 +19,8 @@ from the code but nobody has watched it run (principle 5). NEW = read for this p
   (`Prune::IsSelfBlastPlacement`, own reason `Drop::SelfBlast`). Gambit roads unchanged. It covers nature Control as well as Offense: Fire Storm and Frost
   Nova carry a fear / paralysis rider, so their nature is Control and the older rule never caught Fire Storm. It also covers a caster-centred hazard whose
   spell is hostile (Blizzard). The Teach Spells page lists such a tome greyed, with the reason.
+- **M2 built (2026-11-24, `feat/placed-m2`, not merged, not field run).** `Estimate::AreaCensus` (`iaus/AreaCensus.h`), the main-built table `iaus/AreaActors.*`, `kAreaGuard`.
+  A hostile control area is guarded too, and for allies (Fire Storm class); Harmony is not. The interim self-blast block stays until M4. The lab has no bystanders, so it is not gated.
 - **D1 ruled: APPROVED, NOT BUILT.** A rune-only exception for a perform call at release (package H2, after the tune). It becomes a Harbinger
   INVARIANTS #0 amendment when H2 is built, not before.
 
