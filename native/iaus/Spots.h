@@ -34,7 +34,7 @@ namespace MFO::Iaus::Move {
     bool GenPeel(const GenIn&, const Cand&, float&);
     bool GenKite(const GenIn&, const Cand&, float&);
     bool GenRegroup(const GenIn&, const Cand&, float&);
-    bool GenRetreatExit(const GenIn&, const Cand&, float&);
+    bool GenRetreatExit(const GenIn&, const Cand&, float&); bool CheckExit(const GenIn&, const Cand&, Env::Scratch&);
     bool GenReachUnreach(const GenIn&, const Cand&, float&);
 
     struct SpotKindRow { SpotKind kind; const char* name; SpotGen gen; SpotCheck check; std::uint64_t families; std::uint32_t needs; };
@@ -51,7 +51,7 @@ namespace MFO::Iaus::Move {
         { SpotKind::Kite,        "kite",        &GenKite,         nullptr,     Families(Family::GiveGround, Family::BackOff, Family::Attack, Family::CastOffense), 0 },
         { SpotKind::Regroup,     "regroup",     &GenRegroup,      nullptr,     Families(Family::Regroup, Family::Retreat), 0 },
         { SpotKind::LootRoute,   "loot_route",  nullptr,          nullptr,     0, 0 },   // the logistics run's: no combat action pairs with it, so it is never offered here
-        { SpotKind::RetreatExit, "retreat",     &GenRetreatExit,  nullptr,     Families(Family::Retreat, Family::Disengage, Family::GiveGround, Family::BackOff, Family::DrinkHealth), 0 },
+        { SpotKind::RetreatExit, "retreat",     &GenRetreatExit,  &CheckExit,  Families(Family::Retreat, Family::Disengage, Family::GiveGround, Family::BackOff, Family::DrinkHealth), 0 },
         { SpotKind::ReachUnreach,"reach",       &GenReachUnreach, &CheckSight, Families(Family::Attack, Family::PowerAttack, Family::CastOffense, Family::CastControl), 0 },
     } };
     static_assert([] { for (std::size_t i = 0; i < kSpotKindCount; ++i) if (static_cast<std::size_t>(kSpotKinds[i].kind) != i) return false; return true; }(), "kSpotKinds is indexed by SpotKind");
@@ -75,5 +75,5 @@ namespace MFO::Iaus::Move {
     [[nodiscard]] std::uint64_t DoorwayOf(const Env::View& a_v, const std::vector<std::uint8_t>& a_wallVert, std::int32_t a_tri, int a_edge, const Tuning& a_t);   // 0 = not a doorway
     [[nodiscard]] std::array<std::uint64_t, 2> PortalsAt(const Env::View& a_v, const std::vector<std::uint8_t>& a_wallVert, std::int32_t a_tri, const Env::Vec3& a_p, const Tuning& a_t);
     [[nodiscard]] std::uint8_t ExitsAt(const Env::View& a_v, std::int32_t a_tri, const Env::Vec3& a_p, const std::vector<Foe>& a_foes, const Env::Walker& a_who, const Tuning& a_t);
-    [[nodiscard]] bool GeomSees(const Env::View& a_v, const Env::Vec3& a_a, const Env::Vec3& a_b, const Tuning& a_t, Env::Scratch& a_s);
+    [[nodiscard]] bool GeomSees(const Env::View& a_v, const Env::Vec3& a_a, const Env::Vec3& a_b, const Tuning& a_t, Env::Scratch& a_s, const Env::SightTuning& a_sight = Env::kSightTuning);
 }

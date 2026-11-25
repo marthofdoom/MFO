@@ -148,6 +148,8 @@ void  MovePass::Phase3(const PartyPicture&, const ClassGates&, const Tuning&, co
 
 #### S2. The pass in the sim's world
 
+**Built on `feat/move-s2`: `iaus-sim-v4.md` section 17, deviations and open items in 17.6.**
+
 - **Mechanism.** `EnvWorld` runs the pass once per `moveDecisionSec` for the party with the one-window ray latency of 8.7, and executes an assignment through a model of the mover selected by `--position-road point|pinned`. `point` is today's ABI and is the tune's road. The mover's numbers (arrival time against path length, drift inside R, engine-dropped rate, behaviour when a foe is in reach) are rows of `EnvTuning`, PLACEHOLDER until G0b's field data replaces them through `calib_point.py`.
 - **Files.** `tools/iaus_sim/EnvWorld.h`, `Env.h` (`V4` switch `spots`, the `EnvView` use), `World.h` (the commit events, the mirrors of `t.sharedRadiusMargin` and `t.preemptSettle`), `Scenarios.h` (the seven of 8.5 get their pass rules), `sim.cpp` (flags, `PathReport` rows), `EnvTest.h`, `calib_point.py` (new), the v4 baseline once.
 - **Interplay.** The existing families `Step`, `BackOff`, `GiveGround`, `Retreat`, `Disengage` stay generated and stay the default: each is retired in the lab only when its spot kind reproduces its numbers (the rule of 8.1), under a per-kind switch `--spots-replace <kind list>` so both sides can be run on the same fights. Rebases on pretune.

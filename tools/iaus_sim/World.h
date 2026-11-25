@@ -14,6 +14,7 @@
 #include "iaus_sim/Load.h"
 #include "iaus_sim/Detect.h"
 #include "iaus_sim/Env.h"       // SIM V4: the environment under a fight (null in v2 / v3: nothing below reads it)
+#include "iaus_sim/Move.h"      // SIM V4: the movement pass (S2). Off by default: Fight::move is null
 
 #include "iaus/Reach.h"
 #include "iaus/Estimate.h"    // SIM V3 `burst`: LapGross / BurstReads, the game's own pure lap maths
@@ -32,6 +33,10 @@ namespace Sim {
     inline void EnvAdopt(Fight& F, Body& x);
     inline void EnvShove(Fight& F, Body& x, float dx, float dy);
     inline void EnvStep(Fight& F);
+    inline void MoveStep(Fight& F);                                  // S2 (iaus_sim/MoveWorld.h): the pass, its rays, its meters
+    inline bool MoveWalk(Fight& F, Body& x);                         // ... true = the spot claim moved his body this step and nothing else does
+    inline bool MoveHeld(const Fight& F, const Body& x);              // ... true = he stands on the place he was given
+    inline bool MoveBounds(const Fight& F, const Body& x, float tx, float ty, bool away);   // ... true = the claim he holds does not let this move out of its radius
     inline bool EnvMeleeClear(const Fight& F, const Body& a, const Body& o);
     inline bool EnvInBlast(const Fight& F, float cx, float cy, float cz, float r, const Body& o);
 
@@ -283,6 +288,13 @@ namespace Sim {
         // SIM V4 cast starts (iaus-sim-v4.md 5): claims on a row no seat starts, never-started releases (short / long window), spells held off for the fight, casts a stagger or a control effect ended
         long   castUnseated = 0, castNeverShort = 0, castNeverLong = 0, castHeldOff = 0, castInterrupted = 0, foeCastInterrupted = 0, castOccRelease = 0, castHeldTurns = 0, castZeroFires = 0 /* fires of a hostile-row spell read as ZERO effect (cast/NoEffect.cpp) */, castZeroHeld = 0 /* pairs held for the fight after two of them */; double neverSec = 0;   // castHeldTurns: decisions lost to a held-off spell
         long   apprDrops = 0, apprBlocked = 0;    // offense approach: ENGINE DROPPED endings (a timed backoff each) / foes blocked for the fight past the drop cap
+        // S2, the movement pass, of the SUBJECT (iaus_sim/MoveWorld.h). All 0 while the road is off, except cover / exposure under --position-road off.
+        // claims filed / of those a CHANGE of place while he still walked to another / reached / ended blocked / dropped by the engine / released; the path length he
+        // was sent on; seconds a claim stood / walked; threat looks: seconds with a threat, of those no threat sees him, and the mean share of threats that do.
+        long   spotFiled = 0, spotChanges = 0, spotArrived = 0, spotBlocked = 0, spotDropped = 0, spotReleased = 0, spotKind[MFO::Iaus::kSpotKindCount] = {};
+        double spotPathLen = 0, spotClaimSec = 0, spotWalkSec = 0, threatSec = 0, coverSec = 0, exposedSec = 0;
+        // ... of the pass itself (the whole party): windows / unfinished / a budget that was short (paths skipped, asks, spots, triples) / paths searched / rays asked
+        long   moveWindows = 0, moveUnfinished = 0, movePathShort = 0, moveAskShort = 0, moveSpotShort = 0, moveTripleShort = 0, movePaths = 0, moveRays = 0;
         std::vector<std::string> killOrder;
     };
 
@@ -412,6 +424,7 @@ namespace Sim {
         const SimEnv* env = nullptr; std::vector<EQ::Door> doors; std::uint64_t doorStamp = 0; double sanityAt = 0;
         void OpenDoor(std::int32_t i) { const std::uint32_t id = doors[static_cast<std::size_t>(i)].id; std::uint64_t h = 0x9E3779B97F4A7C15ULL;
             for (EQ::Door& d : doors) { if (d.id == id) d.state = EQ::DoorState::Open; h = SimEnv::Mix(h ^ static_cast<std::uint64_t>(d.state)); } doorStamp = h; }
+        MoveBox move;                              // S2: the movement pass (null = the road is off)
         std::vector<Shot> shots;
         std::vector<Hazard> hazards; std::vector<HazardHit> hazardHits; std::vector<Commanded> commanded;   // bundle A
         std::vector<Area> areas;                   // SIM V3: the live areas
@@ -1020,6 +1033,7 @@ namespace Sim {
         void Move(Body& x, float tx, float ty, float speed, bool away = false, const Body* to = nullptr, const EnvPoint* point = nullptr) {
             const float dx = tx - x.c.x, dy = ty - x.c.y, d = std::hypot(dx, dy); if (d < 1e-3f && !(env && (to || point))) return;   // (SIM V4: a goal straight over or under him is still a walk)
             if (x.airborne || x.perch) return;   // SIM V3: on the wing he flies his circuit (FlightStep), on a ledge he stays on it; nothing walks him
+            if (move && x.ctl >= 0 && MoveBounds(*this, x, tx, ty, away)) return;   // S2: he holds a spot, its radius bounds his own movement
             x.ranLast = speed >= 0.9f * x.spec->run;   // MODEL: combat movement is at the engine's RUN speed and a crouched run is still IsRunning (probe P1 logs it); a backpedal is not
             if (x.sneaking) speed *= 0.55f;   // MODEL: the sneak gait (the crouched run)
             if (env) { EnvMove(*this, x, tx, ty, speed, away, to, point); return; }   // SIM V4: along the mesh (EnvWorld.h)
@@ -1601,6 +1615,7 @@ namespace Sim {
                     Move(x, c->goalX, c->goalY, x.spec->run * (sp ? 1.5f : 1.0f)); Face(x, c->goalX, c->goalY); if (x.ctl == 0) t.moveOrderSec += TM::dt; return; }
                 if (!engaged) c->moveUntil = 0;
             }
+            if (c && move && MoveWalk(*this, x)) return;   // S2: the spot claim (ch.24 point + hold) walks him
             if (c && g_v3.sidestep && now < x.strafeUntil && std::hypot(x.sgx - x.c.x, x.sgy - x.c.y) > 20.0f) { Move(x, x.sgx, x.sgy, x.spec->run); return; }   // SIM V3: the side step of a held caster
             // target
             Body* tg = Find(x.c.targetId);
@@ -1626,7 +1641,7 @@ namespace Sim {
             if (c && c->drawn == PostureKind::Staff && now >= x.think) {   // a drawn staff is fired by the engine AI while it has a charge
                 for (std::size_t i = 0; i < c->book.entries.size(); ++i) { const SpellEntry& e = c->book.entries[i];
                     if (e.source != SpellSource::Staff || !e.charged) continue;
-                    if (!los || d > 2000.0f) { Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); return; }
+                    if (!los || (d > 2000.0f && !(move && MoveHeld(*this, x)))) { Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); return; }
                     if (LofGuarded(x, c->build->spells[i])) if (const Body* blocker = LofBlocker(x, *tg, c->build->spells[i].e.areaUnits)) { StrafeFrom(x, *tg, *blocker); break; }   // SIM V3: the staff's start is refused too
                     StartCast(x, static_cast<int>(i), c->build->spells[i], tg->c.id, 0.0f, false); x.think = x.actEnd + RU(x, 28, TM::thinkMin, TM::thinkMax); return; }
             }
@@ -1652,7 +1667,8 @@ namespace Sim {
                 // distance the pick allowed (Tuning::bowWeaponRange); without one he waits.
                 const bool far = g_v3.chase && c && c->steerNoApproach && c->steer == tg->c.id;
                 if (far && !los) return;
-                if (!far && (SightWalk(x, *tg, los) || d > r.rangedDist * 1.6f)) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); return; }
+                const bool held = c && move && los && MoveHeld(*this, x);   // S2: he holds a place and sees the foe: he cannot close, so he shoots from there (the A3 rule above)
+                if (!far && !held && (SightWalk(x, *tg, los) || d > r.rangedDist * 1.6f)) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); return; }
                 if (BackOff(x, d, r.rangedMin, los) && st.fallback > 0.05f) { Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true, tg); }
                 if (now >= x.think) {
                     const Weapon& w = x.spec->ranged; float draw = w.anim == 9 ? TM::crossbowReload : TM::bowNock + r.bowDraw / std::max(0.3f, w.speed) * 0.6f + RU(x, 30, TM::bowHoldMin, TM::bowHoldMax) * 0.5f;
@@ -1720,6 +1736,7 @@ namespace Sim {
                 if (c.moveFight && gd <= 300.0f) c.moveUntil = 0;
                 else if (gd > 40.0f) { Move(x, c.goalX, c.goalY, x.spec->run); Face(x, c.goalX, c.goalY); if (x.ctl == 0) t.moveOrderSec += TM::dt; return; }
             }
+            if (move && MoveWalk(*this, x)) return;   // S2
             const Body* tg = Find(c.steer ? c.steer : x.c.targetId); if (!tg || !Up(*tg) || tg->Party()) return;
             const float d = Dist(x, *tg); const bool los = Sees(x, *tg); const Rules& r = D->rules;
             if (x.casterMode) {   // the stance his last free step fought in (a caster with a blade drawn closes like a blade, also while he casts)
@@ -1802,6 +1819,7 @@ namespace Sim {
         void StepWorld() {
             SetArena();
             if (!commanded.empty()) CommandedStep();
+            if (env && (g_road != Road::Off || g_spotMeter)) MoveStep(*this);   // S2
             if (g_v3.burst && estimates && now >= burstAt) { burstAt += TM::pump; SampleBursts(); }
             for (std::size_t i = 0; i < b.size(); ++i) {
                 Body& x = b[i]; if (!x.alive) continue;
@@ -1887,3 +1905,4 @@ namespace Sim {
 }
 
 #include "iaus_sim/EnvWorld.h"   // SIM V4: the definitions of the Env* functions declared at the top
+#include "iaus_sim/MoveWorld.h"  // S2: the movement pass in this world

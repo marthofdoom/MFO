@@ -361,6 +361,7 @@ namespace Sim {
         const bool hostile = fam == Family::Attack || fam == Family::PowerAttack || fam == Family::Taunt || fam == Family::CastOffense || fam == Family::CastControl || (fam == Family::Scroll && k.scrollOf == Family::CastOffense);
         if (hostile && (!tg || !Fight::Up(*tg) || tg->Party())) return Fired::Invalid;
         const bool bodyHeld = x.hitAt >= 0 || F.now < x.staggerUntil || F.now < x.ctrlUntil || (x.actIaus && F.now < x.actEnd);
+        if (F.move) if (const int r = MoveReplaces(F, ci, fam)) return r > 0 ? Fired::Yes : Fired::Declined;   // S2 --spots-replace
         auto peel = [&]() { if (subj && tg && c.pressureSince >= 0 && tg->c.targetId == F.b[0].c.id) { t.peelSum += F.now - c.pressureSince; ++t.peelN; c.pressureSince = -2; } };
         // 11-17b (cast/Hands.cpp CanPreemptHand, THREAT ON THE HEALER): a concentration heal does not keep its hand from a non-heal pick while a foe is hurting him.
         if (x.stream.live && g_mirror && c.healerThreat && (fam == Family::CastOffense || fam == Family::CastControl || fam == Family::CastBuff || fam == Family::CastSummon || fam == Family::CastWard)) {
@@ -529,6 +530,7 @@ namespace Sim {
             FillCooldowns(c, sv.g.actions, F.now, *T); FillCooldowns(c, sv.g.postures, F.now, *T);
             TickIn in; in.now = F.now; in.rapportRank = c.rank; in.seed = c.seed; in.commitWindowSec = c.window;
             sv.d = Decide(c.mind, sv.g.actions, c.profile, *T, in);
+            if (F.move) MoveNoteRanked(F, ci, sv.d, sv.g.actions);   // S2: what the movement pass pairs with spots
             c.chosenForm = 0; if (!sv.d.ranked.empty()) { const Candidate& top = sv.g.actions[sv.d.ranked.front().idx]; if (top.family == Family::CastOffense || top.family == Family::CastControl) c.chosenForm = top.form; }   // Q-I-2 (Candidates::NoteDecision, mirrored)
             if (F.trace && std::getenv("SIM_WHY")) {   // debug: SIM_WHY=1 with --trace prints why the top candidates and every heal scored as they did
                 std::fprintf(F.trace, "%7.2f  WHY %s: %zu candidates, %zu ranked, verdict %d, best heal %.3f\n", F.now, x.c.name.c_str(), sv.g.actions.size(), sv.d.ranked.size(), static_cast<int>(sv.d.verdict), sv.d.bestHeal);

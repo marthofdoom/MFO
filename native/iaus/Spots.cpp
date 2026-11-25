@@ -47,9 +47,13 @@ namespace MFO::Iaus::Move {
         if (tri < 0 || static_cast<std::size_t>(tri) >= v.tris.size()) return;
         using N = std::pair<float, std::int32_t>;
         std::priority_queue<N, std::vector<N>, std::greater<N>> q;
-        std::vector<float> best(v.tris.size(), kInf);   // < 0 = closed
+        // One array a thread, only the triangles touched are cleaned again (a 16k mesh cost 63 KB a flood, 60 to 80 floods a window). -1 = closed.
+        thread_local std::vector<float> best; thread_local std::vector<std::int32_t> touched;
+        if (best.size() < v.tris.size()) best.resize(v.tris.size(), kInf);
+        for (const auto i : touched) best[static_cast<std::size_t>(i)] = kInf;
+        touched.clear();
         out.cut = false; out.bound = radius;
-        q.push({ 0.0f, tri }); best[static_cast<std::size_t>(tri)] = 0.0f;
+        q.push({ 0.0f, tri }); best[static_cast<std::size_t>(tri)] = 0.0f; touched.push_back(tri);
         while (!q.empty()) {
             const auto [d, at] = q.top(); q.pop();
             if (best[static_cast<std::size_t>(at)] < 0.0f) continue;
@@ -66,6 +70,7 @@ namespace MFO::Iaus::Move {
                 const float nd = d + Dist(here, e) + Dist(e, Env::Centroid(v, nb));
                 if (!(nd <= radius)) continue;
                 if (best[static_cast<std::size_t>(nb)] <= nd) continue;
+                if (best[static_cast<std::size_t>(nb)] == kInf) touched.push_back(nb);
                 best[static_cast<std::size_t>(nb)] = nd; q.push({ nd, nb });
             }
         }
@@ -105,15 +110,21 @@ namespace MFO::Iaus::Move {
         if (tri < 0 || static_cast<std::size_t>(tri) >= v.tris.size()) return out;
         const Env::Tri& T = v.tris[static_cast<std::size_t>(tri)];
         if (T.door >= 0 && static_cast<std::size_t>(T.door) < v.doors.size()) out[n++] = kStayBit | (v.doors[static_cast<std::size_t>(T.door)].id ? v.doors[static_cast<std::size_t>(T.door)].id : static_cast<std::uint32_t>(T.door) + 1u);
-        for (int k = 0; k < 3 && n < out.size(); ++k) {
-            const std::uint64_t id = DoorwayOf(v, wall, tri, k, t);
-            if (!id) continue;
-            const Env::Vec3 &a = v.verts[T.v[k]], &b = v.verts[T.v[(k + 1) % 3]];
+        const auto edge = [&](std::int32_t of, int k) {
+            const std::uint64_t id = DoorwayOf(v, wall, of, k, t);
+            if (!id || n >= out.size() || std::find(out.begin(), out.begin() + static_cast<std::ptrdiff_t>(n), id) != out.begin() + static_cast<std::ptrdiff_t>(n)) return;
+            const Env::Tri& E = v.tris[static_cast<std::size_t>(of)];
+            const Env::Vec3 &a = v.verts[E.v[k]], &b = v.verts[E.v[(k + 1) % 3]];
             const float dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
             float s = l2 > 0.0f ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2 : 0.0f;
             s = s < 0.0f ? 0.0f : s > 1.0f ? 1.0f : s;
             if (Dist2D(p, { a.x + dx * s, a.y + dy * s, 0.0f }) < t.spotPortalStandU) out[n++] = id;
-        }
+        };
+        for (int k = 0; k < 3; ++k) edge(tri, k);
+        // the doorway's other edge may be the next triangle's: a gap one square deep is two triangles, and a body in either stands in the same gap
+        for (int k = 0; k < 3; ++k)
+            if (const std::int32_t nb = T.nb[k]; nb >= 0 && static_cast<std::size_t>(nb) < v.tris.size() && Walks(v, T.kind[k]))
+                for (int j = 0; j < 3; ++j) edge(nb, j);
         return out;
     }
 
@@ -136,8 +147,8 @@ namespace MFO::Iaus::Move {
         return n;
     }
 
-    bool GeomSees(const Env::View& v, const Env::Vec3& a, const Env::Vec3& b, const Tuning& t, Env::Scratch& s) {
-        return Env::CastRay(v, Eye(a, t), Eye(b, t), s, Env::kSightTuning, 48.0f).clear;
+    bool GeomSees(const Env::View& v, const Env::Vec3& a, const Env::Vec3& b, const Tuning& t, Env::Scratch& s, const Env::SightTuning& sight) {
+        return Env::CastRay(v, Eye(a, t), Eye(b, t), s, sight, 48.0f).clear;
     }
 
     // ── generators. Cheap: distances and facts already there. The geometry rays are in the checks ──────────────────────
@@ -145,7 +156,7 @@ namespace MFO::Iaus::Move {
         if (!g.hasTarget || g.targetIsAlly || !Ranged(g) || !InBand(g, c)) return false;
         r = c.walk; return true;
     }
-    bool CheckSight(const GenIn& g, const Cand& c, Env::Scratch& s) { return GeomSees(g.v, g.target, c.p, g.t, s); }
+    bool CheckSight(const GenIn& g, const Cand& c, Env::Scratch& s) { return GeomSees(g.v, g.target, c.p, g.t, s, g.pic.sight); }
 
     bool GenCover(const GenIn& g, const Cand& c, float& r) {
         if (!ThreatOf(g, 0)) return false;
@@ -154,7 +165,7 @@ namespace MFO::Iaus::Move {
     }
     bool CheckCover(const GenIn& g, const Cand& c, Env::Scratch& s) {
         for (std::size_t i = 0; i < g.m.threats.size(); ++i)
-            if (const Foe* f = ThreatOf(g, i); f && GeomSees(g.v, f->p, c.p, g.t, s)) return false;
+            if (const Foe* f = ThreatOf(g, i); f && GeomSees(g.v, f->p, c.p, g.t, s, g.pic.sight)) return false;
         return true;
     }
 
@@ -189,10 +200,13 @@ namespace MFO::Iaus::Move {
         r = c.walk; return true;
     }
 
+    // A bow in his hands blocks nobody: peel is for a body (melee) or a control.
+    static bool Intercepts(const GenIn& g) { return g.act.melee || g.act.Kind() == Family::CastControl || g.act.Kind() == Family::Taunt; }
     bool GenPeel(const GenIn& g, const Cand& c, float& r) {
-        if (!g.foe || g.foe->target == 0 || g.foe->target == g.m.id) return false;
+        if (!g.foe || g.foe->target == 0 || g.foe->target == g.m.id || !Intercepts(g)) return false;
         for (const Member& a : g.pic.party)
             if (a.id == g.foe->target) {
+                if (Dist(a.p, g.foe->p) > 2.0f * g.t.spotPeelU) return false;   // an attacker ON the ally, not one who shoots from across the place: there is nothing to step between
                 const float off = Dist(c.p, Mid(a.p, g.foe->p));
                 if (off > g.t.spotPeelU) return false;
                 r = off + 0.25f * c.walk; return true;
@@ -228,6 +242,29 @@ namespace MFO::Iaus::Move {
         if (!(Dist(f->p, c.p) > Dist(f->p, g.m.p) + 200.0f)) return false;   // away from what is on him
         r = c.walk - near; return true;                                     // the exits are counted on the pooled spot: a dead end is dropped there
     }
+    // A route leads on from there: to a place twice spotExitU past the spot that he reaches before any foe does, and that lies spotExitU farther from every foe than
+    // the spot itself. Counting open directions alone called a pocket room a way on: its mouth is open, and closed by whoever follows him into it. Flood
+    // distances run centre to centre and read long, so a room of less than about 1000 units across is never its own way on.
+    bool CheckExit(const GenIn& g, const Cand& c, Env::Scratch&) {
+        Work::Flood f;
+        Flood(g.v, c.p, c.tri, g.m.who, 2.5f * g.t.spotExitU, 256, f);
+        const float far = f.cut ? (std::min)(2.0f * g.t.spotExitU, 0.8f * f.bound) : 2.0f * g.t.spotExitU;   // a mesh of small triangles fills the cap first: its frontier
+        const auto walkOf = [&](const Foe& e, std::int32_t tri, const Env::Vec3& p) {   // not flooded (he targets nobody now, or the flood budget): the straight line, never longer than his walk
+            const float line = Dist(e.p, p);
+            for (const auto& fl : g.pic.work.foeFlood) if (fl.who == e.id && !fl.d.empty()) { const float w = fl.At(tri); return w >= 0.0f ? w : (std::max)(line, fl.bound); }
+            return line;
+        };
+        std::vector<float> here;
+        for (const Foe& e : g.pic.foes) here.push_back(walkOf(e, c.tri, c.p));
+        for (const auto& [at, d] : f.d) {
+            if (d < far) continue;
+            bool on = true;
+            const Env::Vec3 q = Env::Centroid(g.v, at);
+            for (std::size_t i = 0; i < g.pic.foes.size() && on; ++i) { const float his = walkOf(g.pic.foes[i], at, q); on = his > c.walk + d && his >= here[i] + g.t.spotExitU; }
+            if (on) return true;
+        }
+        return false;
+    }
 
     bool GenReachUnreach(const GenIn& g, const Cand& c, float& r) {
         if (!g.foe || !g.targetUnreachable || !InBand(g, c)) return false;
@@ -235,6 +272,7 @@ namespace MFO::Iaus::Move {
     }
 
     bool KeptHolds(SpotKind k, const GenIn& g, const Cand& c) {
+        if (k == SpotKind::Peel) { float r = 0.0f; return GenPeel(g, c, r); }   // the pair he stepped between moved on: the place is worth nothing now, and the claim would hold him there
         if (k != SpotKind::RetreatExit && k != SpotKind::Kite) return true;
         const Foe* f = ThreatOf(g, 0);
         return !f || Dist(f->p, c.p) > Dist(f->p, g.m.p) - g.t.spotArriveU;   // never toward what is on him now

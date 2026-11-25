@@ -4,6 +4,7 @@
 // The tuning is ShippedTuning() plus the case's own `u` lines (name value, SetTuningScalar). The profiles are NOT in it: the replayer maps Member::classId
 // (the harness: 0xFF no class, 1 its fixed test profile). A change of a t.spot* / spot curve rewrites the cases.
 // The PATH CACHE is not in it either: a writer clears PartyPicture::paths before the window it dumps (a cached path is up to t.spotFactMoveU old).
+// PartyPicture::sight is not in it: a dumped window ran on the shipped rules.
 // Walls and the grid are rebuilt from the mesh. TO ADD AN INPUT: a field at the END of its line's writer and reader, and raise kVersion.
 #include "iaus/MovePass.h"
 

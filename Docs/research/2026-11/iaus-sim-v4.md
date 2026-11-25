@@ -1529,3 +1529,63 @@ Conjurations are nearly all `TargetLocation`, and native and the lab both drop t
 
 - **Conjurations never reach IAUS** (`iaus/Prune.h:93`, filled at `iaus/SpellBook.cpp:253`). By data: Vanilla 14 of 14 taught, Tuxborn 307 of 311, LoreRim 204 dropped. The design rule (iaus-design.md section 2) names "runes and other Target Location spells", and a summon is caught by the delivery. It has its own cast road, so the reason for the rule (where to put it) does not hold.
 - **`HasImpactHazard` (`cast/Archetype.cpp:214`) calls a missed bolt's burn mark a wall.** In Vanilla: Firebolt, Flames, Frostbite, Fireball, Ice Spike, Ice Storm, Incinerate, the Icy Spear, Expel / Banish / Command Daedra read shape Wall, and IAUS drops Wall as Placement. In lists whose spells carry a Script effect (Tuxborn and most of LoreRim) the shape is ScriptRider, tested first, so they are kept. The lab does not model this: it drops `TargetLocation` only, so its VANILLA world offers spells the game's IAUS would drop.
+
+## 17. The movement pass in the sim's world (movement-plan.md S2, branch `feat/move-s2`, 2026-11-24)
+
+Off by default. `--world v4` without the flag compares with 0 metrics changed against the three baselines, at 1 and at 8 threads.
+
+### 17.1 Where things are
+
+| What | Where | To change it |
+|---|---|---|
+| Switches, the mover's numbers, the fault variants, the per-fight state | `tools/iaus_sim/Move.h` | a number: `MoveTuning`. A fault: one row of `kMoveFaults` |
+| The window, the rays, the claim, the executor | `tools/iaus_sim/MoveWorld.h` | an input of the picture: `MoveFill`. An event: where its mark is set (`MoveFill`, `MoveLegEnd`) |
+| The scenarios of 8.5, asserted | `tools/iaus_sim/SpotTest.h`, `sim --spot-test` | one row of `SpotCases` |
+| Hooks | `World.h` (`StepWorld`, `Brain`, `Feet`, `Move`), `EnvWorld.h EnvLegEnd`, `Policy.h` (the ranking, `--spots-replace`) | |
+| Metrics | `sim.cpp Metrics`: `cover%`, `exposed%`, `spot/f`, `spotChange/f`, `spotLen`, `spotBlocked/f`, `claim%`, `toSpot%`, `sk.<kind>`, `mv.*` (budgets) | |
+
+CLI: `--position-road off|point|pinned`, `--spots-replace <kind,...>`, `--move-fault <name>`, `--spot-test`. Naming the road (also `off`) prints the cover and spot metrics. The road is in the world tag, so a compare across roads is refused. `MOVECOST` on stderr is host time.
+
+### 17.2 How it runs
+
+One window is `MoveDecisionSec`. At its start the picture is filled, frozen and phase 1 runs in one go. The ray asks are cast at an even rate across the window, by the true geometry at that moment, and each answer carries its time and the viewer's place. At the end phase 3 runs and the claims change. An event only sets a mark.
+
+A claim is ch.24 point and hold: he walks by the sim's own mover at run speed (same routes, doors, bodies and leg ends), a blade fights a foe in reach on the way, and then his own movement stays inside the radius. Retreat, flee, hide, back-off, step, regroup, give ground and the hold row keep their precedence, and a member under one of them is a body the pass plans around. A leg that ends BLOCKED or UNREACHABLE is the engine dropping the claim. STUCK only marks him. Past the leash the claim waits and the pass is told.
+
+### 17.3 What it changed in S1's files (golden regenerated once)
+
+- The Dijkstra flood allocated one float a triangle a call. It keeps one array a thread now (review R3).
+- `peel` was offered to a bow, and for an attacker shooting from across the place. A warrior stood half way to a tower archer for the whole fight. Now: melee, taunt or control only, the attacker within 2 x `t.spotPeelU` of the ally, and a kept peel is asked again.
+- A retreat place needs `CheckExit`: a place farther on that he reaches before any foe. Counting open directions called a pocket room a way on.
+- A place he stands on counts as unseeing when his own ray says so. The point may see while he, inside the radius, does not.
+- A doorway one square deep has two edges on two triangles. Both bodies got a place in it. `PortalsAt` looks one triangle round, and `t.spotPortalStandU` is 100 (was 60).
+- `PartyPicture::sight`: the geometry rays' rules are an input, so the lab can switch a layer off.
+
+### 17.4 The scenarios (`--spot-test`, 12 fights an arm, seeds 1 to 6 checked)
+
+| Scenario | Rule | Result | Fault | With the fault |
+|---|---|---|---|---|
+| lost-sight-firing-spot | hits within 15 s in 80 percent, at most 1.5 s a fight on a place without sight | 10 of 12, 0.50 s | blind | 5 of 12, 15.8 s |
+| ridge-self-occlusion | the same | 12 of 12, 0.00 s | terrain | 5 of 12, 6.7 s |
+| tower-stairs, blade | beside him on the top within 20 s in 90 percent, at most 1 s below him | 12 of 12, 0.00 s | stay-holds | 2 of 12, 15.0 s |
+| tower-stairs, archer | hits from below, never on the top | 12 of 12, 0 on the top | blind | 0 of 12 |
+| above-through-wall (scripted) | no window decided for the foe no road leads to | 0 of 696 | reach | 696 of 696 |
+| doorway-block (scripted, pinned road) | the doorway is held, never by two | 12 of 12, 0 | portals | two in 12 of 12 |
+| healer-round-corner (scripted) | he reaches and sees the patient within 12 s | 12 of 12 | no-heal | 0 of 12 |
+| dead-end-retreat, a way on (scripted) | never sent into the pocket | 0 of 12 | exits | 4 of 12 |
+| dead-end-retreat, none (scripted) | no retreat place offered | 0 of 12 | exits | 12 of 12 |
+
+Scripted: his ranking is replaced by a fixed one. The rule is then about the place.
+
+### 17.5 Measured
+
+The pass costs 5 ms a fight in extracted Tuxborn places and 13 ms in the hand-made fixtures on a loaded host (0.12 and 0.27 ms a window). Paths: the gate is not worse with the road on (fixtures 1 cell failing off, 3 on, of 105. Tuxborn 2 off, 1 on, of 32. The bounds are placeholders). U on the 14 environment scenarios is within 1 point of the road off except `trust-ignored-wall` (+6.8) and `env-heal-corner` (-4.0). Every weight and curve is S1's placeholder. S5 searches them.
+
+### 17.6 Open, for the next package
+
+1. **A heal that does not reach is no candidate.** `Generate.cpp` drops a heal whose recipient is past its reach or occluded, so the pass never hears of it and `heal_reach` can only improve a heal that already works. The healer scenario is scripted for that reason. A fix belongs in native (a candidate scored as if he stood where it works, handed to the pass only) and is not in S1 or S2.
+2. **`spotAction` is not read back.** 8.1 says the action facet gives the pass's action its momentum bonus. `Decide` has no such input. A place chosen for his second action does not make him take it.
+3. The mirrors of `t.sharedRadiusMargin` and `t.preemptSettle` (plan S2) are not built. They are casting rules, and would move every baseline with the road off.
+4. `calib_point.py` waits for a line format: G0b's exerciser has not merged.
+5. The oracle's own subject has no ranking in the picture, so it holds no claim. Its rollouts copy and run the pass for the others. S5.
+6. The sim runs phase 1 in one go. A party of ten on a 16k mesh with pins would not finish in the game's window (S1 review R1), so the lab is kinder there. Pins are off and the lab's parties are small.

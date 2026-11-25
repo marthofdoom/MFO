@@ -353,16 +353,21 @@ namespace {
         const Tuning& t = ShippedTuning();
         using Tri3 = MFO::Iaus::Tri;
         {   // F1: two retreaters back to back, each with his own foe on the other side
-            const auto m = Build({ "##########################", "#........................#", "#........................#", "#........................#", "##########################" });
-            int picks = 0, bad = 0, toward = 0;
+            // a hall with room to the sides: between two foes in a corridor three squares wide there is no way on, and none is offered (CheckExit)
+            const auto corridor = Build({ "##########################", "#........................#", "#........................#", "#........................#", "##########################" });
+            std::vector<std::string> wide(25, "#........................#"); wide.front() = wide.back() = "##########################";
+            const auto m = Build(wide);
+            int picks = 0, bad = 0, toward = 0, shut = 0;
             for (const float gap : { 1.0f, 2.0f, 3.0f, 4.0f }) for (const float off : { 1.5f, 2.0f, 3.0f }) {
                 const float x = 12.0f;
-                PartyPicture p; p.party = { Who(0x31, At(x, 2), { Act(Family::Retreat, 0, 0.9f, 0.0f, Sight::None) }), Who(0x32, At(x + gap, 2), { Act(Family::Retreat, 0, 0.9f, 0.0f, Sight::None) }) };
-                p.foes = { Bad(0x91, At(x + gap + off, 2), 0x32), Bad(0x92, At(x - off, 2), 0x31) };
+                const auto Pair = [&](float y) { PartyPicture q; q.party = { Who(0x31, At(x, y), { Act(Family::Retreat, 0, 0.9f, 0.0f, Sight::None) }), Who(0x32, At(x + gap, y), { Act(Family::Retreat, 0, 0.9f, 0.0f, Sight::None) }) };
+                    q.foes = { Bad(0x91, At(x + gap + off, y), 0x32), Bad(0x92, At(x - off, y), 0x31) }; return q; };
+                { PartyPicture q = Pair(2); for (const auto& a : Window(corridor, q, t).as) if (a.kinds & KindBit(SpotKind::RetreatExit)) ++shut; }
+                PartyPicture p = Pair(12);
                 for (int w = 0; w < 3; ++w) {
                     const auto r = Window(m, p, t);
                     for (const auto& a : r.as) if (a.spot >= 0) {
-                        const auto mine = a.who == 0x31 ? p.foes[1].p : p.foes[0].p; const auto at = a.who == 0x31 ? At(x, 2) : At(x + gap, 2);   // Freeze sorted the foes: 0x91, 0x92
+                        const auto mine = a.who == 0x31 ? p.foes[1].p : p.foes[0].p; const auto at = a.who == 0x31 ? At(x, 12) : At(x + gap, 12);   // Freeze sorted the foes: 0x91, 0x92
                         ++picks; if (!(Dist(mine, a.p) > Dist(mine, at) + 200.0f)) ++bad;
                         if (Dist(mine, a.p) < Dist(mine, at)) ++toward;
                     }
@@ -370,6 +375,7 @@ namespace {
             }
             char b[160]; std::snprintf(b, sizeof b, "F1 back to back retreaters: every pick is 200 u farther from his OWN foe (%d picks, %d break it, %d toward)", picks, bad, toward);
             Row(picks >= 24 && bad == 0, b);
+            Row(shut == 0, "F1 between two foes in a corridor no retreat place is offered (no way on)");
             // a kept retreat that a new attacker stands in the way of is not kept
             PartyPicture k; k.party = { Who(0x31, At(8, 2), { Act(Family::Retreat, 0, 0.9f, 0.0f, Sight::None) }) }; k.foes = { Bad(0x92, At(6, 2), 0x31) };
             const auto r1 = Window(m, k, t); const auto was = Of(r1, 0x31)->p;
