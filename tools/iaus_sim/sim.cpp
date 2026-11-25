@@ -12,7 +12,7 @@
 #include "iaus_sim/PotionWorth.h"
 #include "iaus_sim/Logistics.h"
 #include "iaus_sim/EnvTest.h"     // SIM V4: --env-test
-#include "iaus_sim/ModeSet.h"     // --mode-cover, --mode-test
+#include "iaus_sim/ModeAccept.h"  // --mode-cover, --mode-test, --mode-gen, --mode-calib, --mode-accept
 #include "iaus_sim/SpotTest.h"    // S2: --spot-test
 #include "iaus_sim/LootCli.h"     // SIM V4 batch L: looting in the fight world (--loot-*)
 #include "iaus/Iaus_internal.h"   // detail::SetFor: which considerations a family reads (--list-uses, for the per-class curve search)
@@ -829,7 +829,7 @@ int main(int argc, char** argv) {
 static int RealMain(int argc, char** argv) {
     int disengageReport = 0, stealLab = 0;
     Loot::Opts lootOpts; std::string lootList;   // SIM V4 batch L
-    std::string envFile, envSet, envClass; bool envTest = false, spotTest = false, modeCover = false, modeTest = false; ModeOpts modeOpts; bool envList = false, pathGate = false; int pathReport = 0, pathOracle = 0, soloWalk = 0;   // SIM V4
+    std::string envFile, envSet, envClass; bool envTest = false, spotTest = false, modeCover = false, modeTest = false; ModeOpts modeOpts; int modeRun = 0; GenRun gen; bool envList = false, pathGate = false; int pathReport = 0, pathOracle = 0, soloWalk = 0;   // SIM V4
     std::vector<std::string> curveSpecs;
     int potCalibN = 0; std::string potWorthPath;
     const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, listUses = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = -1, gapScen = 2, gapLuck = 1, ratingN = -1; bool ratingOnly = false, gapDump = false, spellRegret = false, gapIausOnly = false; std::vector<std::string> altSets; int logiN = 0, logiK = 8; std::string logiPolicy = "baseline"; std::string logiUses; bool logiScore = false; int declineN = 0, damageN = 0;
@@ -866,6 +866,20 @@ static int RealMain(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--mode-fights") && i + 1 < argc) modeOpts.fights = std::max(2, std::atoi(argv[++i]));
         else if (!std::strcmp(argv[i], "--mode-class") && i + 1 < argc) modeOpts.cls = argv[++i];
         else if (!std::strcmp(argv[i], "--mode-null")) modeOpts.null = true;
+        else if (!std::strcmp(argv[i], "--mode-gen")) modeRun = 1;   // S5-D, ModeGen.h / ModeAccept.h
+        else if (!std::strcmp(argv[i], "--mode-calib")) modeRun = 2;
+        else if (!std::strcmp(argv[i], "--mode-accept")) modeRun = 3;
+        else if (!std::strcmp(argv[i], "--mode-source") && i + 1 < argc) { const std::string v = argv[++i]; if (v != "cells" && v != "gen") { std::fprintf(stderr, "--mode-source cells|gen\n"); return 2; } modeOpts.gen = v == "gen"; }
+        else if (!std::strcmp(argv[i], "--mode-family") && i + 1 < argc) { const std::string v = argv[++i]; gen.g.family = -1; for (int k = 0; k < 3; ++k) if (v == kGenFamilies[k]) gen.g.family = k; if (gen.g.family < 0) { std::fprintf(stderr, "--mode-family design|train|heldout\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--mode-against") && i + 1 < argc) { const std::string v = argv[++i]; gen.g.against = v == "free" ? 0 : v == "stand" ? 1 : -1; if (gen.g.against < 0) { std::fprintf(stderr, "--mode-against free|stand\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--mode-places") && i + 1 < argc) gen.places = static_cast<std::size_t>(std::max(1, std::atoi(argv[++i])));
+        else if (!std::strcmp(argv[i], "--mode-cal") && i + 1 < argc) gen.cal = argv[++i];
+        else if (!std::strcmp(argv[i], "--mode-luck") && i + 1 < argc) { if (std::sscanf(argv[++i], "%d:%d", &gen.luck0, &gen.luck1) != 2 || gen.luck0 < 0 || gen.luck1 <= gen.luck0) { std::fprintf(stderr, "--mode-luck <from>:<to>\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--mode-scen") && i + 1 < argc) { gen.scen.clear(); std::stringstream ss(argv[++i]); std::string t; while (std::getline(ss, t, ',')) gen.scen.push_back(std::max(0, std::atoi(t.c_str()))); }
+        else if (!std::strcmp(argv[i], "--mode-refuse") && i + 1 < argc) { const std::string v = argv[++i]; const int m = v == "free" ? 0 : v == "stand" ? 1 : v == "goto" ? 2 : v == "kite" ? 3 : v == "disengage" ? 4 : -1; if (m < 0) { std::fprintf(stderr, "--mode-refuse free|stand|goto|kite|disengage\n"); return 2; } gen.refuse |= 1u << m; }
+        else if (!std::strcmp(argv[i], "--mode-k") && i + 1 < argc) gen.modeK = std::max(2, std::atoi(argv[++i]));
+        else if (!std::strcmp(argv[i], "--mode-check") && i + 1 < argc) gen.check = std::max(1, std::atoi(argv[++i]));
+        else if (!std::strcmp(argv[i], "--mode-iaus-only")) gen.iausOnly = true;
         else if (!std::strcmp(argv[i], "--mode-oracle")) modeOpts.oracle = 1;
         else if (!std::strcmp(argv[i], "--decast-road")) g_decastRoad = true;   // S4
         else if (!std::strcmp(argv[i], "--light-sampler") && i + 1 < argc) g_lightT.sampler = std::strcmp(argv[++i], "off") != 0;
@@ -1083,10 +1097,10 @@ static int RealMain(int argc, char** argv) {
     const bool lootRun = lootOpts.report || lootOpts.oracle || lootOpts.cost || lootOpts.test || !lootOpts.scenario.empty();
     if (lootRun && !g_v4.env) g_v4.Defaults();
     if (!lootList.empty()) { std::string err; if (!Loot::LoadLootList(lootList, &err)) { std::fprintf(stderr, "--loot-list: %s\n", err.c_str()); return 2; } }
-    if (spotTest || modeCover || modeTest) { g_v3 = V3{}; g_v4.Defaults(); }
+    if (spotTest || modeCover || modeTest || modeRun) { g_v3 = V3{}; g_v4.Defaults(); }
     if ((g_road != Road::Off || g_spotsReplace || g_moveFault != &kMoveFaults[0] || g_spotMeter) && !(g_v4.env && g_v4.path)) { std::fprintf(stderr, "--position-road, --spots-replace and --move-fault need an environment: --world v4\n"); return 2; }
     if ((g_spotsReplace || g_moveFault != &kMoveFaults[0]) && g_road == Road::Off) { std::fprintf(stderr, "--spots-replace and --move-fault need --position-road point|pinned|strict\n"); return 2; }
-    if (g_v4.env || envTest || spotTest || modeCover || modeTest || envList || pathReport || soloWalk) {
+    if (g_v4.env || envTest || spotTest || modeCover || modeTest || modeRun || envList || pathReport || soloWalk) {
         if (!LoadFixtures(g_envPool)) { std::fprintf(stderr, "cannot load the fixture environments from %s:", g_envDir.c_str()); for (const EnvSkip& k : g_envPool.skipped) std::fprintf(stderr, " %s (%s)", k.file.c_str(), k.why.c_str()); std::fprintf(stderr, "\n(python3 tools/iaus_sim/envs/make_fixtures.py writes them; SIM_ENV_DIR points elsewhere)\n"); return 2; }
         if (!envFile.empty() || !envSet.empty()) { g_envPool.draw.clear(); const std::size_t sk0 = g_envPool.skipped.size();
             if (!envFile.empty()) { if (!g_envPool.Add(envFile, true)) { std::fprintf(stderr, "--env %s: %s\n", envFile.c_str(), g_envPool.skipped.back().why.c_str()); return 2; } if (g_envPool.draw.empty()) g_envPool.draw.push_back(g_envPool.all.back().get()); g_envLabel = g_envPool.all.back()->name; }
@@ -1100,7 +1114,16 @@ static int RealMain(int argc, char** argv) {
         if (spotTest) return RunSpotTests(D, allClasses, seed, threads);
         modeOpts.real = !envSet.empty() || !envFile.empty();
         if (modeCover) return RunModeCover(D, allClasses, seed, modeOpts.real);
+        gen.g.seed = seed; gen.n = std::max(1, modeOpts.n); gen.real = modeOpts.real; gen.cls = modeOpts.cls; if (modeRun == 2) gen.fights = std::min(modeOpts.fights, 256); 
+        std::vector<GenPlace> genPlaces;   // --mode-test --mode-source gen: the forced arms on the generator's scenarios (the residue arms of s5-plan.md 9, DESIGN seeds). Difficulty from --mode-cal, else 1.1
+        if (modeTest && modeOpts.gen) { if (!GenSetup(D, allClasses, t1, gen, genPlaces, "--mode-test")) return 2; auto cal = std::make_shared<CalTable>(); std::string err; if (!gen.cal.empty() && !GenLoadCal(gen, *cal, err)) { std::fprintf(stderr, "--mode-test: %s\n", err.c_str()); return 2; }
+            std::printf("%s cal=%s\n", GenHeader(gen, "MODETESTGEN", seed).c_str(), gen.cal.empty() ? "none" : "table");
+            modeOpts.build = [&, cal](int s, std::size_t ci, std::uint64_t& fseed) { const GenScen q = GenDraw(gen.g, s); const auto it = cal->find({ s, kModeClasses[ci] }); const FightSpec fs = GenSpec(D, allClasses, kModeClasses[ci], q, it == cal->end() ? 1.1f : it->second.first, gen.real ? genPlaces[static_cast<std::size_t>(s) % genPlaces.size()].env : nullptr); fseed = fs.seed; return GenBuild(D, fs, q, t1); };
+            modeOpts.label = [&](int s) { const GenScen q = GenDraw(gen.g, s); return std::vector<std::string>{ std::string("row ") + (q.row >= 0 ? kModeRows[q.row].name : "-"), std::string("kinds ") + GenKindGroup(q), std::string("count ") + kGenBands[GenBand(q.count)], std::string("terrain ") + (gen.real ? "extracted" : kGenTerrain[q.terrain].name), std::string("party ") + kGenParty[q.party], std::string("player ") + kGenPlayer[q.player], std::string("speed ") + (q.speed < 0.4f ? "under 0.4" : q.speed < 1.0f ? "0.4-1" : "1-1.5") }; }; }
         if (modeTest) return RunModeTest(D, allClasses, seed, threads, modeOpts, oc);
+        if (modeRun == 1) return RunModeGen(D, allClasses, threads, gen);
+        if (modeRun == 2) return RunModeCalib(D, allClasses, threads, gen);
+        if (modeRun == 3) return RunModeAccept(D, allClasses, threads, gen, oc);
         if (soloWalk) return RunSoloWalk(D, allClasses, soloWalk);
     }
     {   // B711: a class name that matches nothing is an error, never a silently empty scope

@@ -329,6 +329,10 @@ namespace Sim {
     inline constexpr const char* kFixtureNames[] = { "open-room", "corridor-l", "doorway", "doorway-open", "doorway-plain", "locked-door", "stair-tower", "ledge", "ridge", "u-corridor", "dead-end", "island", "pillars", "narrow", "seam", "trust-wall", "trust-one-way", "light-hall", "torch-room",
         "loot-room", "loot-backs", "loot-freeze", "loot-gate", "loot-town", "loot-shop", "loot-watch",
         "mode-open", "mode-bridge", "mode-slope", "mode-water", "mode-stairs" };   // strict movement's mode set (ModeSet.h): nopool too   // batch L: nopool, so no ordinary fight draws them and the pool hash is what it was
+    // THE GENERATOR'S FIXTURES (ModeGen.h, drawn by make_fixtures.py GEN): loaded for the mode runs only.
+    inline constexpr const char* kGenFixtures[] = { "gen-open-a", "gen-open-b", "gen-corridor-a", "gen-corridor-b", "gen-doorway-a", "gen-doorway-b", "gen-pillars-a", "gen-pillars-b", "gen-stairs-a", "gen-stairs-b", "gen-bridge-a", "gen-bridge-b",
+        "gen-dead-end-a", "gen-dead-end-b", "gen-slope-a", "gen-slope-b", "gen-water-a", "gen-water-b", "gen-door-a", "gen-door-b", "gen-corner-a", "gen-corner-b", "gen-corner-c" };
+    inline bool LoadGenFixtures(EnvPool& P) { bool ok = true; for (const char* n : kGenFixtures) ok = P.Add(g_envDir + "/" + n + ".mfoenv", true) && ok; return ok; }
     inline bool LoadFixtures(EnvPool& P) { bool ok = true; for (const char* n : kFixtureNames) ok = P.Add(g_envDir + "/" + n + ".mfoenv", true) && ok; return ok; }
     // HELD-OUT PLACES (sim v4 batch C): `--env-hold train|heldout` splits the library by a hash of each place's id, one in kEnvHoldEvery held out, so a
     // tuning is checked on places it never saw. 0 = every place (the default, and what the baselines and the path gate read). The pool's hash is in

@@ -194,7 +194,7 @@ namespace Sim {
     struct Hazard { float x = 0, y = 0, z = 0, r = 0; double until = 0, nextTick = 0; float interval = 1; std::uint32_t owner = 0; bool party = false, pcOnly = false; std::shared_ptr<const SimSpell> spell; };
     struct HazardHit { std::uint32_t victim = 0, owner = 0; const SimSpell* spell = nullptr; double at = 0; };   // one spell of one caster does not stack on one victim
     struct Commanded { std::uint32_t owner = 0, body = 0; int ctl = -1, spell = -1; double until = 0, deadAt = -1; };   // the engine's commanded actors, in cast order: summons and raised thralls, the dead until removed
-    struct Spawn { double at = 0; std::shared_ptr<const ActorSpec> spec; float x = 0, y = 0; std::string tag; float dmgScale = 1; };   // a foe that joins later (waves)
+    struct Spawn { double at = 0; std::shared_ptr<const ActorSpec> spec; float x = 0, y = 0; std::string tag; float dmgScale = 1; int halfOf = 0; };   // a foe that joins later (waves). halfOf > 0: or at once when half of that many foes are down (ModeGen.h)
 
     // Per-fight counters. `subject` = follower 0 unless stated.
     struct Tally {
@@ -301,6 +301,9 @@ namespace Sim {
         // claims filed / of those a CHANGE of place while he still walked to another / reached / ended blocked / dropped by the engine / released; the path length he
         // was sent on; seconds a claim stood / walked; threat looks: seconds with a threat, of those no threat sees him, and the mean share of threats that do.
         long   spotFiled = 0, spotChanges = 0, spotArrived = 0, spotBlocked = 0, spotDropped = 0, spotReleased = 0, trustMarks = 0, spotKind[MFO::Iaus::kSpotKindCount] = {};
+        // STRIKE WINDOWS (S5-D): a kite that never strikes is no kite. strike = a swing, power attack, bash, shot or cast of the subject that began. Recorded always, printed by --mode-accept.
+        // kite*: while a live Kite order has him; an episode ends with the order. kiteDead: the episodes in which he never struck. No game side yet: this is the metric a later delta stage must pass
+        long   strikes = 0, kiteStrikes = 0, kiteN = 0, kiteDead = 0; double strikeEnd = -1, strikeLast = 0, strikeGap = 0, kiteSec = 0, kiteGap = 0, kiteLast = 0, kiteDmg = 0, kiteDmg0 = 0, kiteLongest = 0, kiteFrom = 0; long kiteStrikes0 = 0; bool kiteOn = false;
         std::array<long, 6> strictOrders{}; long strictBlocks = 0, strictUnreach = 0, strictDisplaced = 0, strictLunges = 0; double strictSec = 0, strictStandSec = 0, strictOutSec = 0, strictTravelSec = 0, strictTravelU = 0;   // strict orders, the subject's
         double spotPathLen = 0, spotClaimSec = 0, spotWalkSec = 0, threatSec = 0, coverSec = 0, exposedSec = 0;
         // ... of the pass itself (the whole party): windows / unfinished / a budget that was short (paths skipped, asks, spots, triples) / paths searched / rays asked
@@ -1881,6 +1884,7 @@ namespace Sim {
                 if (g_v3.lof && x.ctl >= 0 && x.act == Act::Cast && x.actIaus && x.hitAt >= 0 && !x.castStarted && now >= x.claimUntil && now >= x.staggerUntil && now >= x.ctrlUntil) StartTest(b[i]);   // SIM V3: the guard's 0x06 answer for a claimed cast
                 if (x.hitAt >= 0 && now >= x.hitAt && now >= x.staggerUntil && now >= x.ctrlUntil) Resolve(b[i]);
             }
+            if (!late.empty() && late[0].halfOf > 0) { int up = 0; for (const Body& x : b) up += x.role == Role::Foe && x.alive; if (2 * up <= late[0].halfOf) for (Spawn& s : late) s.at = std::min(s.at, now); }
             for (std::size_t i = 0; i < late.size();) { if (late[i].at <= now) { const Spawn sp = late[i]; late[i] = late.back(); late.pop_back(); Body& n = Add(Role::Foe, sp.spec, sp.x, sp.y); n.tag = sp.tag; n.dmgScale = sp.dmgScale; IntoRoom(n, std::max(0.5f * arenaR, arenaR - 50.0f));
                     if (!ctl.empty() && t.mpAtLate < 0) { const Body& s0 = b[static_cast<std::size_t>(ctl[0].body)]; t.mpAtLate = s0.c.mpMax > 0 ? s0.c.mp / s0.c.mpMax : 1.0; } } else ++i; }
             if (g_v4.light) for (Body& x : b) if (WantsDarkNow(x)) x.darkAt = now;   // S4
@@ -1910,7 +1914,9 @@ namespace Sim {
             for (auto& x : b) { if (!Up(x)) continue; if (x.role == Role::Foe) { anyFoe = true; if (x.c.targetId == pl.c.id && Dist(x, pl) < 1500) pressed = true; } else if (x.role == Role::Player || x.role == Role::Follower) anyParty = true; }
             if (pressed) t.playerPressureSec += TM::dt;
             if (pl.alive) t.playerMinHp = std::min(t.playerMinHp, double(pl.c.hp / std::max(1.0f, pl.c.hpMax))); else t.playerMinHp = 0;
-            if (!ctl.empty()) { const Body& s0 = b[static_cast<std::size_t>(ctl[0].body)]; if (Up(s0)) { t.upSec += TM::dt; const std::size_t ai = now < s0.actEnd ? static_cast<std::size_t>(s0.act) : 0; t.bodySec[ai] += TM::dt; if (ai && s0.actIaus) t.bodyIausSec[ai] += TM::dt; } }
+            if (!ctl.empty()) { const Body& s0 = b[static_cast<std::size_t>(ctl[0].body)]; if (Up(s0)) { t.upSec += TM::dt; const std::size_t ai = now < s0.actEnd ? static_cast<std::size_t>(s0.act) : 0; t.bodySec[ai] += TM::dt; if (ai && s0.actIaus) t.bodyIausSec[ai] += TM::dt;
+                if ((s0.act == Act::Swing || s0.act == Act::Power || s0.act == Act::Bash || s0.act == Act::Shoot || s0.act == Act::Cast) && now < s0.actEnd && s0.actEnd != t.strikeEnd) { ++t.strikes; t.strikeEnd = s0.actEnd; t.strikeLast = now; if (t.kiteOn) { ++t.kiteStrikes; t.kiteLast = now; } }
+                t.strikeGap = std::max(t.strikeGap, now - t.strikeLast); if (t.kiteOn) t.kiteGap = std::max(t.kiteGap, now - t.kiteLast); } }
             if (!ctl.empty()) { Ctl& c0 = ctl[0]; const Body& s0 = b[static_cast<std::size_t>(c0.body)];
                 if (c0.runMeasured && c0.runSafeAt < 0) {   // section 31.9: the first moment after a G3 run began with no foe inside 400 units of him (20 s cap, or he went down)
                     bool near = false; for (const Body& o : b) if (o.role == Role::Foe && Up(o) && Dist(o, s0) < 400.0f) { near = true; break; }

@@ -7,6 +7,9 @@ so the simulator loads fixtures and extracted environments through the same read
     python3 tools/iaus_sim/envs/make_fixtures.py --check    # exit 1 when a committed .mfoenv differs from its .txt
     python3 tools/iaus_sim/envs/make_fixtures.py [--check] <name> ...   # only the named fixtures
 
+THE GENERATOR'S FIXTURES (gen-<terrain>-<n>, S5-D, iaus_sim/ModeGen.h) have no .txt: the GEN table below draws them from a
+width, a length and a height, mirrored (mx, my) and turned (tr). To add one: a row of GEN + its name in Env.h kGenFixtures.
+
 THE .txt FORMAT
     cell <units>            size of one map square (default 128)
     exterior                the environment is outside (default: interior)
@@ -46,10 +49,10 @@ sys.path.insert(0, os.path.join(HERE, '..', '..', 'envextract'))
 import fmt   # noqa: E402  (the extractor's own writer structs)
 
 
-def parse(path):
+def parse(lines):
     f = {'cell': 128.0, 'interior': True, 'class': 'fixture', 'rows': [], 'z': [], 'ramp': [], 'drop': [], 'portal': [], 'seam': None, 'defect': [], 'pool': True, 'light': None, 'lightrows': [], 'loot': [], 'guard': [], 'bystander': [], 'body': [], 'town': False}
     inmap = False
-    for raw in open(path):
+    for raw in lines:
         line = raw.rstrip('\n')
         if inmap:
             if line.strip() == 'end': inmap = False
@@ -70,7 +73,7 @@ def parse(path):
         elif t[0] == 'town': f['town'] = True
         elif t[0] == 'light': f['light'] = float(t[1])
         elif t[0] == 'lit': f['lightrows'].append([int(v) for v in t[1:5]] + [float(t[5])])
-        else: raise SystemExit('%s: unknown line %r' % (path, line))
+        else: raise SystemExit('unknown line %r' % line)
     return f
 
 
@@ -207,13 +210,70 @@ def write(path, built):
     with open(path, 'wb') as fh:
         fh.write(d[:12] + struct.pack('<I', n + 1) + table + b'\0' * (new_off - new_hdr) + body + pad + b''.join(struct.pack('<IHBB', *r) for r in dfct))
 
+# ── the generator's fixtures (S5-D) ──
+def grid(w, h): return [['#'] * w for _ in range(h)]
+def fill(g, x0, y0, x1, y1, ch='.'):
+    for y in range(y0, y1 + 1):
+        for x in range(x0, x1 + 1): g[y][x] = ch
+def two_rooms(rw, h, l, gap, door=None, gaps=1):   # two rooms rw squares deep, h wide, a passage l long and gap wide between them (gaps of them). P and F at both ends
+    W = 2 * rw + l + 2; g = grid(W, h + 2); fill(g, 1, 1, rw, h); fill(g, rw + l + 1, 1, W - 2, h)
+    for k in range(gaps):
+        y0 = 1 + (h - gap) // 2 if gaps == 1 else (1 + k * (h - gap))
+        fill(g, rw + 1, y0, rw + l, y0 + gap - 1)
+        if door: g[y0][rw + (l + 1) // 2] = door
+    m = 1 + h // 2; g[m][1] = 'P'; g[m][W - 2] = 'P'; g[m + 1][max(2, rw - 1)] = 'F'; g[m + 1][W - 3] = 'F'; return g
+def g_open(w, h): g = grid(w + 2, h + 2); fill(g, 1, 1, w, h); g[h // 2][1] = g[h // 2][w] = 'P'; g[h // 2 + 1][w - 4] = g[h // 2 + 1][w // 2] = 'F'; return g
+def g_pillars(w, h, step, blk):
+    g = g_open(w, h)
+    for y in range(3, h - 1, step):
+        for x in range(4, w - 2, step):
+            for yy in range(y, y + blk):
+                for xx in range(x, x + blk):
+                    if g[yy][xx] == '.' and yy < h: g[yy][xx] = '#'
+    return g
+def g_corner(a, b, w, block):   # two arms of an L (a, b long, w wide) round a solid corner, or a hall with a block that stands between the ends
+    if block: g = g_open(a, b); fill(g, a // 2 - w // 2, 1, a // 2 - w // 2 + w - 1, b - 3, '#'); return g
+    g = grid(a + 2, b + 2); fill(g, 1, 1, a, w); fill(g, a - w + 1, 1, a, b); g[1 + w // 2][1] = 'P'; g[b][a - w // 2] = 'P'; g[b - 1][a - w // 2] = 'F'; g[1][a - 1] = 'F'; return g
+def g_bridge(rw, h, l, gap): return two_rooms(rw, h, l, gap)
+def g_deadend(rw, h, depth, w): g = g_open(rw + 8, h); W = len(g[0]); top = [['#'] * W for _ in range(depth)]; g2 = [['#'] * W] + top + g[1:]; fill(g2, 3, 1, 2 + w, depth); return g2
+def g_water(w, h, x0, x1): g = g_open(w, h); fill(g, x0, 1, x1, h, '~'); return g
+G_OUT = ['exterior']
+GEN = {   # name: (rows, directives, turns)
+    'open-a': (g_open(26, 24), G_OUT + ['cell 160'], ''), 'open-b': (g_open(40, 14), G_OUT + ['cell 128'], 'tr'),
+    'corridor-a': (two_rooms(8, 7, 16, 1), ['cell 80'], 'my'), 'corridor-b': (two_rooms(7, 8, 10, 2), ['cell 64'], 'tr'),
+    'doorway-a': (two_rooms(9, 9, 1, 1), ['cell 112'], 'mx'), 'doorway-b': (two_rooms(8, 9, 2, 1, gaps=2), [], 'tr'),
+    'pillars-a': (g_pillars(30, 20, 4, 1), ['cell 96'], ''), 'pillars-b': (g_pillars(24, 16, 6, 3), ['cell 80'], 'tr'),
+    'stairs-a': (two_rooms(9, 8, 4, 2), ['ramp 10 0 13 9 0 192 x', 'z 14 0 23 9 192'], 'mx'), 'stairs-b': (two_rooms(8, 8, 6, 1), ['ramp 9 0 14 9 0 384 x', 'z 15 0 23 9 384'], 'tr'),
+    'bridge-a': (g_bridge(8, 9, 9, 1), G_OUT, 'my'), 'bridge-b': (g_bridge(7, 9, 6, 3), G_OUT + ['cell 112'], 'tr'),
+    'dead-end-a': (g_deadend(16, 5, 5, 4), [], 'mx'), 'dead-end-b': (g_deadend(18, 7, 8, 2), ['cell 112'], 'tr'),
+    'slope-a': (g_open(18, 12), G_OUT + ['cell 160', 'ramp 4 0 13 13 0 320 x', 'z 14 0 19 13 320'], 'mx'), 'slope-b': (g_open(24, 10), G_OUT + ['ramp 5 0 18 11 0 640 x', 'z 19 0 25 11 640'], 'tr'),
+    'water-a': (g_water(24, 12, 9, 16), G_OUT, 'my'), 'water-b': (g_water(30, 10, 3, 26), G_OUT + ['cell 112'], 'tr'),
+    'door-a': (two_rooms(9, 8, 1, 1, 'D'), [], 'mx'), 'door-b': (two_rooms(7, 9, 2, 1, 'D', 2), ['cell 112'], 'tr'),
+    'corner-a': (g_corner(16, 14, 4, False), [], ''), 'corner-b': (g_corner(20, 12, 3, False), ['cell 96'], 'mx'), 'corner-c': (g_corner(22, 10, 3, True), [], 'tr'),
+}
+def turn(f, how):   # mirrored left to right (mx), top to bottom (my), or transposed (tr): one world line, never a load-time transform
+    R = [''.join(r) for r in f['rows']]; W = len(R[0]); H = len(R)
+    if 'mx' in how:
+        R = [r[::-1] for r in R]; f['z'] = [[W - 1 - b[2], b[1], W - 1 - b[0], b[3], b[4]] for b in f['z']]
+        f['ramp'] = [[W - 1 - b[2], b[1], W - 1 - b[0], b[3]] + ([b[5], b[4]] if b[6] == 'x' else [b[4], b[5]]) + [b[6]] for b in f['ramp']]
+    if 'my' in how:
+        R = R[::-1]; f['z'] = [[b[0], H - 1 - b[3], b[2], H - 1 - b[1], b[4]] for b in f['z']]
+        f['ramp'] = [[b[0], H - 1 - b[3], b[2], H - 1 - b[1]] + ([b[5], b[4]] if b[6] == 'y' else [b[4], b[5]]) + [b[6]] for b in f['ramp']]
+    if 'tr' in how:
+        R = [''.join(R[y][x] for y in range(H)) for x in range(W)]; f['z'] = [[b[1], b[0], b[3], b[2], b[4]] for b in f['z']]
+        f['ramp'] = [[b[1], b[0], b[3], b[2], b[4], b[5], 'y' if b[6] == 'x' else 'x'] for b in f['ramp']]
+    f['rows'] = R; return f
+def gen_fixture(key):
+    rows, dirs, how = GEN[key]; f = parse(list(dirs) + ['nopool', 'class fixture_' + key.rsplit('-', 1)[0].replace('-', ''), 'map'] + [''.join(r) for r in rows] + ['end']); return turn(f, how)
+
 
 def main():
     check = '--check' in sys.argv; bad = 0; only = [a for a in sys.argv[1:] if not a.startswith('--')]   # names: only those fixtures (batch L writes its own and leaves batch W's files as they are)
-    for fn in sorted(os.listdir(HERE)):
-        if not fn.endswith('.txt'): continue
-        if only and fn[:-4] not in only: continue
-        name = fn[:-4]; out = os.path.join(HERE, name + '.mfoenv'); built = build(name, parse(os.path.join(HERE, fn)))
+    jobs = [(fn[:-4], lambda fn=fn: parse(open(os.path.join(HERE, fn)))) for fn in sorted(os.listdir(HERE)) if fn.endswith('.txt')]
+    jobs += [('gen-' + k, lambda k=k: gen_fixture(k)) for k in GEN]
+    for name, make in jobs:
+        if only and name not in only: continue
+        out = os.path.join(HERE, name + '.mfoenv'); built = build(name, make())
         if check:
             tmp = out + '.chk'; write(tmp, built); same = os.path.exists(out) and open(tmp, 'rb').read() == open(out, 'rb').read(); os.remove(tmp)
             if not same: print('STALE', name); bad = 1

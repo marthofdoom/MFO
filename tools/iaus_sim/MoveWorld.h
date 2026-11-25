@@ -184,6 +184,13 @@ namespace Sim {
         while (!S.pic.pool.empty() && (S.pic.pool.back().key & MV::kStayBit)) S.pic.pool.pop_back();
     }
 
+    // S5-D: the mode a refused one turns into: a refused Free is a Stand where he is (or where the stand that stands is), a refused anything else is Free.
+    [[nodiscard]] inline MV::MoveMode RefusedMode(std::uint32_t refuse, MV::MoveMode m) { return !(refuse & (1u << static_cast<unsigned>(m))) ? m : m == MV::MoveMode::Free ? MV::MoveMode::Stand : MV::MoveMode::Free; }
+    [[nodiscard]] inline MV::MoveOrder RefusedOrder(const MoveState& S, const MoveClaim& q, const Body& x, const MV::MoveOrder& o) {
+        const MV::MoveMode m = RefusedMode(S.refuse, o.mode); if (m == o.mode) return o;
+        MV::MoveOrder r; r.gen = o.gen; if (m == MV::MoveMode::Free) return r;
+        const MV::MoveOrder& w = q.nextAt >= 0.0 ? q.next : q.order; const bool stands = w.mode == MV::MoveMode::Stand && q.phase != StrictPhase::Ended; const Tuning& t = *ActiveTuning();
+        r.mode = m; r.p = stands ? w.p : EQ::Vec3{ x.c.x, x.c.y, x.c.z }; r.tri = stands ? w.tri : x.nav.tri; r.leashR = t.orderLeash; r.arriveR = t.orderArrive; return r; }
     inline void MoveClose(Fight& F) {
         MoveState& S = *F.move.s; const auto t0 = std::chrono::steady_clock::now(); tl_moveFight = &F;
         std::vector<MV::Assignment> as; PicksBefore(F); MP::Phase3(S.pic, &MoveProfile, *ActiveTuning(), as); PicksAfter(F, as); MP::Adopt(S.pic, as);
@@ -195,6 +202,7 @@ namespace Sim {
             for (MV::Member& m : S.pic.party) { Body* x = F.Find(m.id); if (!x || x->ctl < 0) continue; MoveClaim& q = S.claim[static_cast<std::size_t>(x->ctl)];
                 if (q.pick.on && q.pick.spot && m.commit.on && m.commit.key == q.pick.key && m.order.mode != q.pick.mode && m.order.mode != MV::MoveMode::Free) { const MV::MoveOrder& w = was[static_cast<std::size_t>(&m - S.pic.party.data())]; m.order.mode = q.pick.mode; m.order.gen = w.gen + (m.order.Same(w) ? 0u : 1u); }   // S5-C: the place, in the mode it was given
                 MV::MoveOrder o = m.order; if (S.force != Force::None && x->ctl == 0) { S.forced = o; if (S.forceRule) S.forceRule(F, S.forced); if (S.forced.mode != MV::MoveMode::Free && S.forced.mode != MV::MoveMode::kCount) ++S.forceUsed; o = S.forced; const MV::MoveOrder& stands = q.nextAt >= 0.0 ? q.next : q.order; o.gen = S.forceGen + (o.Same(stands) && (o.mode == MV::MoveMode::Free || q.phase != StrictPhase::Ended) ? 0u : 1u); S.forceGen = o.gen; }   // an order that ended is filed again when its rule fires again (F9)
+                if (S.refuse && x->ctl == 0) o = RefusedOrder(S, q, *x, o);
                 if (g_moveFault->noOrders) { o = MV::MoveOrder{}; o.gen = m.order.gen; }
                 if (o.gen != (q.nextAt >= 0.0 ? q.next.gen : q.orderGen)) { if (g_residue.bridgeLag > 0.0f) { q.next = o; q.nextAt = F.now + static_cast<double>(g_residue.bridgeLag); } else StrictPublish(F, *x, q, o); if (F.trace) std::fprintf(F.trace, "%7.2f  ORDER %s: mode %d at (%.0f, %.0f, %.0f) leash %.0f, %.0f from him\n", F.now, x->c.name.c_str(), static_cast<int>(o.mode), o.p.x, o.p.y, o.p.z, o.leashR, std::hypot(o.p.x - x->c.x, o.p.y - x->c.y)); } } }
         const MV::MoveCounts& k = S.pic.counts; Tally& t = F.t;

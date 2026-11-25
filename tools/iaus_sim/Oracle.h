@@ -566,6 +566,17 @@ namespace Sim {
         // between windows: orders x his ranked actions, raced like actions. The pass's own assignment for that window is IAUS's order. ──
         std::map<std::string, SitRec>* orderSit = nullptr;   // divergences of the order: "iaus order|oracle order|paired or not|situation"
         std::vector<std::string>* orderLines = nullptr;      // the ORCMODE lines
+        // S5-D, THE MODE LEADS (--mode-accept): at every order race of the subject, what each mode is worth, re-estimated on streams no race has seen (the race's own numbers are a
+        // winner's: review S5-C 2, R2-3). Of every mode the three rows that stood longest play modeK streams and the best of them is the mode's; those rows then play a half A
+        // (which names the owner and is the test) and a half B (which is the value: never selected by anything). A line per race: the owner, and its lead over each other mode
+        // as leadA/seA/leadB. mode_accept.py judges. `the pass goes on` counts as the mode of the pass's own order at that window.
+        std::vector<std::string>* modeLines = nullptr; int modeK = 16; long modeRolls = 0; static constexpr int kModeStream = 1 << 21;
+        static std::string ModeLead(const std::vector<int>& mode, const std::vector<std::vector<double>>& A, const std::vector<std::vector<double>>& B) {   // one entry a mode that has a row
+            std::size_t own = 0; const auto mean = [](const std::vector<double>& v) { double s = 0; for (double x : v) s += x; return v.empty() ? -1e9 : s / double(v.size()); };
+            for (std::size_t i = 1; i < mode.size(); ++i) if (mean(A[i]) > mean(A[own])) own = i;
+            std::string o = std::string("own=") + kModeName[static_cast<std::size_t>(mode[own])]; char b[96];
+            for (std::size_t i = 0; i < mode.size(); ++i) if (i != own) { double sd = 0; const double d = Lead(A, own, i, &sd); const double n = double(std::max<std::size_t>(1, std::min(A[own].size(), A[i].size()))); std::snprintf(b, sizeof b, " %s=%.4f/%.4f/%.4f", kModeName[static_cast<std::size_t>(mode[i])], d, sd / std::sqrt(n), Lead(B, own, i, nullptr)); o += b; }
+            return o; }
         [[nodiscard]] static bool Asked(const Fight& F, int ci) {
             if (g_road != Road::Strict || g_oracleOrders != OracleOrders::On || !F.move) return false;
             const MoveState& S = *F.move.s; if (!S.open || F.now < S.winEnd - 1e-9 || S.force != Force::None || static_cast<std::size_t>(ci) >= S.claim.size()) return false;   // MoveStep closes it in this very step
@@ -599,12 +610,13 @@ namespace Sim {
                 use[a] = !bad; nUse += !bad; }
             if (!nUse) use[0] = 1;
             // the orders
+            const auto heldMode = [&](MV::MoveMode md) { return md == MV::MoveMode::GoTo && !S.pic.caps.disengage ? MV::MoveMode::Stand : md; };   // S5-D: what the executor carries a GoTo out as (ModeCarried)
             long clustered = 0; const std::uint32_t allowed = MV::AllowedKinds(S.pic.caps, T) & m.kinds; const EQ::View v = EnvViewOf(F, true); std::vector<OrdOpt> opt;
             const auto ok = [&](const OrderAsk& a) { Opt o; o.order = &a; return Ok(F, c, o); };
-            const auto add = [&](OrderPick p, const OrderAsk& ask, std::uint8_t a, bool paired) { p.on = p.fresh = true; p.act = use[a] ? m.top[a] : MFO::Iaus::RankedAction{}; OrdOpt o; o.pick = p; o.k = act[a]; o.ask = ask; o.paired = paired; opt.push_back(o); };
+            const auto add = [&](OrderPick p, const OrderAsk& ask, std::uint8_t a, bool paired) { if (S.refuse & (1u << static_cast<unsigned>(heldMode(p.mode)))) return; p.on = p.fresh = true; p.act = use[a] ? m.top[a] : MFO::Iaus::RankedAction{}; OrdOpt o; o.pick = p; o.k = act[a]; o.ask = ask; o.paired = paired; opt.push_back(o); };
             // THE DEFAULT (review R2-1): the pass goes on. No order of the oracle's stands, in the fight or in the rollout, and the pass may decide again at the next window.
             // First as IAUS plays it, then with each of his actions (so an order is never preferred for the action it was paired with). ii = the first row
-            { OrdOpt o; o.pass = o.iaus = true; o.pick.spot = mine.spot >= 0; o.pick.key = mine.key; o.pick.kinds = mine.kinds; o.pick.mode = iausMode; o.pick.act = mine.act; opt.push_back(o); o.iaus = false;
+            { OrdOpt o; o.pass = o.iaus = true; o.pick.spot = mine.spot >= 0; o.pick.key = mine.key; o.pick.kinds = mine.kinds; o.pick.mode = S.refuse ? RefusedMode(S.refuse, heldMode(iausMode)) : iausMode; o.pick.act = mine.act; opt.push_back(o); o.iaus = false;
               for (std::uint8_t a = 0; a < m.nTop; ++a) if (use[a] && act[a]) { o.k = act[a]; o.pick.act = m.top[a]; opt.push_back(o); } }
             for (const MV::MoveMode md : { MV::MoveMode::Kite, MV::MoveMode::Disengage }) if (!ModeServedBy(S.pic.caps, md)) { OrderAsk a; a.mode = md; (void)ok(a); }   // a mode that is not served is refused once a window
             const double soon = F.now + cfg.commit;   // his own place is held as long as an action option is, unless a mark ends it. Free is offered to the end too: what `off` plays (finding 3)
@@ -675,6 +687,17 @@ namespace Sim {
             { OracleStats one; one.orders = 1; one.orderOpts = static_cast<long>(N); one.orderRolls = rolls; one.unpaired = !w.paired; one.orderKept = static_cast<int>(best) == last; one.orderPass = w.pass; one.freshN = pk.drawn; one.freshU = pk.fresh; one.orderBound = R.live > 1; one.orderClust = clustered; if (!w.pass) ++one.modeWin[static_cast<std::size_t>(w.pick.mode)]; ++one.modeIaus[static_cast<std::size_t>(iausMode)];
               { auto& l = one.party[static_cast<int>(F.ctl.size())]; l.n = 1; l.same = same; l.sum = same ? 0.0 : pk.left ? pk.won : Lead(U, best, 0, nullptr); }
               st.Merge(one); if (subj) stSubj.Merge(one); }
+            if (subj && modeLines) {
+                std::vector<int> mode; std::vector<std::vector<double>> A, B; const std::uint64_t sm = Fight::Mix64(seed ^ 0x5D5D5D5DULL);
+                std::vector<std::vector<std::size_t>> rows(6); for (std::size_t i = 0; i < N; ++i) if (!U[i].empty()) rows[static_cast<std::size_t>(heldMode(opt[i].pick.mode))].push_back(i);
+                std::size_t have = 0; for (const auto& r : rows) have += !r.empty();
+                const auto play = [&](std::size_t i, int from, int n, std::vector<double>& out) { for (int k = 0; k < n; ++k) { Fight G = Stream(F, sm, kModeStream + from + k); if (!roll(G, i)) return; ++modeRolls; out.push_back(Utility(G)); } };
+                if (have > 1) for (std::size_t md = 0; md < rows.size(); ++md) { auto& r = rows[md]; if (r.empty()) continue;
+                    std::stable_sort(r.begin(), r.end(), [&](std::size_t a, std::size_t b) { return U[a].size() != U[b].size() ? U[a].size() > U[b].size() : R.u[a] > R.u[b]; }); if (r.size() > 3) r.resize(3);
+                    std::size_t rep = r[0]; double top = -1e9; if (r.size() > 1) for (const std::size_t i : r) { std::vector<double> s; play(i, 0, modeK, s); double z = 0; for (double v : s) z += v; z = s.empty() ? -1e9 : z / double(s.size()); if (z > top) { top = z; rep = i; } }
+                    mode.push_back(static_cast<int>(md)); A.emplace_back(); B.emplace_back(); play(rep, modeK, modeK, A.back()); play(rep, 2 * modeK, modeK, B.back()); }
+                char b[64]; std::set<MV::SpotKey> spots; for (const OrdOpt& z : opt) if (z.pick.spot && heldMode(z.pick.mode) == heldMode(w.pick.mode)) spots.insert(z.pick.key);
+                std::snprintf(b, sizeof b, "t=%.2f pass=%d spots=%zu ", F.now, int(w.pass), spots.size()); modeLines->push_back(std::string(b) + (mode.size() > 1 ? ModeLead(mode, A, B) : std::string("own=none"))); }
             if (subj && orderLines) {   // per mode: its best option's mean, the streams it ran, the winner's paired lead over it and the standard error
                 char b[320]; std::snprintf(b, sizeof b, "t=%.2f commit=%d marks=%x age=%.2f opts=%zu streams=%d win=%s%s:%s act=%s paired=%d iaus=%s:%s same=%d", F.now, int(m.commit.on), m.seen, F.now - q.topAt, N, R.n, w.pass ? "pass:" : "", kModeName[static_cast<std::size_t>(w.pick.mode)], KindName(w.pick).c_str(), std::string(MFO::Iaus::Name(w.pick.act.family == Family::kCount ? Family::Attack : w.pick.act.family)).c_str(), int(w.paired), kModeName[static_cast<std::size_t>(iausMode)], offered ? KindName(opt[0].pick).c_str() : "refused", int(same));
                 std::string o = b; if (w.pick.act.family == Family::kCount) { const auto at = o.find("act="); o.replace(at, o.find(' ', at) - at, "act=-"); }

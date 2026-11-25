@@ -198,6 +198,7 @@ namespace Sim {
         std::vector<MV::RayAsk> asks; std::size_t asked = 0; std::uint32_t legs = 0; double meterAt = -1e9; double winStart = 0.0, winEnd = 0.0; bool open = false;
         std::vector<MFO::Iaus::Trust::Line> trustLog; std::vector<EQ::Vec3> lastAt; EQ::Vec3 playerWas; double playerSeen = 0.0;   // S3: every [env-trust] line of the fight, and where each body was a step ago
         Force force = Force::None; int forceVar = 0; std::uint32_t forceGen = 0; MV::MoveOrder forced; long forceUsed = 0; void (*forceRule)(Fight&, MV::MoveOrder&) = nullptr;   // ModeSet.h
+        std::uint32_t refuse = 0;           // S5-D, the leave-one-out arm: the modes (1 << MoveMode) the SUBJECT may not be in, whoever orders it, the pass included (MoveWorld.h RefusedOrder)
         std::vector<MV::Assignment> last;   // what the last window assigned (diagnostics, the scenario tests)
     };
     // A fight is a plain value: a copy copies the state too. Null while the road is off.

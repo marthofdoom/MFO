@@ -86,6 +86,11 @@ namespace Sim {
             if (F.now < x.fearUntil && x.fearUntil != q->fearSeen && StrictFiled(F, x)) { q->fearSeen = x.fearUntil; q->fearFree = std::min(x.fearUntil, F.now + static_cast<double>(g_residue.fearUncarried)); }
             const bool live = Fight::Up(x) && StrictLive(F, x);
             if ((!live || (q->phase != StrictPhase::Travelling && q->phase != StrictPhase::Returning)) && (x.act == Act::Shoot || x.act == Act::Cast)) q->actSeen = x.actEnd;   // begun before he travels: no shotStop
+            if (x.ctl == 0) { Tally& t = F.t; const bool on = live && q->order.mode == MV::MoveMode::Kite;   // the strike-window meter (World.h Tally)
+                if (on && !t.kiteOn) { ++t.kiteN; t.kiteFrom = t.kiteLast = F.now; t.kiteStrikes0 = t.kiteStrikes; t.kiteDmg0 = t.dmgDone; }
+                if (on) t.kiteSec += TM::dt; if (on || t.kiteOn) t.kiteLongest = std::max(t.kiteLongest, F.now - t.kiteFrom);
+                if (!on && t.kiteOn) { t.kiteDead += t.kiteStrikes == t.kiteStrikes0; t.kiteDmg += t.dmgDone - t.kiteDmg0; }
+                t.kiteOn = on; }
             if (live && x.ctl == 0) { const float d = StrictDist(x, *q); F.t.strictSec += TM::dt; if (d > q->order.leashR && (q->phase == StrictPhase::Standing || q->phase == StrictPhase::Returning)) F.t.strictOutSec += TM::dt; if (q->phase == StrictPhase::Standing || q->phase == StrictPhase::Returning) F.t.strictStandSec += TM::dt; }
             if (F.now < q->nextPick) continue;
             q->nextPick = F.now + static_cast<double>(g_residue.selectorLag) * (q->nextPick <= 0.0 ? 0.25 + 0.75 * static_cast<double>(StrictHash(F, x, 0x91C4ull)) : 1.0);   // his own offset on the grid

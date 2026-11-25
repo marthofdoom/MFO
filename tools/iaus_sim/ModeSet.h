@@ -36,29 +36,31 @@ namespace Sim {
 
     [[nodiscard]] inline int ModeSpell(const Data& D, const std::function<bool(const SimSpell&)>& f) { for (std::size_t i = 0; i < D.foeSpells.size(); ++i) if (D.foeSpells[i].e.nature == Prune::Nature::Offense && D.foeSpells[i].school >= 0 && f(D.foeSpells[i])) return static_cast<int>(i); return -1; }
     inline constexpr float kModeRun = 370.0f;   // the subject's own run in the lab
+    // One foe of a kind, the i-th of it. Both the cells (ModeFoes) and the generator (ModeGen.h) build through it. TO ADD A KIND: a row of kModeKinds and a case here.
+    inline void ModeFoe(const Data& D, FoeKind kind, int i, float run, int level, Rng& R, FightSpec& f) {
+        const auto base = [&](std::initializer_list<const char*> roles, float hp, float dmg, const char* name) { auto s = std::make_shared<ActorSpec>(*Foe(D, roles, level, R, hp, dmg, name)); s->run = run; s->conf = 4; return s; };
+        const auto mage = [&](int sp, const char* name, float dmg = 1.0f) { auto s = base({ "bandit_mage", "mage" }, 1.2f, dmg, name); if (sp >= 0) s->spells = { sp }; s->st.wMagic = 3.0f; s->mp = std::max(s->mp, 300.0f); s->ranged = Weapon{}; return s; };
+        std::shared_ptr<ActorSpec> s; std::string tag = "grunt";
+        switch (kind) {
+        case FoeKind::Heavy:      s = base({ "giant", "troll", "draugr" }, 1.6f, 1.6f, "Heavy"); s->creature = true; s->mass = std::max(s->mass, 2.5f); s->unarmedReach = std::max(s->unarmedReach, 180.0f); break;
+        case FoeKind::Pack:       s = base({ "wolf" }, 1.0f, 1.0f, "Pack"); break;
+        case FoeKind::Duellist:   s = base({ "bandit" }, 1.3f, 1.2f, "Duellist"); s->shield = false; break;
+        case FoeKind::Shield:     s = base({ "bandit", "draugr" }, 1.2f, 0.9f, "Shield"); s->shield = true; s->st.def = 2.0f; break;
+        case FoeKind::Archers:    s = base({ "bandit_archer", "draugr_archer" }, 1.0f, 1.0f, "Archer"); tag = "archer"; break;
+        case FoeKind::BoltMage:   s = mage(ModeSpell(D, [](const SimSpell& x) { return !x.e.concentration && x.e.areaUnits <= 0; }), "Bolt"); tag = "caster"; break;
+        case FoeKind::AreaMage:   s = mage(ModeSpell(D, [](const SimSpell& x) { return !x.e.concentration && x.e.areaUnits > 0; }), "Blast"); tag = "caster"; break;
+        case FoeKind::StreamMage: s = mage(ModeSpell(D, [](const SimSpell& x) { return x.e.concentration; }), "Stream"); tag = "caster"; break;
+        case FoeKind::Summoner:   s = mage(ModeSpell(D, [](const SimSpell& x) { return !x.e.concentration && x.e.areaUnits <= 0; }), "Summoner", 0.6f); tag = "caster"; { auto a = base({ "flame_atronach", "frost_atronach" }, 0.5f, 0.6f, "Summoned"); f.late.push_back({ 4.0 + 2.0 * i, a }); f.lateTags.push_back("grunt"); } break;   // MODEL: what he calls joins at 4, 6, ... s
+        case FoeKind::Charger:    s = base({ "wolf", "troll" }, 2.5f, 2.2f, "Charger"); s->animal = s->creature = true; s->mass = std::max(s->mass, 2.0f); break;
+        case FoeKind::BossAdds:   if (i == 0) { s = base({ "bandit", "draugr" }, 4.0f, 1.8f, "Boss"); tag = "boss"; } else s = base({ "bandit", "wolf" }, 0.7f, 0.7f, "Add"); break;
+        case FoeKind::Flyer:      s = base({ "dragon" }, i ? 0.4f : 0.7f, 0.6f, "Flyer"); tag = "boss"; break;
+        default: break; }
+        f.customFoes.push_back(s); f.foeTags.push_back(tag);
+    }
     inline void ModeFoes(const Data& D, const Cell& cell, Rng& R, FightSpec& f) {
         const FoeKind kind = static_cast<FoeKind>(cell.kind); int n = cell.count == 0 ? 1 : cell.count == 1 ? R.I(2, 3) : 6; const float run = kModeRun * (cell.speed == 0 ? (R.P(0.5f) ? 0.8f : 0.38f) /* half of them a slow walker or a slowed foe: slower even than a backpedal (Residue::kiteSpeed), the one foe a kite can hold off */ : cell.speed == 1 ? 1.0f : 1.35f);
         if (kind == FoeKind::BossAdds) n = std::max(2, n);   // a boss alone is the heavy: that cell is not applicable
-        const auto base = [&](std::initializer_list<const char*> roles, float hp, float dmg, const char* name) { auto s = std::make_shared<ActorSpec>(*Foe(D, roles, 24, R, hp, dmg, name)); s->run = run; s->conf = 4; return s; };
-        const auto mage = [&](int sp, const char* name, float dmg = 1.0f) { auto s = base({ "bandit_mage", "mage" }, 1.2f, dmg, name); if (sp >= 0) s->spells = { sp }; s->st.wMagic = 3.0f; s->mp = std::max(s->mp, 300.0f); s->ranged = Weapon{}; return s; };
-        for (int i = 0; i < n; ++i) {
-            std::shared_ptr<ActorSpec> s; std::string tag = "grunt";
-            switch (kind) {
-            case FoeKind::Heavy:      s = base({ "giant", "troll", "draugr" }, 1.6f, 1.6f, "Heavy"); s->creature = true; s->mass = std::max(s->mass, 2.5f); s->unarmedReach = std::max(s->unarmedReach, 180.0f); break;
-            case FoeKind::Pack:       s = base({ "wolf" }, 1.0f, 1.0f, "Pack"); break;
-            case FoeKind::Duellist:   s = base({ "bandit" }, 1.3f, 1.2f, "Duellist"); s->shield = false; break;
-            case FoeKind::Shield:     s = base({ "bandit", "draugr" }, 1.2f, 0.9f, "Shield"); s->shield = true; s->st.def = 2.0f; break;
-            case FoeKind::Archers:    s = base({ "bandit_archer", "draugr_archer" }, 1.0f, 1.0f, "Archer"); tag = "archer"; break;
-            case FoeKind::BoltMage:   s = mage(ModeSpell(D, [](const SimSpell& x) { return !x.e.concentration && x.e.areaUnits <= 0; }), "Bolt"); tag = "caster"; break;
-            case FoeKind::AreaMage:   s = mage(ModeSpell(D, [](const SimSpell& x) { return !x.e.concentration && x.e.areaUnits > 0; }), "Blast"); tag = "caster"; break;
-            case FoeKind::StreamMage: s = mage(ModeSpell(D, [](const SimSpell& x) { return x.e.concentration; }), "Stream"); tag = "caster"; break;
-            case FoeKind::Summoner:   s = mage(ModeSpell(D, [](const SimSpell& x) { return !x.e.concentration && x.e.areaUnits <= 0; }), "Summoner", 0.6f); tag = "caster"; { auto a = base({ "flame_atronach", "frost_atronach" }, 0.5f, 0.6f, "Summoned"); f.late.push_back({ 4.0 + 2.0 * i, a }); f.lateTags.push_back("grunt"); } break;   // MODEL: what he calls joins at 4, 6, ... s
-            case FoeKind::Charger:    s = base({ "wolf", "troll" }, 2.5f, 2.2f, "Charger"); s->animal = s->creature = true; s->mass = std::max(s->mass, 2.0f); break;
-            case FoeKind::BossAdds:   if (i == 0) { s = base({ "bandit", "draugr" }, 4.0f, 1.8f, "Boss"); tag = "boss"; } else s = base({ "bandit", "wolf" }, 0.7f, 0.7f, "Add"); break;
-            case FoeKind::Flyer:      s = base({ "dragon" }, i ? 0.4f : 0.7f, 0.6f, "Flyer"); tag = "boss"; break;
-            default: break; }
-            f.customFoes.push_back(s); f.foeTags.push_back(tag);
-        }
+        for (int i = 0; i < n; ++i) ModeFoe(D, kind, i, run, 24, R, f);
     }
     [[nodiscard]] inline FightSpec ModeSpec(const Data& D, const std::vector<SimClass>& cls, const char* slug, const Cell& cell, std::uint64_t seed, const SimEnv* real = nullptr) {
         Rng R; R.g.seed(seed); FightSpec f; f.cls = ClassBySlug(cls, slug); f.level = 25; f.rank = 3; f.playerFam = static_cast<Cls>(R.I(0, 2)); f.occluders = 0; f.seed = R.g();
@@ -216,7 +218,8 @@ namespace Sim {
         return 0;
     }
 
-    struct ModeOpts { int n = 360, fights = 64; bool real = false; std::string cls; int oracle = 0; bool null = false; };   // null: every arm is FREE with its own luck: what the counting alone makes of nothing
+    struct ModeOpts { int n = 360, fights = 64; bool real = false; std::string cls; int oracle = 0; bool null = false;
+        bool gen = false; std::function<Fight(int s, std::size_t ci, std::uint64_t& seed)> build; std::function<std::vector<std::string>(int s)> label; };   // --mode-source gen: the scenarios are the generator's (ModeGen.h), not the cells   // null: every arm is FREE with its own luck: what the counting alone makes of nothing
     // One (scenario, class). THE RACE is the oracle's own rule (Oracle.h: paired on the same fights, one-sided Student t at 0.001, 16 fights, then doubling to the ceiling
     // --mode-fights): an arm falls once the best arm leads it by more than luck. RESOLVED = every arm still standing is of one mode: that mode is best there. Else the
     // scenario is open between the modes that stand, and is counted as nobody's. An arm whose orders held him less than kModeActs of the
@@ -224,13 +227,13 @@ namespace Sim {
     inline constexpr double kModeActs = 0.10;
     struct ModeResult { std::array<double, std::size(kModeArms)> mean{}; std::array<double, std::size(kModeArms)> used{}; std::array<char, std::size(kModeArms)> up{}; int n = 0; int best = -1 /* argmax mode */, resolved = -1; };
     inline int RunModeTest(const Data& D, const std::vector<SimClass>& classes, std::uint64_t seed, int threads, const ModeOpts& o, const OracleCfg& oc) {
-        const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3); constexpr std::size_t A = std::size(kModeArms), C = std::size(kModeClasses); const std::size_t places = g_envPool.draw.size(); const int N = o.n + (o.real ? static_cast<int>(places) * kMK : 0);
+        const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3); constexpr std::size_t A = std::size(kModeArms), C = std::size(kModeClasses); const std::size_t places = g_envPool.draw.size(); const int N = o.n + (o.real && !o.build ? static_cast<int>(places) * kMK : 0);
         const auto cellOf = [&](int s) { const bool real = s >= o.n; Cell c = ModeSample(real ? (s - o.n) * 7 + (s - o.n) / kMK : s); if (real) { c.kind = (s - o.n) % kMK; if (ModeCellNA(c)) c.count = 1; } return c; };
         std::vector<ModeResult> res(static_cast<std::size_t>(N) * C); g_road = Road::Strict; std::atomic<int> next{ 0 }; std::atomic<long long> ns{ 0 }, played{ 0 }; const int jobs = N * static_cast<int>(C);
         const auto play = [&](const Cell& cell, const SimEnv* place, std::size_t ci, int s, int f, std::size_t a, double& used) { const FightSpec fs = ModeSpec(D, classes, kModeClasses[ci], cell, seed * 1000003ull + static_cast<std::uint64_t>(s) * 7919ull + static_cast<std::uint64_t>(ci) * 31ull, place);
-            const auto t0 = std::chrono::steady_clock::now(); Fight F = BuildFight(D, fs, t1); F.SetArena(); ModePlayer(F, cell); F.move.s = std::make_unique<MoveState>(); F.move->claim.resize(F.ctl.size()); F.move->force = o.null ? Force::Free : kModeArms[a].mode; F.move->forceVar = kModeArms[a].var; F.move->forceRule = &ModeRule;
+            const auto t0 = std::chrono::steady_clock::now(); std::uint64_t fseed = fs.seed; Fight F = o.build ? o.build(s, ci, fseed) : BuildFight(D, fs, t1); if (!o.build) { F.SetArena(); ModePlayer(F, cell); } F.move.s = std::make_unique<MoveState>(); F.move->claim.resize(F.ctl.size()); F.move->force = o.null ? Force::Free : kModeArms[a].mode; F.move->forceVar = kModeArms[a].var; F.move->forceRule = &ModeRule;
             // ONE SCENARIO IS ONE FIGHT (builds, foes, places, who is on whom); fight f is the same one with other luck, the same for every arm
-            { const std::uint64_t luck = Fight::Mix64(fs.seed ^ (0x9E3779B97F4A7C15ull * static_cast<std::uint64_t>(f + 1)) ^ (o.null ? 0xC2B2AE3D27D4EB4Full * (a + 1) : 0ull)); F.R.g.seed(luck); F.V.g.seed(Fight::Mix64(luck + 1)); F.avSeed = Fight::Mix64(luck + 2); }
+            { const std::uint64_t luck = Fight::Mix64(fseed ^ (0x9E3779B97F4A7C15ull * static_cast<std::uint64_t>(f + 1)) ^ (o.null ? 0xC2B2AE3D27D4EB4Full * (a + 1) : 0ull)); F.R.g.seed(luck); F.V.g.seed(Fight::Mix64(luck + 1)); F.avSeed = Fight::Mix64(luck + 2); }
             IausPolicy P; P.T = ActiveTuning(); OraclePolicy OP; OP.cfg = oc; OP.iaus.T = ActiveTuning(); Policy& pol = o.oracle ? static_cast<Policy&>(OP) : static_cast<Policy&>(P);
             while (!F.over) { if (F.now >= F.nextPump && !F.ctl.empty()) { F.nextPump += TM::pump; pol.Serve(F, F.rr); F.rr = (F.rr + 1) % static_cast<int>(F.ctl.size()); } pol.Window(F); F.StepWorld(); }
             used = o.null ? 1.0 : F.t.upSec > 0 ? F.t.strictSec / F.t.upSec : 0.0; ns += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count(); ++played; return Utility(F); };
@@ -248,7 +251,8 @@ namespace Sim {
         for (int s = 0; s < N; ++s) for (std::size_t ci = 0; ci < C; ++ci) { if (!o.cls.empty() && o.cls != kModeClasses[ci]) continue; const ModeResult& r = res[static_cast<std::size_t>(s) * C + ci]; const Cell cell = cellOf(s); const bool real = s >= o.n;
             std::array<bool, 4> st{}; for (std::size_t a = 0; a < A; ++a) if (r.up[a]) st[static_cast<std::size_t>(ModeOf(kModeArms[a]))] = true;
             const auto add = [&](Cnt& c) { ++c.n; ++c.arg[static_cast<std::size_t>(r.best)]; if (r.resolved >= 0) { ++c.resolved; ++c.res[static_cast<std::size_t>(r.resolved)]; } for (std::size_t k = 0; k < 4; ++k) c.stand[k] += st[k]; };
-            add(per[ci]); add(all); for (const std::string& k : { std::string("kind ") + kModeKinds[cell.kind], std::string("speed ") + kModeSpeeds[cell.speed], std::string("count ") + kModeCounts[cell.count], std::string("terrain ") + (real ? "extracted" : kModeTerrain[cell.terrain].name), std::string("party ") + kModeParty[cell.party], std::string("player ") + kModePlayer[cell.player] }) add(by[k]); }
+            add(per[ci]); add(all); if (o.label) { for (const std::string& k : o.label(s)) add(by[k]); continue; }
+            for (const std::string& k : { std::string("kind ") + kModeKinds[cell.kind], std::string("speed ") + kModeSpeeds[cell.speed], std::string("count ") + kModeCounts[cell.count], std::string("terrain ") + (real ? "extracted" : kModeTerrain[cell.terrain].name), std::string("party ") + kModeParty[cell.party], std::string("player ") + kModePlayer[cell.player] }) add(by[k]); }
         std::printf("MODE-TEST %d scenarios (%d of them on extracted places) x %zu classes, %zu arms, up to %d fights an arm, seed %llu%s%s\n", N, N - o.n, C, A, o.fights, static_cast<unsigned long long>(seed), o.oracle ? ", actions by the ORACLE" : ", actions by IAUS", o.null ? ", NULL (every arm Free)" : "");
         const auto pct = [](long a, long b) { return b ? 100.0 * double(a) / double(b) : 0.0; };
         const auto line = [&](const char* name, const Cnt& c) { std::printf("%-22s n %5ld resolved %5.1f%% |", name, c.n, pct(c.resolved, c.n)); for (std::size_t k = 0; k < 4; ++k) std::printf(" %s best %5.1f%% resolved %5.1f%% in the running %5.1f%% |", kModeNames[k], pct(c.arg[k], c.n), pct(c.res[k], c.n), pct(c.stand[k], c.n)); std::printf("\n"); };
