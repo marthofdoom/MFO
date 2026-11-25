@@ -71,7 +71,7 @@ namespace MFO::SelfTest {
         }
 
         // ── main thread: the point ───────────────────────────────────────────────────────────────
-        struct Plan { bool ok = false; RE::NiPoint3 pt{}; float walk = 0.0f; std::string why; };
+        struct Plan { bool ok = false; RE::NiPoint3 pt{}; float walk = 0.0f; std::string why; bool ownSpot = false; };
         std::mutex                              g_planMx;   // LEAF
         std::unordered_map<std::uint32_t, Plan> g_plans;
         std::uint32_t                           g_ticket = 1;   // WORKER
@@ -103,7 +103,7 @@ namespace MFO::SelfTest {
                     o = { true, p, me.GetDistance(p), "open ground (navmesh: " + nav + ")" };
                     return o;
                 }
-            o = { true, me, 0.0f, "HIS OWN SPOT, no other point here (navmesh: " + nav + ")" };
+            o = { true, me, 0.0f, "HIS OWN SPOT, no other point here (navmesh: " + nav + ")", true };
             return o;
         }
         std::uint32_t PostPlan(RE::FormID a_f, RE::FormID a_foe) {
@@ -165,6 +165,7 @@ namespace MFO::SelfTest {
             std::uint32_t ticket = 0;
             RE::FormID    foe = 0;
             RE::NiPoint3  pt{};
+            bool          ownSpot = false;   // the planner found no other point: the arrival proves nothing
             bool          ending = false;
             std::string   endWhy, summary, hands;
             Stats st;
@@ -193,6 +194,15 @@ namespace MFO::SelfTest {
             return v[static_cast<std::size_t>(q * static_cast<float>(v.size() - 1) + 0.5f)];
         }
         void ReleaseClaim(RE::FormID a_id) { APMFBridge::DevHoldRelease(a_id); }
+
+        float MayBeOut(const Stats& s) { return s.outMax / kT.walkBackSpeed + kT.walkBackPlus; }
+        void  CloseExcursion(Stats& s) {
+            const float may = MayBeOut(s);
+            s.worstBack = std::max(s.worstBack, s.outT);
+            s.worstOver = std::max(s.worstOver, s.outT - may);
+            if (s.outT > may) ++s.late;
+            s.out = false;
+        }
 
         // WORKER, every unpaused tick.
         void Sample(RE::Actor* a, RE::FormID a_id, SRun& r, float dt) {
@@ -284,13 +294,7 @@ namespace MFO::SelfTest {
                 s.outT += dt;
                 s.outMax = std::max(s.outMax, d);
                 const bool back = d <= 24.0f || (ph == 3 && d <= leg.radius);
-                const float may = s.outMax / kT.walkBackSpeed + kT.walkBackPlus;
-                if (back || s.outT > may + 3.0f) {
-                    s.worstBack = std::max(s.worstBack, s.outT);
-                    s.worstOver = std::max(s.worstOver, s.outT - may);
-                    if (s.outT > may) ++s.late;
-                    s.out = false;
-                }
+                if (back || s.outT > MayBeOut(s) + 3.0f) CloseExcursion(s);
             }
             if (leg.askFree && !s.askedFree && s.heldT > 2.0f) { s.askedFree = true; APMFBridge::DevStrictAskFree(a_id); }
             if (s.heldT < leg.sec) return;
@@ -327,12 +331,14 @@ namespace MFO::SelfTest {
                 r.phase = Phase::Start;
                 return;
             }
+            if (s.out && s.outT > MayBeOut(s)) CloseExcursion(s);   // still out at the leg's end and already late
             const bool  order = leg.kind != Kind::Free;   // under an order only the held time counts
             const float over  = order ? s.heldT : s.t;
             const int   hits  = (r.bow ? s.shots : s.attacks) - (order ? (r.bow ? s.shots0 : s.attacks0) : 0);
             const float rate  = over > 1.0f ? 60.0f * static_cast<float>(hits) / over : 0.0f;
             const float drift = s.moveT > 1.0f ? s.drift / s.moveT : 0.0f;
-            std::string fail, extra;
+            std::string fail, extra, note;   // note: in the RESULT and in the evidence
+            if (order && r.ownSpot) note += " [HIS OWN SPOT, the arrival proves nothing]";
             const auto  no = [&](std::string x) { fail += (fail.empty() ? "" : "; ") + std::move(x); };
             bool judged = leg.judge;
             if (leg.kind == Kind::Free) {
@@ -361,13 +367,19 @@ namespace MFO::SelfTest {
                                        s.excursions, s.worstOver));
                     }
                     // the rate: only a whole leg against a baseline of the same test
-                    if (leg.kind == Kind::Stand && leg.judge && r.baseAtk >= kT.minRate) {
+                    if (leg.kind == Kind::Stand && leg.judge && t.legs.front().kind == Kind::Free) {   // the stand_* rows
                         const float need = (r.bow ? kT.rateBow : kT.rateMelee) * r.baseAtk;
-                        if (rate < need) no(std::format("{:.1f} {}/min < {:.1f} ({:.1f} free)", rate, r.bow ? "shots" : "attacks", need, r.baseAtk));
+                        if (r.baseAtk < kT.minRate) {
+                            judged = false;
+                            note += std::format(" [RATE NOT JUDGED, free {:.1f}/min]", r.baseAtk);
+                        } else if (rate < need) no(std::format("{:.1f} {}/min < {:.1f} ({:.1f} free)", rate, r.bow ? "shots" : "attacks", need, r.baseAtk));
                     }
                     if (leg.kind == Kind::Release && s.released) {
                         const float first = s.relMoved < 0 ? s.relAtk : s.relAtk < 0 ? s.relMoved : std::min(s.relMoved, s.relAtk);
-                        if (first < 0 || first > kT.relIn) no(std::format("after the release he moved or attacked at {:.1f}s (> {:.1f}s)", first, kT.relIn));
+                        if (s.relWait >= kT.relFoeWait) {   // let go as it was, perhaps mid-attack or mid-move: the time says nothing
+                            judged = false;
+                            note += " [RELEASE TIME NOT JUDGED, the foe never came off]";
+                        } else if (first < 0 || first > kT.relIn) no(std::format("after the release he moved or attacked at {:.1f}s (> {:.1f}s)", first, kT.relIn));
                         if (s.relPhase != 0) no("an order still stands on him");
                     }
                 }
@@ -383,14 +395,14 @@ namespace MFO::SelfTest {
             else if (!fail.empty()) ++r.failed;
             else if (judged) ++r.passed;
             else ++r.measured;
-            spdlog::info("[strict] RESULT {} leg {}/{} '{}' R={:.0f}: {}{} | {:08X} {} {} | {} | end: {}", t.id, r.leg + 1, t.legs.size(), leg.what, leg.radius, v,
-                         fail.empty() ? std::string{} : " (" + fail + ")", a_id, r.bow ? "bow" : "melee", r.hands, extra, r.endWhy);
+            spdlog::info("[strict] RESULT {} leg {}/{} '{}' R={:.0f}: {}{}{} | {:08X} {} {} | {} | end: {}", t.id, r.leg + 1, t.legs.size(), leg.what, leg.radius, v,
+                         fail.empty() ? std::string{} : " (" + fail + ")", note, a_id, r.bow ? "bow" : "melee", r.hands, extra, r.endWhy);
             const float in = s.heldT > 0.2f ? 100.0f * s.insideT / s.heldT : 0.0f;
             Toast(leg.kind == Kind::Free ? std::format("MFO {} {}/{} {}: {} ({:.1f}/min)", t.id, r.leg + 1, t.legs.size(), leg.what, v, rate)
                                          : std::format("MFO {} {}/{} {} R{:.0f}: {} ({:.0f}% inside, max {:.0f}, {:.1f}/min)", t.id, r.leg + 1, t.legs.size(), leg.what,
                                                        leg.radius, v, in, s.maxD, rate));
-            r.summary += std::format("{}{} R{:.0f} {}{} in {:.0f}% max {:.0f} p90 {:.0f} arr {:.1f}s disp {} err {:.0f} {:.1f}/min", r.summary.empty() ? "" : "; ", leg.what, leg.radius,
-                                     v, fail.empty() ? std::string{} : " (" + fail + ")", in, s.maxD, Quantile(s.dist, 0.9f), s.arriveAt, s.displaced, s.maxStopError, rate);
+            r.summary += std::format("{}{} R{:.0f} {}{}{} in {:.0f}% max {:.0f} p90 {:.0f} arr {:.1f}s disp {} err {:.0f} {:.1f}/min", r.summary.empty() ? "" : "; ", leg.what, leg.radius,
+                                     v, fail.empty() ? std::string{} : " (" + fail + ")", note, in, s.maxD, Quantile(s.dist, 0.9f), s.arriveAt, s.displaced, s.maxStopError, rate);
             ++r.leg;
             r.redo  = 0;
             r.phase = Phase::Start;
@@ -410,14 +422,17 @@ namespace MFO::SelfTest {
             if (text.size() > 900) text.resize(900);   // 'MFST' evidence is bounded
             if (r.failed) return Step::Fail(std::move(text));
             if (r.passed == 0) return Step::Retry("no leg could be judged: " + text);
+            if (const int unrun = static_cast<int>(Tests()[r.test].legs.size()) - r.leg; unrun > 0)
+                return Step::Info(std::format("{} passed, {} skipped, {} legs not run: ", r.passed, r.skipped, unrun) + text);
             if (r.skipped) return Step::Info(std::format("{} passed, {} skipped: ", r.passed, r.skipped) + text);
             return Step::Pass(std::move(text));
         }
 
         Step StepStrict(Ctx& c, int a_test) {
             const auto& t = Tests()[a_test];
-            if (c.s->b[3]) {   // Harbinger under ABI 48: nothing was set up (FixStrict)
-                return Step::Skip(std::format("NOT SERVED: {}", APMFBridge::DevStrictServe(c.id, c.follower->GetPosition(), 64.0f)));
+            if (c.s->b[3]) {   // not served when the test began: nothing was set up (FixStrict)
+                const auto why = APMFBridge::DevStrictServe(c.id, c.follower->GetPosition(), 64.0f);
+                return Step::Skip("NOT SERVED: " + (why.empty() ? std::string("refused when the test began") : why));
             }
             auto& r = g_sruns[c.id];
             if (r.test != a_test || !c.s->b[0]) {
@@ -467,6 +482,7 @@ namespace MFO::SelfTest {
                 if (!p->ok) { SkipLeg(c.id, r, p->why); return Step::Continue(); }
                 r.pt      = p->pt;
                 r.pathLen = p->walk;
+                r.ownSpot = p->ownSpot;
                 spdlog::info("[strict] {:08X} '{}' {} leg {}/{} '{}': point {:.0f},{:.0f},{:.0f} R {:.0f} ({})", c.id, c.follower->GetName() ? c.follower->GetName() : "?", t.id,
                              r.leg + 1, t.legs.size(), leg.what, r.pt.x, r.pt.y, r.pt.z, leg.radius, p->why);
                 r.phase  = Phase::Filing;
@@ -508,7 +524,7 @@ namespace MFO::SelfTest {
         }
         void FixStrict(Ctx& c, FixtureRequest& q, int a_test) {
             const auto& t = Tests()[a_test];
-            c.s->b[3] = APMFBridge::DevAbi() < 48;
+            c.s->b[3] = !APMFBridge::DevStrictServe(c.id, c.follower->GetPosition(), 64.0f).empty();
             if (c.s->b[3]) return;   // nothing to set up: the step closes it as SKIP
             const bool bow = t.who == Who::Bow || (t.who == Who::AsHeld && HeldKind(c.follower) == 1);
             c.s->b[2] = bow;
