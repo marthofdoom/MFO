@@ -42,7 +42,7 @@ namespace Sim {
     inline void StrictFeet(Fight& F, Body& x);                        // ... his feet under an order, whatever his hands do
     inline void StrictLunge(Fight& F, Body& x, const Body& tg, bool power);
     inline void StrictClampDodge(const Fight& F, const Body& x, float& dx, float& dy);
-    inline void StrictPushed(Fight& F, Body& x, const Body* by);
+    inline void StrictPushed(Fight& F, Body& x, const Body* by, bool down);
     inline double StrictThinkX(const Fight& F, const Body& x);
     inline bool EnvMeleeClear(const Fight& F, const Body& a, const Body& o);
     inline bool EnvInBlast(const Fight& F, float cx, float cy, float cz, float r, const Body& o);
@@ -134,7 +134,7 @@ namespace Sim {
         double actEnd = 0, hitAt = -1;  // free again at actEnd; the pending impact / release at hitAt (< 0 none)
         std::uint32_t actTarget = 0; int actSpell = -1; bool actIaus = false; float actCost = 0; float swingDist = 0;
         double think = 0, retargetAt = 0;
-        double blockUntil = 0, staggerUntil = 0, ctrlUntil = 0, tauntUntil = 0, fleeUntil = 0, downUntil = 0, frenzyUntil = 0, retreatUntil = 0;
+        double blockUntil = 0, staggerUntil = 0, ctrlUntil = 0, tauntUntil = 0, fleeUntil = 0, fearUntil = 0 /* the fear EFFECT's half of it */, downUntil = 0, frenzyUntil = 0, retreatUntil = 0;
         double backUntil = 0;   // --foe-styles: a foe's backpedal after a blow
         std::uint32_t tauntBy = 0, lastAttacker = 0;
         double regenAt[3] = { 0, 0, 0 };
@@ -857,7 +857,7 @@ namespace Sim {
             if (x.act == Act::Cast && x.ctl == 0 && x.actIaus && (x.hitAt >= 0 || now < x.actEnd) && g_v3.delivery) ++t.castLost;
             if (x.stream.live) EndStream(x, true);
             x.act = Act::None; x.hitAt = -1; x.staggerUntil = now + sec; x.actEnd = now + sec; x.blockUntil = 0;
-            if (move && x.ctl >= 0 && g_road == Road::Strict) StrictPushed(*this, x, by);
+            if (move && x.ctl >= 0 && g_road == Road::Strict) StrictPushed(*this, x, by, false);
         }
         // Chocolate Poise, HitEventHandler::RecalculateStagger: the poise damage of one weapon hit. A weapon: lerp(type base, weapon
         // weight, WeightContribution) x Melee / Bow mult; a weaponless creature: physical damage x CreatureMult; a bash: the shield
@@ -980,10 +980,10 @@ namespace Sim {
                 if (works) { const double until = now + std::clamp<double>(s.ctrlDur, 1.0, 60.0);
                     if (g_v4.interrupt && d.act == Act::Cast && d.hitAt >= 0) { if (d.role == Role::Foe) ++t.foeCastInterrupted; else if (d.ctl == 0 && d.actIaus) ++t.castInterrupted;   // SIM V4: a control effect ends a charge in flight (5.3). Counted
                         if (!s.ctrlPar && !s.ctrlCalm) { d.act = Act::None; d.hitAt = -1; d.actEnd = now; } }   // ... and a fear ends it too (it ran on to its release before)
-                    if (s.ctrlPar) { d.ctrlUntil = until; d.c.paralysed = true; d.act = Act::None; d.hitAt = -1; }
+                    if (s.ctrlPar) { d.ctrlUntil = until; d.c.paralysed = true; d.act = Act::None; d.hitAt = -1; if (move && d.ctl >= 0 && g_road == Road::Strict) StrictPushed(*this, d, &a, true); }
                     else if (s.ctrlCalm) { d.ctrlUntil = until; d.calmed = true; d.act = Act::None; d.hitAt = -1; }
                     else if (s.ctrlFrenzy) d.frenzyUntil = until;
-                    else { d.fleeUntil = until; d.c.fleeing = true; } }
+                    else { d.fleeUntil = d.fearUntil = until; d.c.fleeing = true; } }
             }
         }
         [[nodiscard]] bool CtrlWorks(const SimSpell& s, const Body& d) const {
