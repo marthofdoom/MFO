@@ -1642,7 +1642,7 @@ The first four also hold: the place is used again within one decay of the repair
 
 ## 19. Light and darkness, and the S3 review's findings (movement-plan.md S4, branch `feat/move-s4`, 2026-11-24)
 
-Road off, `--v4 light=off` is main, byte for byte, for every class and world. With the light switch ON (the v4 default) v2, v3 and v4 are main too for every class that does not sneak. **The STEALTH baseline moves**, road off as well: `--classes thief,nightingale,nightblade --seed 77 --fights 4` differs from main in thief balanced (51 lines) and nightingale strong2 (7). The cause is isolated: `self_light` on the hidden hold row (a lit place is a worse one to hold, intended), and with that one weight at 0 (`--set w.3.<self_light index>=0`) the run is main byte for byte. A tune compares stealth classes with a baseline made after this change. No built-in class knows a light spell. The DLL fills no light fact, so nothing changes there (19.3).
+Road off, `--v4 light=off` is main, byte for byte, for every class and world. With the light switch ON (the v4 default) v2 and v3 are main too, and so is v4 for every class that does not sneak. **The v4 STEALTH baseline moves**, road off as well: `--classes thief,nightingale,nightblade --seed 77 --fights 4` differs from main in thief balanced (51 lines) and nightingale strong2 (7). The cause is isolated: `self_light` on the hidden hold row (a lit place is a worse one to hold, intended), and with that one weight at 0 (`--set w.3.<self_light index>=0`) the run is main byte for byte. A tune compares stealth classes with a baseline made after this change. No built-in class knows a light spell. The DLL fills no light fact, so nothing changes there (19.3).
 
 ### 19.1 The S3 findings
 
@@ -1681,7 +1681,7 @@ Spots, for a member who wants the dark: the level at the place, the engine's own
 | sneaking-player | never lit, somebody else in all | `no-veto` lit |
 | light-on-player | the first light on the player in all | `no-need` about half |
 | decast-on-sneak | ended within half a second in all, not lit again | `no-decast` 0 |
-| light-on-player-dim (a lamp by the player: level 44, the mage 7) | the first light on the player in 48 | `no-need` 37 |
+| light-on-player-dim (a lamp by the player: level 44, the mage 7) | the first light on the player in 48 | `no-need` most, never all |
 | decast-stealth-class (stands, lit) | ended within half a second in all, not lit again | `no-decast` 0 |
 | decast-on-player (lit, then sneaks) | ended within half a second in all, not lit again | `no-decast` 0 |
 | decast-road-off | no new light on him | `no-veto` some |
