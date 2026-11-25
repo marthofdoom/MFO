@@ -357,7 +357,9 @@ namespace MFO::Actuation {
         //    harbinger, so having MFO do something will just need redoing later"): the equip of the claimed spell is
         //    Harbinger's (a separate APMF round lets the engine's own AI equip it while a driving claim stands). The
         //    one line below tells the field run whether the spell was already in the left hand at the open.
-        const bool filed = APMFBridge::OpenSubstrateCast(fid, spellID, target, site);
+        // ABI v47: an ambiguous-row buff ChooseBuffRoad let through only because its claim is fire-once (cast/BuffRoad.cpp
+        // BuffFireOnce, the one decision) is opened fire-once too, so the pair's claim is bounded whatever caster is built.
+        const bool filed = APMFBridge::OpenSubstrateCast(fid, spellID, target, site, BuffClaimFireOnce(a_spell, other));
         if (filed) {
             auto* left  = a_follower->GetEquippedObject(true);
             auto* right = a_follower->GetEquippedObject(false);

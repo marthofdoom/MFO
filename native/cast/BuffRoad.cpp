@@ -51,8 +51,32 @@
 #include <unordered_set>
 #include "Runtime.h"
 #include "apmf/APMFBridge.h"
+#include "SeatRows.h"   // ABI v47 FireOnceServed
 
 namespace MFO::Actuation {
+
+    // The pure table's order is EngineRow's ordinal (SeatRows::kEngineRowBit), and its bits are the header's.
+    static_assert(static_cast<std::uint32_t>(EngineRow::Reanimate) == SeatRows::kReanimateRow && SeatRows::kReanimateRow == 16);
+    static_assert(static_cast<std::uint32_t>(EngineRow::NoRow) == 0 && static_cast<std::uint32_t>(EngineRow::Unknown) == 1 &&
+                  static_cast<std::uint32_t>(EngineRow::Offensive) == 2 && static_cast<std::uint32_t>(EngineRow::Restore) == 3 &&
+                  static_cast<std::uint32_t>(EngineRow::Stagger) == 4 && static_cast<std::uint32_t>(EngineRow::Paralyze) == 7 &&
+                  static_cast<std::uint32_t>(EngineRow::Script) == 8 && static_cast<std::uint32_t>(EngineRow::Armor) == 15);
+    static_assert(SeatRows::kEngineRowBit[static_cast<int>(EngineRow::Restore)]    == APMF_API::kCastSeat_Restore &&
+                  SeatRows::kEngineRowBit[static_cast<int>(EngineRow::Offensive)]  == APMF_API::kCastSeat_Offensive &&
+                  SeatRows::kEngineRowBit[static_cast<int>(EngineRow::Script)]     == APMF_API::kCastSeat_Script &&
+                  SeatRows::kEngineRowBit[static_cast<int>(EngineRow::NoRow)]      == APMF_API::kCastSeat_Script &&
+                  SeatRows::kEngineRowBit[static_cast<int>(EngineRow::Ward)]       == APMF_API::kCastSeat_Ward &&
+                  SeatRows::kEngineRowBit[static_cast<int>(EngineRow::Summon)]     == APMF_API::kCastSeat_Summon &&
+                  SeatRows::kEngineRowBit[static_cast<int>(EngineRow::Cloak)]      == APMF_API::kCastSeat_Cloak &&
+                  SeatRows::kEngineRowBit[static_cast<int>(EngineRow::Light)]      == APMF_API::kCastSeat_Light &&
+                  SeatRows::kEngineRowBit[static_cast<int>(EngineRow::Invisibility)] == APMF_API::kCastSeat_Invisibility &&
+                  SeatRows::kEngineRowBit[static_cast<int>(EngineRow::BoundItem)]  == APMF_API::kCastSeat_BoundItem &&
+                  SeatRows::kEngineRowBit[static_cast<int>(EngineRow::Armor)]      == APMF_API::kCastSeat_Armor &&
+                  SeatRows::kEngineRowBit[static_cast<int>(EngineRow::Stagger)]    == APMF_API::kCastSeat_Stagger &&
+                  SeatRows::kEngineRowBit[static_cast<int>(EngineRow::Disarm)]     == APMF_API::kCastSeat_Disarm &&
+                  SeatRows::kEngineRowBit[static_cast<int>(EngineRow::TargetEffect)] == APMF_API::kCastSeat_TargetEffect &&
+                  SeatRows::kEngineRowBit[static_cast<int>(EngineRow::Paralyze)]   == APMF_API::kCastSeat_Paralyze &&
+                  SeatRows::kEngineRowBit[static_cast<int>(EngineRow::Reanimate)]  == APMF_API::kCastSeat_Reanimate);
 
 #ifdef MFO_DEV_SELFTEST
     namespace {
@@ -348,9 +372,13 @@ namespace MFO::Actuation {
     // Script, Armor, Cloak, Ward, Invisibility; caster-checked Summon, BoundItem), so which caster the engine builds no
     // longer matters (Requiem Candlelight: Script + Light + Light, field 2026-10-28). Any other row (Restore, Offensive:
     // no already-on-target bound, so a wrong caster could re-cast, the 55-light spam shape; Unknown, NoRow, Stagger,
-    // Disarm, TargetEffect, Paralyze, or any future row) keeps the refusal.
-    const char* BuffAmbiguousRowWhy(const SpellArchetype& a_arch) {
-        if (!a_arch.rowApprox) return nullptr;
+    // Disarm, TargetEffect, Paralyze, or any future row) keeps the refusal -- UNLESS the claim carries its own bound
+    // (BuffFireOnce below, ABI v47).
+    static constexpr const char* kAmbiguousUnbounded =
+        "an ambiguous row with a candidate Harbinger does not bound (outside Light / Script / Armor / Cloak / "
+        "Ward / Invisibility / Summon / BoundItem / Reanimate: a wrong caster could re-cast)";
+    static bool AmbiguousUnbounded(const SpellArchetype& a_arch) {
+        if (!a_arch.rowApprox) return false;
         const auto bit = [](EngineRow r) { return 1u << static_cast<std::uint32_t>(r); };
         // CARD G7: Reanimate joins the set. Its caster is bounded by the ENGINE, not by Harbinger: its own 0x06 runs
         // in full under a claim (a valid corpse is required and a raised corpse is no corpse), with or without the
@@ -359,10 +387,47 @@ namespace MFO::Actuation {
         const std::uint32_t bounded = bit(EngineRow::Light) | bit(EngineRow::Script) | bit(EngineRow::Armor) |
                                       bit(EngineRow::Cloak) | bit(EngineRow::Ward) | bit(EngineRow::Invisibility) |
                                       bit(EngineRow::Summon) | bit(EngineRow::BoundItem) | bit(EngineRow::Reanimate);
-        if (a_arch.rowMask & ~bounded)
-            return "an ambiguous row with a candidate Harbinger does not bound (outside Light / Script / Armor / Cloak / "
-                   "Ward / Invisibility / Summon / BoundItem / Reanimate: a wrong caster could re-cast)";
-        return nullptr;
+        return (a_arch.rowMask & ~bounded) != 0;
+    }
+
+    // THE ONE PLACE THAT DECIDES "THIS CLAIM IS FIRE-ONCE" (anim-residue plan A2, principle 12). Harbinger ABI v47
+    // (APMF_API.h kCastFlag_FireOnce): the claim casts AT MOST ONCE on any caster type, so the bound belongs to the CLAIM and
+    // an ambiguous row (Mystic Wind: Script + Restore) no longer needs every candidate to be a bounded caster. Every reader
+    // calls this: ChooseBuffRoad (the refusal), BuffClaim and the substrate open (set the bit), the dry run, the picker's
+    // SummonClaimUnservedWhy. True only for a claim that WOULD HAVE BEEN REFUSED above (so every claim the bounded set
+    // already served is filed byte for byte as before), and only when ALL hold:
+    //   * a FIRE-AND-FORGET spell (a concentration counts its one cast at channel start: it is no bound for a stream);
+    //   * the resolved Harbinger serves the flag (abi >= 47, castSeats carries kCastSeat_FireOnce, bApmfCast);
+    //   * EVERY candidate row of the spell has its OWN seat bit (SeatRows::FireOnceServed); a Reanimate candidate also needs
+    //     a corpse claim (kCastFlag_CorpseTarget), which this chooser cannot promise, so it is not fire-once.
+    // It is never set on a Heal-kind spell (ChooseBuffRoad answers NotBuff for one), never with RequestEx or a deny-only
+    // floor (the bridge's builder only writes it on RequestCast, never for a floor). If the gate fails the answer is the
+    // refusal it has always been. To serve another row, edit SeatRows::kEngineRowBit; nothing here changes.
+    bool BuffFireOnce(const SpellArchetype& a_arch) {
+        if (!AmbiguousUnbounded(a_arch)) return false;
+        if (a_arch.casting == RE::MagicSystem::CastingType::kConcentration) return false;
+        if (!APMFBridge::FireOnceSupported()) return false;
+        return SeatRows::FireOnceServed(APMFBridge::AbiVersion(), APMFBridge::CastSeatCoverage(), a_arch.rowMask,
+                                        /*a_corpseClaim=*/false);
+    }
+
+    // The claim of a_spell at a_other (null / the follower = self) is fire-once? The same classification BuffClaim and
+    // ChooseBuffRoad make (a non-Self buff at self is keyed with seat 0's self flip).
+    bool BuffClaimFireOnce(RE::SpellItem* a_spell, bool a_other) {
+        if (!a_spell || CasterConsent::ClassifySpell(a_spell) != CasterConsent::SpellKind::Buff) return false;
+        return BuffFireOnce(ClassifyArchetype(a_spell, /*a_seat0=*/a_other || ExplicitSelfBuff(a_spell)));
+    }
+
+    const char* BuffAmbiguousRowWhy(const SpellArchetype& a_arch) {
+        if (!AmbiguousUnbounded(a_arch) || BuffFireOnce(a_arch)) return nullptr;
+        return kAmbiguousUnbounded;
+    }
+
+    // The row test shared by ChooseBuffRoad and the picker: a fire-once claim is served whatever row the classifier picked
+    // among its candidates (the bound is the claim's), else the caster rows the buff claim serves.
+    static bool BuffRowOk(const SpellArchetype& a_arch, bool* a_needCap) {
+        if (BuffFireOnce(a_arch)) { if (a_needCap) *a_needCap = true; return true; }
+        return BuffRowServed(a_arch.row, a_needCap);
     }
 
     const char* SummonClaimUnservedWhy(RE::SpellItem* a_spell, const SpellArchetype& a_arch) {
@@ -370,7 +435,7 @@ namespace MFO::Actuation {
         if (CasterConsent::ClassifySpell(a_spell) != CasterConsent::SpellKind::Buff)
             return "a summon whose other effects make it an offense or a heal: no claim road";
         if (const char* why = BuffAmbiguousRowWhy(a_arch)) return why;
-        return BuffRowServed(a_arch.row) ? nullptr : kBuffRowElsewhere;
+        return BuffRowOk(a_arch, nullptr) ? nullptr : kBuffRowElsewhere;
     }
 
     const char* BuffAimedLightWhy(RE::SpellItem* a_spell, const SpellArchetype& a_arch) {
@@ -504,7 +569,7 @@ namespace MFO::Actuation {
         // self buffs (Armor / Cloak / Invisibility / BoundItem / Ward at self) need none.
         bool needCap = other || explicitSelf;
         bool rowNeedsCap = false;
-        if (!BuffRowServed(arch.row, &rowNeedsCap))
+        if (!BuffRowOk(arch, &rowNeedsCap))
             return say(BuffRoad::DirectNoRow, kBuffRowElsewhere);
         needCap |= rowNeedsCap;
         if (needCap && !APMFBridge::CastSeatsSupported())
@@ -581,7 +646,9 @@ namespace MFO::Actuation {
         // G7: a corpse claim names the corpse; the bridge's request builder sets kCastFlag_CorpseTarget for a
         // Reanimate spell claimed at another actor (apmf/Bridge.cpp BuildCastRequestLocked).
         const RE::FormID target = corpseTarget ? corpseTarget : (other || explicitSelf) ? rid : 0;
-        if (!APMFBridge::ClaimOffenseCast(id, spellID, target, APMFBridge::kApmfHandLeft, conc, /*stopPct=*/0)) {
+        // ABI v47: an ambiguous-row buff the bounded set refused is filed fire-once (the claim's own bound), decided by BuffFireOnce.
+        const bool fireOnce = BuffClaimFireOnce(a_spell, other);
+        if (!APMFBridge::ClaimOffenseCast(id, spellID, target, APMFBridge::kApmfHandLeft, conc, /*stopPct=*/0, fireOnce)) {
             // Present and capable means APMF REFUSED: fail closed, loudly, never the direct road.
             LogApmfRefusal(id, "buff cast", spellID, target, "left");
             return SelfCast::Declined;
@@ -593,10 +660,12 @@ namespace MFO::Actuation {
 #endif
         if (RoadLogDue(id, spellID, BuffRoad::Claim)) {
             const auto arch = ClassifyArchetype(a_spell, /*a_seat0=*/other || explicitSelf);
-            spdlog::info("[buff] {:08X} {} ({:08X}): {} CLAIM at {:08X}{} (animated; the engine's own {} caster "
+            spdlog::info("[buff] {:08X} {} ({:08X}): {} CLAIM at {:08X}{}{} (animated; the engine's own {} caster "
                          "decides when it fires)", id, a_spell->GetName() ? a_spell->GetName() : "?", spellID,
                          ClaimLabel(arch, other), corpseTarget ? corpseTarget : rid,
-                         corpseTarget ? " (the rule's corpse, kCastFlag_CorpseTarget)" : "", EngineRowName(arch.row));
+                         corpseTarget ? " (the rule's corpse, kCastFlag_CorpseTarget)" : "",
+                         fireOnce ? " FIRE-ONCE (kCastFlag_FireOnce: the claim casts at most once, whatever caster the engine builds)" : "",
+                         EngineRowName(arch.row));
         }
         return SelfCast::Applied;
     }
@@ -630,14 +699,20 @@ namespace MFO::Actuation {
         const bool placement = BuffPlacementSpell(a_spell);
         const bool instant   = !placement && InstantSpell(a_spell);   // a zero-duration summon still gets SummonGate
 
+        // ABI v47 FIRE ONCE: Harbinger itself says this claim's one cast has fired (GetClaimEndReason == kClaimEnd_Fired, readable
+        // while the claim stands). False for every claim not filed fire-once. It counts as a fire OBSERVED SINCE THIS CLAIM below,
+        // so the release (and the never-landed window) are the ones the observed-fire road already makes; the claim is then
+        // released, and a re-cast is a NEW claim.
+        const bool fireOnceFired = APMFBridge::OffenseCastFired(id, APMFBridge::kApmfHandLeft, spellID);
+
         // R3-1: a fire observed within the recency window is recorded in BuffRoad's own set.
-        if (ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID,
+        if (fireOnceFired || ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID,
                                          APMFBridge::kObservedFiringRecencyMs))
             g_fired[id].insert(sk);
 
         // R2-1: remember when this claim's fire was first observed (the bound below).
-        if (!conc && !instant && ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID,
-                                                              APMFBridge::kObservedFiringRecencyMs))
+        if (!conc && !instant && (fireOnceFired || ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID,
+                                                              APMFBridge::kObservedFiringRecencyMs)))
             g_fireSeen[id].emplace(sk, std::chrono::steady_clock::now());
 
         // AN INSTANT SPELL leaves no effect for an up-read to see (a cure, a dispel): its claim ends once a
@@ -648,7 +723,7 @@ namespace MFO::Actuation {
                 stamp != std::chrono::steady_clock::time_point{}) {
                 const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - stamp).count();
-                if (ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID,
+                if (fireOnceFired || ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID,
                                                  static_cast<std::uint32_t>(ageMs + 1))) {
                     g_fired[id].insert(sk);
                     spdlog::info("[buff] {:08X} {} ({:08X}): instant cast fired -- claim released (one cast per "
@@ -668,7 +743,7 @@ namespace MFO::Actuation {
                 stamp != std::chrono::steady_clock::time_point{}) {
                 const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now() - stamp).count();
-                if (ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID,
+                if (fireOnceFired || ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID,
                                                  static_cast<std::uint32_t>(ageMs + 1))) {
                     g_fired[id].insert(sk);
                     g_fireReleased[id][sk] = { rid, spellID, placement, std::chrono::steady_clock::now() };

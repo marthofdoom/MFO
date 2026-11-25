@@ -15,6 +15,7 @@
 #include "iaus/Disengage.h"  // card G3: the pure questions the disengage gate asks
 #include "iaus/Reposition.h" // batch I: spell range, back-off, hidden step
 #include "iaus/ClassCurves.h" // per-class curve rows (ruling Q-class-curves)
+#include "cast/PartyGap.h"   // anim-residue A1: the party-fight hold rule
 #include "cast/SeatRows.h"   // ABI v46 adoption: the seated-row rule, the need of a target, the zero-effect reading rules
 #include "iaus/LootNeed.h"    // IAUS looting: category + consumable scores (ClickUp 1dfcuabd18f)
 
@@ -3114,6 +3115,37 @@ static void SeatRowRules() {
     Check(!h.Held(1, 2, 3) && h.Size(1) == 0, "zero-effect: the hold ends with the fight (the follower's pairs)");
 }
 
+// ABI v47 FIRE ONCE (cast/SeatRows.h FireOnceServed) and the A1 party-fight hold (cast/PartyGap.h Holds): the pure rules.
+static void FireOnceAndPartyGapRules() {
+    using namespace MFO::SeatRows;
+    // EngineRow ordinals: NoRow0 Unknown1 Offensive2 Restore3 Stagger4 Disarm5 TargetEffect6 Paralyze7 Script8 Ward9 Summon10 Cloak11
+    // Light12 Invisibility13 BoundItem14 Armor15 Reanimate16 (static_assert-ed against the enum in cast/BuffRoad.cpp).
+    const std::uint32_t kScript = 1u << 8, kRestore = 1u << 3, kOffensive = 1u << 2, kUnknown = 1u << 1, kNoRow = 1u << 0;
+    const std::uint32_t kReanimate = 1u << 16, kDisarm = 1u << 5;
+    const std::uint32_t covScriptRestore = (1u << 9) | (1u << 0) | kFireOnceBit;   // Script + Restore seats, FireOnce
+    Check(FireOnceServed(47, covScriptRestore, kScript | kRestore), "fire-once: Mystic Wind (Script + Restore) is served with both seat bits and the flag bit");
+    Check(!FireOnceServed(46, covScriptRestore, kScript | kRestore), "fire-once: below ABI 47 nothing is served, whatever the coverage says (an older Harbinger ignores the bit)");
+    Check(!FireOnceServed(47, covScriptRestore & ~kFireOnceBit, kScript | kRestore), "fire-once: without kCastSeat_FireOnce nothing is served");
+    Check(!FireOnceServed(47, (1u << 9) | kFireOnceBit, kScript | kRestore), "fire-once: a candidate row WITHOUT its own seat bit (Restore) is not served");
+    Check(!FireOnceServed(47, (1u << 0) | kFireOnceBit, kScript | kRestore), "fire-once: the other candidate (Script) missing is not served either");
+    Check(FireOnceServed(47, (1u << 1) | (1u << 0) | kFireOnceBit, kRestore | kOffensive), "fire-once: Restore + Offensive each on their own bit");
+    Check(!FireOnceServed(47, covScriptRestore, kUnknown | kScript), "fire-once: an Unknown row has no seat and is never served");
+    Check(FireOnceServed(47, covScriptRestore, kNoRow | kScript), "fire-once: a rowless effect is served as Script");
+    Check(!FireOnceServed(47, (1u << 11) | kFireOnceBit, kDisarm), "fire-once: a v46 hostile row needs TypeEquip too");
+    Check(FireOnceServed(47, (1u << 11) | kTypeEquipBit | kFireOnceBit, kDisarm), "fire-once: a v46 hostile row with its bit and TypeEquip is served");
+    Check(!FireOnceServed(47, (1u << 14) | (1u << 9) | kFireOnceBit, kReanimate | kScript), "fire-once: a Reanimate candidate needs a corpse claim (not promised by the chooser)");
+    Check(FireOnceServed(47, (1u << 14) | (1u << 9) | kFireOnceBit, kReanimate | kScript, /*a_corpseClaim=*/true), "fire-once: a Reanimate candidate with a corpse claim is served");
+    Check(!FireOnceServed(47, ~0u, 1u << 17), "fire-once: a row bit past the table is not served");
+    Check(FireOnceServed(47, kFireOnceBit, 0), "fire-once: no row to ask about = the support gate alone (the bridge's FireOnceSupported)");
+
+    using MFO::PartyGap::Holds;
+    Check(Holds(true, false, true, true),   "party gap: a buff on the combat table, no own controller, controller the only missing gate: HELD");
+    Check(!Holds(true, false, false, true), "party gap: a heal (not Buff-kind) is never held, it keeps the instant road (D1)");
+    Check(!Holds(true, true, true, true),   "party gap: with his own controller the claim road serves it, nothing is held");
+    Check(!Holds(false, false, true, true), "party gap: off the combat table (out of combat) nothing is held, the substrate road owns it");
+    Check(!Holds(true, false, true, false), "party gap: a shape no claim road serves (another gate missing) keeps the road it declares");
+}
+
 int main() {
     std::printf("IAUS core harness (card I2). Curves and weights = DefaultTuning() (native/iaus/Catalogue.cpp).\n");
     MageLowMagickaFireWeak();
@@ -3145,6 +3177,7 @@ int main() {
     ConsumablesWorth();
     LootNeedScores();
     SeatRowRules();
+    FireOnceAndPartyGapRules();
     g_failed += MoveRows(MOVE_GOLDEN, false);
     std::printf("\n%d check(s) failed\n", g_failed);
     return g_failed;
