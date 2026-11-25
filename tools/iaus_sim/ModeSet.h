@@ -146,6 +146,7 @@ namespace Sim {
         { "disengage:player", Force::Disengage, 2, "... to the player" },
     };
     inline constexpr const char* kModeNames[] = { "Free", "Stand", "Kite", "Disengage" };
+    [[nodiscard]] inline bool ModeServed(const ModeArm& a) { return (a.mode != Force::Kite || g_moveCaps.kite) && (a.mode != Force::Disengage || g_moveCaps.disengage); }   // --move-caps: an arm whose mode is not served is not played (F9)
     [[nodiscard]] inline int ModeOf(const ModeArm& a) { return a.mode == Force::Free ? 0 : a.mode == Force::Stand ? 1 : a.mode == Force::Kite ? 2 : 3; }
     namespace ModeDetail {
         inline const EQ::Vec3* Persist(const MoveClaim& q, MV::MoveMode m) { return q.order.mode == m && q.phase != StrictPhase::Ended ? &q.order.p : nullptr; }
@@ -234,7 +235,7 @@ namespace Sim {
             while (!F.over) { if (F.now >= F.nextPump && !F.ctl.empty()) { F.nextPump += TM::pump; pol.Serve(F, F.rr); F.rr = (F.rr + 1) % static_cast<int>(F.ctl.size()); } F.StepWorld(); }
             used = o.null ? 1.0 : F.t.upSec > 0 ? F.t.strictSec / F.t.upSec : 0.0; ns += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count(); ++played; return Utility(F); };
         auto work = [&]() { for (;;) { const int j = next.fetch_add(1); if (j >= jobs) return; const int s = j / static_cast<int>(C); const std::size_t ci = static_cast<std::size_t>(j) % C; if (!o.cls.empty() && o.cls != kModeClasses[ci]) continue;
-            const Cell cell = cellOf(s); const SimEnv* place = s >= o.n ? g_envPool.draw[static_cast<std::size_t>((s - o.n) / kMK) % places] : nullptr; ModeResult& r = res[static_cast<std::size_t>(j)]; std::array<std::vector<double>, A> u; r.up.fill(1);
+            const Cell cell = cellOf(s); const SimEnv* place = s >= o.n ? g_envPool.draw[static_cast<std::size_t>((s - o.n) / kMK) % places] : nullptr; ModeResult& r = res[static_cast<std::size_t>(j)]; std::array<std::vector<double>, A> u; for (std::size_t a = 0; a < A; ++a) r.up[a] = o.null || ModeServed(kModeArms[a]);
             for (int to = std::min(16, o.fights); ; to = std::min(to * 2, o.fights)) {
                 for (std::size_t a = 0; a < A; ++a) if (r.up[a]) for (int f = static_cast<int>(u[a].size()); f < to; ++f) { double used = 0; u[a].push_back(play(cell, place, ci, s, f, a, used)); r.used[a] += used; }
                 r.n = to; std::size_t b = 0; bool have = false; for (std::size_t a = 0; a < A; ++a) { if (a > 0 && r.used[a] < kModeActs * static_cast<double>(u[a].size())) r.up[a] = 0; if (!r.up[a]) continue; double m = 0; for (double v : u[a]) m += v / static_cast<double>(u[a].size()); r.mean[a] = m; if (!have || m > r.mean[b]) { b = a; have = true; } }
@@ -253,12 +254,14 @@ namespace Sim {
         const auto line = [&](const char* name, const Cnt& c) { std::printf("%-22s n %5ld resolved %5.1f%% |", name, c.n, pct(c.resolved, c.n)); for (std::size_t k = 0; k < 4; ++k) std::printf(" %s best %5.1f%% resolved %5.1f%% in the running %5.1f%% |", kModeNames[k], pct(c.arg[k], c.n), pct(c.res[k], c.n), pct(c.stand[k], c.n)); std::printf("\n"); };
         for (std::size_t ci = 0; ci < C; ++ci) if (per[ci].n) line(kModeClasses[ci], per[ci]);
         line("ALL", all); for (const auto& [k, c] : by) line(("  " + k).c_str(), c);
-        // THE PLAN'S LINES (11 item 6). best: the highest mean, which in an open scenario is half luck. resolved: of the scenarios the race decided
-        bool passBest = true, passRes = true;
-        for (std::size_t k = 0; k < 4; ++k) { double b = 0, r = 0; const char *bc = "", *rc = ""; for (std::size_t ci = 0; ci < C; ++ci) if (per[ci].n) { if (pct(per[ci].arg[k], per[ci].n) > b) { b = pct(per[ci].arg[k], per[ci].n); bc = kModeClasses[ci]; } if (pct(per[ci].res[k], per[ci].resolved) > r && per[ci].resolved >= 20) { r = pct(per[ci].res[k], per[ci].resolved); rc = kModeClasses[ci]; } }
-            const double ob = pct(all.arg[k], all.n), orr = pct(all.res[k], all.resolved); const bool kb = b >= 10.0 && ob <= 60.0, kr = r >= 10.0 && orr <= 60.0; passBest = passBest && kb; passRes = passRes && kr;
-            std::printf("ACCEPT %-10s highest mean: %.1f%% for %s, %.1f%% over all %s   of the resolved: %.1f%% for %s, %.1f%% over all %s\n", kModeNames[k], b, bc, ob, kb ? "ok" : "NOT MET", r, rc, orr, kr ? "ok" : "NOT MET"); }
-        std::printf("MODE-TEST highest mean %s, resolved %s   %lld fights, %.1f ms each\n", passBest ? "PASS" : "NOT MET", passRes ? "PASS" : "NOT MET", played.load(), 1e-6 * double(ns) / double(std::max(1ll, played.load())));
+        // THE PLAN'S LINES (11 item 6), over the scenarios the race decided. The highest mean is no verdict: it counts arms and luck (s5-plan.md 12 trap 3). A mode the caps do not serve has no line
+        bool passRes = true;
+        for (std::size_t k = 0; k < 4; ++k) { double r = 0; const char* rc = "no class"; for (std::size_t ci = 0; ci < C; ++ci) if (per[ci].n && per[ci].resolved >= 20 && pct(per[ci].res[k], per[ci].resolved) > r) { r = pct(per[ci].res[k], per[ci].resolved); rc = kModeClasses[ci]; }
+            bool served = o.null; for (const ModeArm& a : kModeArms) if (static_cast<std::size_t>(ModeOf(a)) == k && ModeServed(a)) served = true;
+            if (!served) { std::printf("ACCEPT %-10s not served by --move-caps: not played\n", kModeNames[k]); continue; }
+            const double orr = pct(all.res[k], all.resolved); const bool kr = r >= 10.0 && orr <= 60.0; passRes = passRes && kr;
+            std::printf("ACCEPT %-10s of the resolved: %.1f%% for %s, %.1f%% over all %s\n", kModeNames[k], r, rc, orr, kr ? "ok" : "NOT MET"); }
+        std::printf("MODE-TEST of the resolved %s   %lld fights, %.1f ms each\n", passRes ? "PASS" : "NOT MET", played.load(), 1e-6 * double(ns) / double(std::max(1ll, played.load())));
         g_road = Road::Off; return 0;
     }
 }

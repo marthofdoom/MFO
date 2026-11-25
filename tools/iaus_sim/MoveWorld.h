@@ -77,7 +77,7 @@ namespace Sim {
                 if (g_road == Road::Strict) { f.reach = F.Reach(x); f.speed = x.spec->run; bool far = x.spec->ranged.Has(); for (const int i : x.spec->spells) far = far || F.D->foeSpells[static_cast<std::size_t>(i)].e.nature == MFO::Iaus::Prune::Nature::Offense; f.ranged = far ? Tri::Yes : Tri::No; }   // S5-A: the hold's inputs
                 P.foes.push_back(f); continue; }
             MV::Member m; for (MV::Member& o : was) if (o.id == x.c.id) { m = o; break; }
-            m.id = x.c.id; m.p = { x.c.x, x.c.y, x.c.z }; m.who = WalkerOf(x); m.speed = x.spec->run * (x.sneaking ? 0.55f : 1.0f); m.nTop = 0; m.decides = false;
+            m.id = x.c.id; m.p = { x.c.x, x.c.y, x.c.z }; m.who = WalkerOf(x); m.speed = x.spec->run * (x.sneaking ? g_moveT.sneakX : 1.0f); m.nTop = 0; m.decides = false;
             m.anchor = { F.b[0].c.x, F.b[0].c.y, F.b[0].c.z }; m.leash = 0.0f; m.anchorMoves = S.playerSeen > 0.0 && F.now > S.playerSeen; m.anchorVel = {}; if (m.anchorMoves) { const float dt = static_cast<float>(F.now - S.playerSeen); m.anchorVel = { (m.anchor.x - S.playerWas.x) / dt, (m.anchor.y - S.playerWas.y) / dt, (m.anchor.z - S.playerWas.z) / dt }; }
             if (x.ctl >= 0) { const Ctl& c = F.ctl[static_cast<std::size_t>(x.ctl)]; MoveClaim& q = S.claim[static_cast<std::size_t>(x.ctl)];
                 m.leash = c.leash; m.classId = static_cast<std::uint8_t>(x.ctl); m.kinds = MV::SpotKindsFor(c.gate) & ~g_moveFault->kinds; m.decides = !MoveBodyTaken(F, x);
@@ -151,9 +151,9 @@ namespace Sim {
         if (g_road == Road::Strict) {
             MP::Orders(S.pic, as, *ActiveTuning());
             for (MV::Member& m : S.pic.party) { Body* x = F.Find(m.id); if (!x || x->ctl < 0) continue; MoveClaim& q = S.claim[static_cast<std::size_t>(x->ctl)];
-                MV::MoveOrder o = m.order; if (S.force != Force::None && x->ctl == 0) { S.forced = o; if (S.forceRule) S.forceRule(F, S.forced); if (S.forced.mode != MV::MoveMode::Free && S.forced.mode != MV::MoveMode::kCount) ++S.forceUsed; o = S.forced; o.gen = S.forceGen + (o.Same(q.order) ? 0u : 1u); S.forceGen = o.gen; }
+                MV::MoveOrder o = m.order; if (S.force != Force::None && x->ctl == 0) { S.forced = o; if (S.forceRule) S.forceRule(F, S.forced); if (S.forced.mode != MV::MoveMode::Free && S.forced.mode != MV::MoveMode::kCount) ++S.forceUsed; o = S.forced; const MV::MoveOrder& stands = q.nextAt >= 0.0 ? q.next : q.order; o.gen = S.forceGen + (o.Same(stands) && (o.mode == MV::MoveMode::Free || q.phase != StrictPhase::Ended) ? 0u : 1u); S.forceGen = o.gen; }   // an order that ended is filed again when its rule fires again (F9)
                 if (g_moveFault->noOrders) { o = MV::MoveOrder{}; o.gen = m.order.gen; }
-                if (o.gen != q.orderGen) { StrictPublish(F, *x, q, o); if (F.trace) std::fprintf(F.trace, "%7.2f  ORDER %s: mode %d at (%.0f, %.0f, %.0f) leash %.0f, %.0f from him\n", F.now, x->c.name.c_str(), static_cast<int>(o.mode), o.p.x, o.p.y, o.p.z, o.leashR, std::hypot(o.p.x - x->c.x, o.p.y - x->c.y)); } } }
+                if (o.gen != (q.nextAt >= 0.0 ? q.next.gen : q.orderGen)) { if (g_residue.bridgeLag > 0.0f) { q.next = o; q.nextAt = F.now + static_cast<double>(g_residue.bridgeLag); } else StrictPublish(F, *x, q, o); if (F.trace) std::fprintf(F.trace, "%7.2f  ORDER %s: mode %d at (%.0f, %.0f, %.0f) leash %.0f, %.0f from him\n", F.now, x->c.name.c_str(), static_cast<int>(o.mode), o.p.x, o.p.y, o.p.z, o.leashR, std::hypot(o.p.x - x->c.x, o.p.y - x->c.y)); } } }
         const MV::MoveCounts& k = S.pic.counts; Tally& t = F.t;
         t.moveUnfinished += k.unfinished; t.movePathShort += k.pathsSkipped; t.moveAskShort += k.asksShort; t.moveSpotShort += k.spotsDropped; t.moveTripleShort += k.triplesDropped; t.movePaths += k.paths;
         for (const MV::Assignment& a : as) {
@@ -166,7 +166,7 @@ namespace Sim {
             if (subj) { ++t.spotFiled; if (q.on && !q.arrived) ++t.spotChanges; for (std::size_t i = 0; i < MFO::Iaus::kSpotKindCount; ++i) if (m->commit.kinds & (1u << i)) ++t.spotKind[i];
                 for (const auto& p : S.pic.work.pairs) if (p.spot == a.spot && S.pic.party[p.member].id == a.who) t.spotPathLen += static_cast<double>(p.path.length); }
             const MP::PathFact* way = nullptr; for (const auto& p : S.pic.work.pairs) if (p.spot == a.spot && S.pic.party[p.member].id == a.who) way = &p.path;
-            const float bs = q.burstSeen; const auto top = q.top; const auto nTop = q.nTop; const double topAt = q.topAt; { MoveClaim n; n.order = q.order; n.orderGen = q.orderGen; n.phase = q.phase; n.stopAt = q.stopAt; n.nextPick = q.nextPick; n.notBefore = q.notBefore; n.retryAt = q.retryAt; n.dueBlock = q.dueBlock; n.blocks = q.blocks; n.nBlocks = q.nBlocks; q = n; } q.burstSeen = bs; q.top = top; q.nTop = nTop; q.topAt = topAt;
+            const float bs = q.burstSeen; const auto top = q.top; const auto nTop = q.nTop; const double topAt = q.topAt; { MoveClaim n; static_cast<StrictHand&>(n) = q; q = n; } q.burstSeen = bs; q.top = top; q.nTop = nTop; q.topAt = topAt;
             q.on = true; q.key = m->commit.key; q.p = m->commit.p; q.tri = m->commit.tri; q.kinds = m->commit.kinds; q.act = m->commit.act; q.since = F.now; q.leg = ++S.legs;
             q.from = { x->c.x, x->c.y, x->c.z };
             if (way) { q.len = way->length; q.via.assign(way->via.begin(), way->via.begin() + way->nVia); }
@@ -214,7 +214,7 @@ namespace Sim {
         if (c.leash > 0.0f && std::hypot(q.p.x - F.b[0].c.x, q.p.y - F.b[0].c.y) > c.leash + kLeashStandU) return false;   // a leash wins over a point (the pass is told at the next window)
         if (near && d <= g_moveT.insideU) { if (!q.arrived) { q.arrived = true; MoveTrustLeg(F, x, TR::End::Arrived, true, q.p); q.len = 0.0f; if (x.ctl == 0) ++F.t.spotArrived; if (F.trace) std::fprintf(F.trace, "%7.2f  SPOT REACHED %s\n", F.now, x.c.name.c_str()); } }
         else if (q.arrived && (!near || d > MoveRadius())) q.arrived = false;   // pushed out of the radius: he walks back in
-        auto step = [&](float tx, float ty, float speed, const EnvPoint* pt) { x.ranLast = speed >= 0.9f * x.spec->run; EnvMove(F, x, tx, ty, x.sneaking ? speed * 0.55f : speed, false, nullptr, pt); };
+        auto step = [&](float tx, float ty, float speed, const EnvPoint* pt) { x.ranLast = speed >= 0.9f * x.spec->run; EnvMove(F, x, tx, ty, x.sneaking ? speed * g_moveT.sneakX : speed, false, nullptr, pt); };
         if (q.arrived) {
             if (g_road == Road::Point && g_moveT.driftU > 0.0f && !F.Busy(x)) {   // he shifts about inside R
                 if (F.now >= q.driftAt) { q.driftAt = F.now + static_cast<double>(g_moveT.driftSec); const std::uint64_t h = Fight::Mix64(F.avSeed ^ Fight::Mix64(q.key) ^ static_cast<std::uint64_t>(F.now / static_cast<double>(g_moveT.driftSec)) ^ (static_cast<std::uint64_t>(x.c.id) << 32));
@@ -249,6 +249,7 @@ namespace Sim {
     inline void MoveLegEnd(Fight& F, Body& x, LegEnd how, const EQ::Vec3& toward) {
         MoveClaim& q = F.move->claim[static_cast<std::size_t>(x.ctl)];
         if (g_road == Road::Strict && !q.on && q.walks && how != LegEnd::Stuck) { if (!g_moveFault->noBlock) StrictBlock(F, x, q); return; }   // an order on his own place
+        if (g_road == Road::Strict && q.on && q.walks && how != LegEnd::Stuck && !(g_residue.blockTold > 0.0f)) { if (!g_moveFault->noBlock) StrictBlock(F, x, q); return; }   // nobody is told
         if (!q.on || (q.arrived && g_road != Road::Strict) || x.nav.goalBody != 0 || (!q.walks && !g_moveFault->anyLeg)) return;   // walks: the leg was HIS claim's. Give ground, a run, a regroup have no goal body either, and a claim that waits under them keeps its place (S2 review F6)
         MV::Member* m = MoveMember(F, x.c.id); if (m) m->marks |= MV::kMarkPathBlocked;
         MoveTrustLeg(F, x, how == LegEnd::Stuck ? TR::End::Stuck : how == LegEnd::Blocked ? TR::End::Blocked : TR::End::Refused, MoveLaneClear(F, x, toward), toward);
