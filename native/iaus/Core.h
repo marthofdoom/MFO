@@ -403,6 +403,7 @@ namespace MFO::Iaus {
         float lightMaxAgeSec = 20.0f;            // ... for this long
         float lightMinConf = 0.25f;              // under this confidence the light of a place is unknown
         float lightLitLevel = 45.0f;             // ground at or above this level is lit (the walk of a member who wants the dark)
+        float lightGenU = 900.0f;                // the spot generators: a place known to be lit (at t.lightLitLevel or above, less below it) ranks as if this much farther, for who wants the dark
         float lightDarkHoldSec = 6.0f;           // who wanted the dark this recently is not lit (the one hysteresis of the cast and the decast)
         WorthTable worth{};
         // S11b (iaus/SpellWorth.h): what one cast of a spell is worth in one unit for every family. SHIPPED INERT (`sw.live` = 0): `sw.<field>` in shared.txt.

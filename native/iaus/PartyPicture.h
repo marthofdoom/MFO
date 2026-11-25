@@ -130,7 +130,7 @@ namespace MFO::Iaus::Move {
     struct ExitMemo { float exitU = -1.0f; std::vector<std::uint16_t> open; };                     // per spot point (KeyOfPoint), for a plain Walker: the open octants (OpenOctants), 0xFFFF = not worked out
 
     // The pass's working memory for one window. Nothing outside MovePass.cpp / Spots.cpp reads it.
-    struct SpotPoint { SpotKey key = 0; Env::Vec3 p; std::int32_t tri = -1; float walk = 0.0f; };
+    struct SpotPoint { SpotKey key = 0; Env::Vec3 p; std::int32_t tri = -1; float walk = 0.0f; float lit = 0.0f; };   // lit: what its known light adds to its rank (S4, for who wants the dark)
     struct Work {
         enum class Stage : std::uint8_t { Flood, Generate, Merge, Place, Select, Offer, Queue, Paths, Asks, Done } stage = Stage::Done;
         std::size_t cursor = 0;

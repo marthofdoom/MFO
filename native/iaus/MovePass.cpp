@@ -62,6 +62,12 @@ namespace MFO::Iaus::MovePass {
             return side(a, b, c) * side(a, b, d) < 0.0f && side(c, d, a) * side(c, d, b) < 0.0f;
         }
 
+        Env::Vec3 Between(const Env::Vec3& a, const Env::Vec3& b, float k) { return { a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k, a.z + (b.z - a.z) * k }; }
+        float LitShare(const PartyPicture& pic, const Env::Vec3& p, const Tuning& t) {   // 0 = dark or not known, 1 = lit
+            const auto l = Light::At(pic.lightField, p, pic.t, t);
+            return l.Known() && t.lightLitLevel > 0.0f ? (std::min)(1.0f, l.level / t.lightLitLevel) : 0.0f;
+        }
+
         // THE ONE FILLER of SpotFacts. Static: what no other member's choice changes. a_pair / a_spot null = stay here.
         SpotFacts FillStatic(const PartyPicture& pic, const Member& m, const RankedAction& a, const Spot* spot, const Work::Pair* pair, const Tuning& t) {
             SpotFacts f;
@@ -344,11 +350,15 @@ namespace MFO::Iaus::MovePass {
                     const std::size_t from = pts.size();
                     Points(v, tri, t, pts, pic.mesh.get());
                     const Env::Vec3 c = pic.mesh->cen[static_cast<std::size_t>(tri)];
-                    for (std::size_t i = from; i < pts.size(); ++i) pts[i].walk = tri == m.tri ? Dist(m.p, pts[i].p) : d + Dist(c, pts[i].p);
+                    for (std::size_t i = from; i < pts.size(); ++i) {
+                        pts[i].walk = tri == m.tri ? Dist(m.p, pts[i].p) : d + Dist(c, pts[i].p);
+                        if (m.wantsDark && !pic.lightField.samples.empty())   // only the best few are kept or tested: a lit place must not crowd a dark one out. Unknown adds nothing
+                            pts[i].lit = t.lightGenU * (LitShare(pic, pts[i].p, t) + (LitShare(pic, Between(m.p, pts[i].p, 0.25f), t) + LitShare(pic, Between(m.p, pts[i].p, 0.5f), t) + LitShare(pic, Between(m.p, pts[i].p, 0.75f), t)) / 3.0f);   // the place, and the straight way to it
+                    }
                 }
             thread_local std::vector<R> found; found.clear();
             // a place his leg was refused at is not looked at, so it takes no room of the sorted part below (S3 review R1)
-            for (const Cand& k : pts) { float r = 0.0f; if (row.gen(g, k, r) && std::isfinite(r) && !Trust::Refused(pic.trustNow, m.id, k.key)) found.push_back({ QDist(r), k }); }
+            for (const Cand& k : pts) { float r = 0.0f; if (row.gen(g, k, r) && std::isfinite(r) && !Trust::Refused(pic.trustNow, m.id, k.key)) found.push_back({ QDist(r + k.lit), k }); }
             // only the first geomPerGen are ever looked at, and the order is total (a key is one point)
             const auto upTo = found.begin() + static_cast<std::ptrdiff_t>((std::min)(found.size(), static_cast<std::size_t>((std::max)(B.geomPerGen, B.perGen))));
             std::partial_sort(found.begin(), upTo, found.end(), [](const R& x, const R& y) { return x.q != y.q ? x.q < y.q : x.c.key < y.c.key; });
