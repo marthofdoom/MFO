@@ -1816,7 +1816,7 @@ TERRAIN door      narrowest     24  height    0  water  0.0%  doors 2.0   is wha
   measured otherwise player    1008: 2
 ```
 
-HOLES: none of the 4,200 five-way cells is empty. What the set lacks: real water fighting (the shore is walkable), a moving bridge or platform, a foe that can swim or climb, light as an axis (S4's own rows have it), more than one other follower. Extracted places are extra terrain (`--env-set Tuxborn`, not in git), measured the same way, averages of 24 layouts:
+(The table above is a BUILD CHECK, not what was fought. The fought column is 24.4.) HOLES: none of the 4,200 five-way cells is empty. What the set lacks: real water fighting (the shore is walkable), a moving bridge or platform, a foe that can swim or climb, light as an axis (S4's own rows have it), more than one other follower. Extracted places are extra terrain (`--env-set Tuxborn`, not in git), measured the same way, averages of 24 layouts:
 
 ```
 PLACE i_EasierRidersDungeonPackS-01FE96 int narrowest 251 height 7 water 0.0% doors 0.0
@@ -2020,3 +2020,45 @@ A window's share in `ORCORDER`: `the pass goes on` is the default, the mode shar
 **The measurement** (`_tuning/s5-c3`, unit `s5c3-main`, reader `read.py`). Verdict stated before it ran: ORDERS HELP = on less off AND on less rank over 2 standard errors on ALL with no class under -2; NO HARM = on less off, less 2 standard errors, over -0.5; a claim about a class needs 2 standard errors there. Standard errors by fight (a fight = its mean over its 8 luck reruns). The action rule (`best` against `on`, `offbest` against `off`) is read from the same 96 fights. No claim that orders help is made before it has run.
 
 Proof on the last commit of round 2 (`_tuning/s5-c3/final.sha`; the measurement binary is 9ffa1b51, spot rows are the only code since): road off v2 v3 v4 at 1 and 8 threads, point and pinned, byte identical with a8f9c24b. Road-off oracle and point oracle with `--oracle-orders off` print the lines they printed before S5-C. Strict IAUS fights at 1 = 8 threads = before S5-C. 69 spot scenarios at seeds 1 4 913 6161, harness 0 failed, golden untouched (gcc and MSVC), CLI-CHECKS pass, MSVC build exit 0, driver tests pass. Mutations of the default (fight and rollout), the incumbent's report, the aversion window and round 1's rules all fail a `race-*` row.
+
+## 24. The scenario generator and the modes' acceptance (s5-plan.md package S5-D, branch `feat/s5-d`, 2026-11-25)
+
+Built: everything that does not depend on the S5-C verdict. NOT run: the oracle pilot, the held-out acceptance. Files: `ModeGen.h` (generator, calibration, strata), `ModeAccept.h` (`--mode-accept`, `--mode-unit`), `mode_accept.py` (the judge), `test_mode_accept.py`, `envs/make_fixtures.py GEN`. NO native change. No game data in git.
+
+### 24.1 The generator (`kModeGenVersion` g2.0)
+
+A scenario is drawn from (family, seed, k) by a Latin hypercube of 23 axes in blocks of 120: every seed fights new cells, and scenario k does not depend on how many are asked for. Foe speed is continuous (a third under kiteSpeed, a third 0.4 to 1, a third to 1.5 of his run), 1 to 10 foes (25 / 30 / 25 / 20 percent), 12 kinds and 6 mixed groups whose kinds each have a speed, reach 0.75 to 1.8, level 10 / 25 / 45, 11 terrains (a corner is new) of three fixtures each (23 new, drawn by width, length, height, mirrored or turned, entries at both ends so the sides change), start distance 300 to 2,500 cut to the place, a second group in 15 percent (by time or at half dead: `Spawn::halfOf`), party alone / tank / healer / two shooters / a deciding mate / four, the healer behind a corner in half, player near / at the leash / leaving / hurt and in melee / at range / a mage / passive, light in four levels, who is hunted. Where the plan said light is S4's, marth's ruling makes it an axis.
+
+`kModeRows`, 25 percent of the draws, are fights built FOR a mode or AGAINST one: a hold or a choke beats free (doorway and funnel and bridge against many, archers and bolts with cover, a healer's line, a dead end at his back), free beats a hold (one weak blade, a caster line, a fast pack, a charger, contact, a stream). Rows for a kite or a disengage are drawn only where `--move-caps` serves it. What wins is measured, a row is not a label. `--mode-against stand` draws half of the scenarios from the rows against it (5.4).
+
+Extracted places (`--env-set all`): each is measured over 16 layouts (median narrowest passage, height, doors), put in one of 27 strata, up to three a stratum, then one more of each in turn to 60. On this machine: 71 of 75 have a way, 60 drawn, 6 strata empty (printed). No place is chosen by name.
+
+### 24.2 Difficulty
+
+Plan 5.2 asked for a table a cell. A cell's median left single scenarios always won or always lost, so the bisection is per (scenario, class), on 48 fights at most nine times, IAUS with the road off, for a target of 43, 50 or 57 percent wins (a row can fix its own, "one weak blade" 65), and the win rate that counts is a check on 64 OTHER lucks. `MODECELL` prints the medians a cell for the record. It costs 2 to 3 CPU seconds a scenario and class.
+
+### 24.3 The acceptance
+
+`--mode-accept` plays, per (scenario, class, luck), IAUS and the subject-only oracle on the same luck, and at every order race of the oracle's `Oracle.h modeLines` re-estimates what each mode is worth on fresh streams: the best of a mode's three longest-standing rows by `--mode-k` streams, then half A (names the owner, is the test) and half B (is the value: nothing selected it). The rollouts are extra, the race, its picks and its lines are what they were. `the pass goes on` counts as the mode of the pass's own order. `--mode-refuse <mode>` is the leave-one-out arm: whoever orders it, the subject may not be in that mode (a refused Free stands where he is, anything else is Free).
+
+The judge, with the rulings of review T2 and the S5-C acceptance number: a decision is owned at a lead over 2 standard errors AND 0.3 U (the race's own tie width, where the plan wrote 0.10), else a tie; a scenario needs a mode at a mean need over 0.25 U with its lower bound over zero, over 8 lucks or more (16 at most), tied is a class of its own; 40 resolved a class and set; 10 percent and 60 percent lines on lower bounds, the lower of Wilson's and a bootstrap over scenarios (over PLACES in the extracted set); 80 percent of the scenarios at 30 to 70 percent wins; leave-one-out sign agreement; only an archer may be ONE-MODE, by the four proofs. A mode the caps do not serve has no line. Only a held-out family of this generator version can pass.
+
+A melee kite is out of this tune. Its recorder exists (`World.h Tally` kite*, `ACCEPTKITE`: the share of the damage dealt in it, the longest stretch without an attack, episodes that never struck, the longest episode), and a blade's kite need is counted only in fights whose strike windows hold (`MELEE_KITE`, PLACEHOLDER numbers). A blade has no kite line until it is ruled on.
+
+### 24.4 What was FOUGHT
+
+@@FOUGHT@@
+
+### 24.5 Proof
+
+@@PROOF@@
+
+### 24.6 Differences from the plan, and limits
+
+- The decision margin is 0.3 U, difficulty is a scenario's own, light is an axis, sequential growth starts at 8 lucks (the plan's 2 cannot judge), and by `mode_accept.py --open` between runs.
+- The need's "best option of any other mode" is the second mode on half A, so its B value is unbiased but the A test is a maximum over at most two leads.
+- The lab carries Stand, GoTo and Kite at one place alike, so under `strict,kite` a mode is the place's own row (S5-C note). Under `strict` the question does not arise.
+- Windows the oracle is not asked at (a committed leg, an order of its own that stands) have no decision. A need is a sum over the windows that were asked.
+- A passive player is a player whose blows count for nothing. A flyer group is three at most. A chained group stands where the first did.
+- `mode_accept.py` cannot see a mode the generator never makes good: that is what the rows and the fought table are for.
+

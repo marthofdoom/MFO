@@ -4109,6 +4109,12 @@ Off sim seed 991 fights 2 threads 8 beta1 + nightblade,healer,thief,wizard, v3 v
 - OPEN (S5-F): cut 6 (freezing the rollout's pass, at most 1.45x), the ext moves' retirement table. Cut 4 is built (iaus-sim-v4.md 23.6). Review findings 1 to 9 of S5-C are closed there.
 - OPEN (SEV-5): a subject another fixed body keeps out of a place is refused that place, where the pass would drop it from the table only if the other was planned first.
 
+### `feat/s5-d` (author notes, Opus 5.5, 2026-11-25)
+- CLOSED: SIM-STRICT F8 (variety is what was fought: `GENFOUGHT`, iaus-sim-v4.md 24.4), T2's acceptance mechanics. OPEN until the S5-C verdict: the oracle pilot (`_tuning/s5-d/pilot.sh`), the held-out families, the acceptance itself.
+- OPEN (later delta stage with kite): the `MELEE_KITE` numbers are placeholders, the rows `slow-heavy-open` / `slow-blades-open` / `boss-contact` are drawn only when their mode is served, and Stand against Kite at one place is a place's row, not an executor difference (S5-C note).
+- OPEN (S5-E2): the driver's manifest of families (design, train, heldout) and the cache key of a calibration table.
+- OPEN (SEV-5): one seed's light, level and terrain reach the fight, but the light only reaches the stealth model and places with no light layer.
+
 ### SIM-STRICT: review findings on d252f39d (Opus, nothing above SEV-3). F1 to F3 and T1 to T3 are in S5 (plan: Fable), the rest is this entry (what `feat/s5-ab` closed is in its own block above)
 
 
