@@ -3034,9 +3034,9 @@ namespace {
                 Check(score(find(p)) > 0.0f, "M4 F1: ... and just past it does not");
             }
             {   // F1, WorthOf: the same pads (the reader counts the friend the gate counts)
-                Tuning tw = t; tw.spellWorth.live = 1.0f;
+                Tuning tw = t; tw.spellWorth.live = 1.0f; tw.spellWorth.areaFoesIntoDamage = 1.0f; tw.spellWorth.areaFriendPenalty = 0.5f;
                 Snapshot w = s; w.allies[1].x = -(allyEdge - 1.0f); w.allies[1].y = 0.0f;
-                for (auto& e : w.book.entries) if (e.form == 0x1C789) { e.measured = true; e.damage = 50.0f; }
+                for (auto& e : w.book.entries) if (e.form == 0x1C789) { e.measured = true; e.damage = e.directDamage = 50.0f; e.chargeSec = 0.5f; e.undeadOnly = false; e.resistAv = -1; }
                 const auto rate = [&](const Snapshot& sn) { for (const auto& c : Generate(sn, g, tw).actions) if (c.form == 0x1C789 && c.target == 0x3B500) return c.f.expRate; return -2.0f; };
                 const float in = rate(w);
                 w.allies[1].x = -(allyEdge + 1.0f);
