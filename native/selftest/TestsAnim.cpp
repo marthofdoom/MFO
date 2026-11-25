@@ -1,4 +1,4 @@
-// THE ANIMATED-CAST TESTS (DEV BUILDS ONLY; anim-residue plan A1/A2, placed-spells M1/D2; in-game-test-list.md "Animation session").
+// THE ANIMATED-CAST TESTS (DEV BUILDS ONLY; anim-residue plan A1/A2, placed-spells M1/D2/M4; in-game-test-list.md "Animation session").
 // marth: "Getting animations for everything is non negotiable"; the dev gambit must run on ANY follower in ANY environment: each test lends
 // the spell (and a class, a foe, a pool of magicka), judges, and the runner takes it all back. Every test ends in ONE line:
 //     [anim] RESULT <id>: PASS|FAIL|SKIP|INFO | <follower> | <measured facts>      (FinishStep, Runner.cpp)
@@ -18,6 +18,7 @@
 #include "apmf/APMFBridge.h"
 #include "cast/Actuation.h"
 #include "classes/Classes.h"
+#include "iaus/AreaCensus.h"
 #include "iaus/EffectMirror.h"
 #include "iaus/Engine.h"
 #include "iaus/SpellBook.h"
@@ -60,7 +61,7 @@ namespace MFO::SelfTest {
         double NowMs() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
         // ── the log tap ─────────────────────────────────────────────────────────────────────────
-        constexpr std::string_view kTapTags[] = { "[cast-hold] ", "[buff] ", "[summon] ", "[iaus] ", "[iaus-gen] ", "[spellbook] " };
+        constexpr std::string_view kTapTags[] = { "[cast-hold] ", "[buff] ", "[summon] ", "[iaus] ", "[iaus-gen] ", "[spellbook] ", "[cast-guard] " };
         struct Line { std::uint64_t seq = 0; std::string text; };
         std::mutex                         g_tapMx;   // leaf
         std::deque<Line>                   g_lines;
@@ -201,7 +202,13 @@ namespace MFO::SelfTest {
         Step End(Step a_s) { if (a_s.evidence.size() > 900) a_s.evidence.resize(900); return a_s; }
 
         // ── the spells of the load order, scanned once (form data only, worker) ─────────────────
-        struct Pools { bool done = false; std::vector<RE::FormID> summons, fireOnce, blasts; };
+        struct Pools {
+            bool done = false;
+            std::vector<RE::FormID> summons, fireOnce, blasts;   // blasts = the HAZARD arm only since M4 (Prune::IsSelfHazardBlock, Drop::SelfBlast): the spells still kept out
+            std::vector<RE::FormID> areaBlasts;                  // M4: Self hostile-area blasts IAUS offers (Drop::Keep), smallest guard first
+            std::map<RE::FormID, std::pair<float, float>> radii; // areaBlasts: { guard units, foe units } from the record (the book's own numbers are read later)
+            const char* unservedWhy = nullptr;                   // a blast shape the claim road cannot serve (BlastClaimUnservedWhy), when no one is
+        };
         Pools g_pools;   // WORKER-ONLY
         float Cost(RE::SpellItem* sp, RE::Actor* a) { return sp->CalculateMagickaCost(a); }
         float Duration(RE::SpellItem* sp) {
@@ -216,6 +223,30 @@ namespace MFO::SelfTest {
             auto drop = Iaus::Prune::Drop::Keep;
             (void)Iaus::SpellBook::WouldWeigh(sp, Iaus::ClassGate{}, nullptr, &drop);
             return drop == Iaus::Prune::Drop::Keep;
+        }
+        // M4: a Self, fire-and-forget, Offense-kind spell with a hostile effect of its own area and no hazard left on the ground (the shape the claim road serves, read by the
+        // shared readers, never by name). Served + offered (Drop::Keep) = a candidate of anim.self_blast; a shape no Harbinger row serves records why, for the SKIP.
+        void BlastShape(RE::SpellItem* sp, Iaus::Prune::Drop a_drop) {
+            if (sp->GetDelivery() != RE::MagicSystem::Delivery::kSelf || sp->GetCastingType() != RE::MagicSystem::CastingType::kFireAndForget ||
+                CasterConsent::ClassifySpell(sp) != CasterConsent::SpellKind::Offense || Actuation::IsSummonSpell(sp))
+                return;
+            const auto arch = Actuation::ClassifyArchetype(sp);
+            if (arch.hostileImpact || arch.hazardHostile || arch.spawnHazard) return;
+            float foeFeet = 0.0f, widestFeet = 0.0f;
+            for (auto* e : sp->effects) {
+                if (!e || !e->baseEffect) continue;
+                widestFeet = std::max(widestFeet, static_cast<float>(e->effectItem.area));
+                if (e->baseEffect->IsHostile()) foeFeet = std::max(foeFeet, static_cast<float>(e->effectItem.area));
+            }
+            const float foe = Iaus::Prune::AreaUnits(foeFeet);
+            if (!(foe >= 64.0f)) return;   // no hostile area of its own (an explosion-only or single-target effect): not the shape under test
+            if (const char* why = Actuation::BlastClaimUnservedWhy(sp, arch)) {
+                if (!g_pools.unservedWhy) g_pools.unservedWhy = why;
+                return;
+            }
+            if (a_drop != Iaus::Prune::Drop::Keep) return;
+            g_pools.areaBlasts.push_back(sp->GetFormID());
+            g_pools.radii[sp->GetFormID()] = { std::max(Iaus::Prune::AreaUnits(widestFeet), foe), foe };
         }
         const Pools& Scan() {
             if (g_pools.done) return g_pools;
@@ -234,6 +265,7 @@ namespace MFO::SelfTest {
                 auto drop = Iaus::Prune::Drop::Keep;
                 (void)Iaus::SpellBook::WouldWeigh(sp, Iaus::ClassGate{}, nullptr, &drop);
                 if (drop == Iaus::Prune::Drop::SelfBlast) g_pools.blasts.push_back(id);
+                BlastShape(sp, drop);
                 if (SummonOk(sp)) g_pools.summons.push_back(id);
                 if (sp->GetDelivery() != RE::MagicSystem::Delivery::kSelf || sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) continue;
                 if (CasterConsent::ClassifySpell(sp) != CasterConsent::SpellKind::Buff || Actuation::CastRoadUnsupported(sp)) continue;
@@ -248,8 +280,13 @@ namespace MFO::SelfTest {
             for (const auto& f : fire) g_pools.fireOnce.push_back(f.second);
             std::sort(g_pools.summons.begin(), g_pools.summons.end());
             std::sort(g_pools.blasts.begin(), g_pools.blasts.end());
-            spdlog::info("[anim] spell scan: {} taught spell(s): {} location summon(s), {} fire-once buff(s), {} blocked self blast(s)", taught.size(),
-                         g_pools.summons.size(), g_pools.fireOnce.size(), g_pools.blasts.size());
+            std::sort(g_pools.areaBlasts.begin(), g_pools.areaBlasts.end(), [](RE::FormID a, RE::FormID b) {
+                const auto ra = g_pools.radii[a].first, rb = g_pools.radii[b].first;
+                return ra != rb ? ra < rb : a < b;
+            });
+            spdlog::info("[anim] spell scan: {} taught spell(s): {} location summon(s), {} fire-once buff(s), {} self hazard(s) kept out, {} self area blast(s) offered{}", taught.size(),
+                         g_pools.summons.size(), g_pools.fireOnce.size(), g_pools.blasts.size(), g_pools.areaBlasts.size(),
+                         g_pools.areaBlasts.empty() && g_pools.unservedWhy ? std::format(" (none served: {})", g_pools.unservedWhy) : std::string{});
             return g_pools;
         }
         // The first affordable one (the lent magicka ability adds 50), else 0.
@@ -519,6 +556,8 @@ namespace MFO::SelfTest {
         }
 
         // ── anim.blocked_blast ──────────────────────────────────────────────────────────────────
+        // Since M4 only the HAZARD arm stays blocked (Prune::IsSelfHazardBlock, Drop::SelfBlast: Blizzard, the damage circles); the area arm (Frost Nova, Fire Storm) is offered
+        // and is anim.self_blast's. The spell is picked at runtime from the taught spells whose static drop is SelfBlast (Scan().blasts), never by name.
         // n[4] IAUS laps seen, n[5] the last drop.
         const char* BlastPre(Ctx& c) {
             if (const char* r = Ready(c)) return r;
@@ -538,7 +577,7 @@ namespace MFO::SelfTest {
             auto& s = *c.s;
             if (const char* why = NoLog()) return Step::Skip(why);
             if (!Config::g_iausAvailable.load()) return Step::Skip("bIausAvailable = 0");
-            if (!Spell(c)) return Step::Skip("no hostile self area spell a tome teaches in this load order");
+            if (!Spell(c)) return Step::Skip("no self hazard spell (a spawned hostile hazard, Prune::IsSelfHazardBlock: Blizzard, a damage circle) is taught by a tome in this load order");
             if (!s.b[0]) { Begin(c); TempClass(c, "evoker"); return Step::Continue(); }
             const char* why  = nullptr;
             auto        drop = Iaus::Prune::Drop::Keep;
@@ -552,13 +591,180 @@ namespace MFO::SelfTest {
             s.note = std::format("{} ({:08X}): IAUS samples {:.0f}, named in a decision {}, fired {}, Teach page reason '{}', affordable {}", QuotedName(c), Spell(c), s.n[4],
                                  named.size(), Fires(c), Iaus::Prune::DropName(drop), affordable ? "yes" : "no");
             if (Fires(c) > 0) return End(Step::Fail("the blocked blast was CAST; " + s.note));
-            if (weighs || drop != Iaus::Prune::Drop::SelfBlast) return End(Step::Fail("the spell is not blocked; " + s.note));
+            if (weighs || drop != Iaus::Prune::Drop::SelfBlast) return End(Step::Fail("the self hazard spell is not blocked (Prune::IsSelfHazardBlock); " + s.note));
             if (!named.empty()) return End(Step::Fail("IAUS weighed it: " + Last(named) + "; " + s.note));
             if (s.n[4] >= kT.blastLaps) return End(affordable ? Step::Pass("never offered, never picked; " + s.note) : Step::Info("never offered (but he could not pay for it); " + s.note));
             if (!c.inCombat) return Step::Retry("the fight ended first; " + s.note);
             return Step::Continue();
         }
         Step BlastTimeout(Ctx& c) { return Step::Retry("too few IAUS laps in the window; " + c.s->note); }
+
+
+        // ── anim.self_blast (M4) ────────────────────────────────────────────────────────────────
+        // A lent Self hostile-area blast (picked at runtime by the shared readers, Scan().areaBlasts: the smallest guard first), a foe placed INSIDE its radius, and nobody
+        // friendly within the guard. LEG 1: the claim (the [buff] SELF BLAST line), ONE animated cast per claim, the foe hit, no UNANIMATED. LEG 2: once someone stands in the PARTY PAD ring
+        // (past the blast's reach, inside the guard's pad), NO cast while inside and no standing claim afterwards. LEG 3: once clear again, a cast while the foe remains.
+        // SAFETY: nothing here moves or hurts the player. Leg 1 starts only with the player and every party member beyond the pad; leg 2 is judged only while the
+        // nearest friend is OUTSIDE the blast's own reach (guard units + 96), so a failed guard still cannot reach him. A leg nobody stands in is SKIPPED, never forced.
+        // Per run state (WORKER-ONLY), keyed by the follower; cleared by ClearAnimState and at Begin.
+        struct SelfBlastRun {
+            bool   fired = false, leg1 = false, ring = false, leg2 = false, clearSeen = false;
+            float  firedAt = 0, clearAt = 0, ringAt = 0, clearSecs = 0, lastElapsed = 0, foeHp = 0;
+            int    firesAtClear = 0, firesGrace = 0;
+            bool   graceTaken = false;
+            std::string leg1Note, leg2Note;
+        };
+        std::unordered_map<RE::FormID, SelfBlastRun>                           g_selfBlast;   // WORKER-ONLY
+        std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point>  g_selfBlastWait;   // WORKER-ONLY: since when the party stood too close
+        constexpr float kBlastReachPad  = 96.0f;    // leg 2 only counts a friend this far past the blast's own reach
+        constexpr float kBlastClearPad  = 64.0f;    // leg 1 / 3 "clear": past the pad by this much (the census margin has hysteresis)
+        constexpr float kBlastGiveUpSec = 150.0f;   // leg 1 never started because the party never stood clear: SKIP
+        // The nearest friend (player or another party member): his distance from the follower, or a huge number. WORKER read.
+        float NearestFriend(Ctx& c) {
+            float best = 1.0e9f;
+            const auto me = c.follower->GetPosition();
+            if (auto* pc = RE::PlayerCharacter::GetSingleton()) best = std::min(best, pc->GetPosition().GetDistance(me));
+            if (const auto snap = Followers::ActiveSnapshot())
+                for (const auto id : *snap) {
+                    if (id == c.id) continue;
+                    auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
+                    if (a && !a->IsDead() && a->Is3DLoaded()) best = std::min(best, a->GetPosition().GetDistance(me));
+                }
+            return best;
+        }
+        const Iaus::SpellEntry* BlastEntry(const std::shared_ptr<const Iaus::Book>& a_book, RE::FormID a_spell) {
+            if (a_book) for (const auto& e : a_book->entries) if (e.form == a_spell) return &e;
+            return nullptr;
+        }
+        const char* SelfBlastPre(Ctx& c) {
+            if (const char* r = Ready(c)) return r;
+            auto& s = *c.s;
+            s.set[0].clear();
+            s.note.clear();
+            const auto& sc = Scan();
+            if (sc.areaBlasts.empty()) {
+                s.note = sc.unservedWhy ? std::string(sc.unservedWhy) : std::string("no self hostile area blast a tome teaches (and IAUS offers) in this load order");
+                return nullptr;   // Step SKIPs with it
+            }
+            RE::FormID pick = Affordable(c, sc.areaBlasts);
+            if (!pick) pick = sc.areaBlasts.front();
+            s.set[0] = { pick };
+            const auto& rad = sc.radii.at(pick);
+            s.n[4] = rad.second;   // foe units (the foe is placed half that far)
+            s.n[5] = rad.first;    // guard units, from the record (the book's own number is read in the run)
+            // The party stands clear: past the guard + the ally pad + a margin. The follower follows the player, so this waits for the player to walk off (bounded).
+            const float need = static_cast<float>(rad.first) + Iaus::Estimate::kFireBodyPad + Iaus::kAreaGuard.selfBlastAllyMargin + Iaus::kAreaGuard.safetyMargin;
+            const float near = NearestFriend(c);
+            if (near > need) { g_selfBlastWait.erase(c.id); return nullptr; }
+            const auto now = std::chrono::steady_clock::now();
+            auto&      at  = g_selfBlastWait[c.id];
+            if (at == std::chrono::steady_clock::time_point{}) at = now;
+            if (now - at >= std::chrono::duration<float>(kBlastGiveUpSec)) {
+                s.set[0].clear();
+                s.note = std::format("the player and the party never stood more than {:.0f} units from him in {:.0f} s (the blast's guard + party pad), so the claim could not be judged", need, kBlastGiveUpSec);
+                return nullptr;
+            }
+            static char buf[200];
+            std::snprintf(buf, sizeof buf, "the player and the party more than %.0f units from him (walk away; his blast's party pad)", need);
+            return buf;
+        }
+        void SelfBlastFix(Ctx& c, FixtureRequest& r) {
+            if (!Spell(c) || NoLog() || NoHarbinger() || !Config::g_iausAvailable.load()) return;
+            Lend(c, r, 3.0f);
+            Foe(r);
+            r.spawn.distance = std::clamp(static_cast<float>(c.s->n[4]) * 0.5f, 96.0f, 450.0f);   // INSIDE the hostile effect's radius
+            Snap(c, r);
+            r.iaus = 1;
+        }
+        // The foe was hit: the blast's effect on him, or his health below what it was at the cast.
+        bool FoeHit(Ctx& c, float a_hpAtFire) {
+            if (!c.hostile) return false;
+            if (EffectUp(c.hostile, SpellForm(c))) return true;
+            auto* avo = c.hostile->AsActorValueOwner();
+            return avo && avo->GetActorValue(RE::ActorValue::kHealth) < a_hpAtFire - 0.5f;
+        }
+        float FoeHealth(Ctx& c) {
+            auto* avo = c.hostile ? c.hostile->AsActorValueOwner() : nullptr;
+            return avo ? avo->GetActorValue(RE::ActorValue::kHealth) : 0.0f;
+        }
+        Step SelfBlastStep(Ctx& c) {
+            auto& s = *c.s;
+            if (const char* why = NoLog()) return Step::Skip(why);
+            if (!Config::g_iausAvailable.load()) return Step::Skip("bIausAvailable = 0");
+            if (const char* why = NoHarbinger()) return Step::Skip(why);
+            if (!Spell(c)) return Step::Skip(s.note.empty() ? "no self hostile area blast to lend" : s.note);
+            if (!s.b[0]) { Begin(c); TempClass(c, "evoker"); g_selfBlast[c.id] = {}; return Step::Continue(); }
+            auto& g = g_selfBlast[c.id];
+            NoteProxy(c);
+            const float dt = std::max(0.0f, c.elapsed - g.lastElapsed);
+            g.lastElapsed  = c.elapsed;
+            const auto book = Iaus::SpellBook::Read(c.follower);
+            const auto* e   = BlastEntry(book, Spell(c));
+            if (!e) return Step::Continue();   // the book refreshes within ~5 s of the lend
+            const float guard = e->areaUnits, reach = guard + kBlastReachPad, pad = guard + Iaus::AreaAllyPad(*e);
+            const float near  = NearestFriend(c);
+            const bool  clear = near > pad + kBlastClearPad;
+            const auto  facts = std::format("{} guard {:.0f}u, foe radius {:.0f}u, party pad edge {:.0f}u, nearest friend {:.0f}u", Facts(c), guard, e->FoeUnits(), pad, near);
+            s.note = facts;
+            const auto claimLine = Lines(Since(c), "[buff] " + Hex(c.id), Hex(Spell(c)), "SELF BLAST");
+            if (const auto un = Unanimated(c); !un.empty()) return End(Step::Fail("UNANIMATED: " + un + "; " + facts));
+            // ── leg 1 ──
+            if (!g.fired) {
+                if (Fires(c) > 0) {
+                    g.fired = true; g.firedAt = c.elapsed; g.foeHp = FoeHealth(c);
+                    if (claimLine.empty()) return End(Step::Fail("he cast it without a SELF BLAST claim ([buff] line): " + facts));
+                    return Step::Continue();
+                }
+                if (!c.inCombat) return Step::Retry("the fight ended first; " + facts);
+                if (clear && c.hostile) g.clearSecs += dt;
+                if (g.clearSecs >= kT.claimWait)
+                    return End(Step::Fail(std::format("no cast in {:.0f} s of a foe inside his radius with nobody within the pad; last [buff]: {}; {}", kT.claimWait,
+                                                      Last(Lines(Since(c), "[buff] " + Hex(c.id), Hex(Spell(c)))), facts)));
+                return Step::Continue();
+            }
+            if (!g.leg1) {
+                if (c.elapsed - g.firedAt < kT.settle) return Step::Continue();
+                if (claimLine.empty()) return End(Step::Fail("cast but no SELF BLAST claim line: " + facts));
+                if (Fires(c) > static_cast<int>(Claims(c))) return End(Step::Fail(std::format("{} cast(s) for {} claim(s): more than one cast per claim; {}", Fires(c), Claims(c), facts)));
+                if (c.hostile && !FoeHit(c, g.foeHp)) return End(Step::Fail("the foe inside his radius was not hit (no effect on him, his health unchanged); " + facts));
+                g.leg1 = true;
+                g.leg1Note = std::format("leg 1 PASS: claim line, {} cast(s) for {} claim(s), foe {}, no UNANIMATED", Fires(c), Claims(c), c.hostile ? "hit" : "gone before the read");
+                return Step::Continue();
+            }
+            // ── leg 2: somebody in the ring (past the blast's reach, inside the party pad) ──
+            if (!g.leg2) {
+                if (!c.inCombat || !c.hostile) return End(Step::Pass(g.leg1Note + "; leg 2 SKIP: the fight ended before anyone stood in the pad; " + facts));
+                const bool inRing = near > reach && near <= pad;
+                if (!inRing) { g.ring = false; g.graceTaken = false; return Step::Continue(); }
+                if (!g.ring) { g.ring = true; g.ringAt = c.elapsed; g.graceTaken = false; return Step::Continue(); }
+                const float dwell = c.elapsed - g.ringAt;
+                if (!g.graceTaken && dwell >= 2.0f) { g.graceTaken = true; g.firesGrace = Fires(c); return Step::Continue(); }   // a charge already in flight is the engine's, not MFO's, to cut
+                if (g.graceTaken && Fires(c) > g.firesGrace)
+                    return End(Step::Fail(std::format("he cast while a friend stood {:.0f}u away, inside the pad (edge {:.0f}u); {}", near, pad, facts)));
+                if (dwell >= 8.0f) {
+                    if (Actuation::StandingSelfBlast(c.id)) return End(Step::Fail("the blast claim still stands 8 s after a friend came inside the pad (not released); " + facts));
+                    g.leg2 = true;
+                    g.leg2Note = std::format("leg 2 PASS: no cast in {:.0f} s with a friend {:.0f}u away inside the pad, no claim left standing; last guard line: {}", dwell, near,
+                                             Last(Lines(Since(c), "[cast-guard] " + Hex(c.id), "self blast party hold")));
+                }
+                return Step::Continue();
+            }
+            // ── leg 3: clear again, the foe remains: he casts ──
+            if (!c.inCombat || !c.hostile) return End(Step::Pass(g.leg1Note + "; " + g.leg2Note + "; leg 3 not judged: the fight ended"));
+            if (!clear) { g.clearSeen = false; return Step::Continue(); }
+            if (!g.clearSeen) { g.clearSeen = true; g.clearAt = c.elapsed; g.firesAtClear = Fires(c); return Step::Continue(); }
+            if (Fires(c) > g.firesAtClear) return End(Step::Pass(g.leg1Note + "; " + g.leg2Note + "; leg 3 PASS: cast once the pad was clear; " + facts));
+            if (c.elapsed - g.clearAt >= 40.0f)
+                return End(Step::Fail("no cast 40 s after the party stood clear of the pad again with the foe still inside his radius; " + g.leg2Note + "; " + facts));
+            return Step::Continue();
+        }
+        Step SelfBlastTimeout(Ctx& c) {
+            const auto it = g_selfBlast.find(c.id);
+            if (it == g_selfBlast.end() || !it->second.leg1) return Step::Retry("leg 1 did not finish in the window; " + c.s->note);
+            const auto& g = it->second;
+            if (!g.leg2) return End(Step::Pass(g.leg1Note + "; leg 2 SKIP: nobody stood between the blast's reach and the edge of the party pad while the foe lived (walk to that ring beside him to run it); " + c.s->note));
+            return End(Step::Pass(g.leg1Note + "; " + g.leg2Note + "; leg 3 not judged: the party never stood clear again; " + c.s->note));
+        }
 
         // ── anim.session ────────────────────────────────────────────────────────────────────────
         const char* SessionPre(Ctx&) { return OnlyBlockedLeft("anim.session") ? nullptr : "the other tests finished (or blocked) first"; }
@@ -589,6 +795,8 @@ namespace MFO::SelfTest {
 
     void ClearAnimState() {
         g_summonWait.clear();
+        g_selfBlast.clear();
+        g_selfBlastWait.clear();
         g_pools = {};
         std::lock_guard lk(g_fireMx);
         g_fires.clear();
@@ -600,7 +808,8 @@ namespace MFO::SelfTest {
         Register({ "anim.fire_once", ref, "(any follower) a lent ambiguous-row buff (SKIP when the load order has none)", 150.0f, FireOncePre, FireOnceFix, FireOnceStep, AnyTimeout, true });
         Register({ "anim.party_gap", ref, "(any follower) a lent buff while only the player fights", 80.0f, GapPre, GapFix, GapStep, AnyTimeout, true });
         Register({ "anim.party_gap_conc", ref, "(any follower) the same with Lesser Ward (concentration) against a spell-casting foe", 80.0f, GapConcPre, GapConcFix, GapStep, AnyTimeout, true });
-        Register({ "anim.blocked_blast", ref, "(any follower) a lent hostile self area spell, Sentient AI on", 70.0f, BlastPre, BlastFix, BlastStep, BlastTimeout, true });
+        Register({ "anim.blocked_blast", ref, "(any follower) a lent self hazard spell (the arm M4 keeps out), Sentient AI on", 70.0f, BlastPre, BlastFix, BlastStep, BlastTimeout, true });
+        Register({ "anim.self_blast", ref, "(any follower, outside an inhabited place) a lent self hostile area blast, a foe inside its radius, the party outside its pad, then inside it", 240.0f, SelfBlastPre, SelfBlastFix, SelfBlastStep, SelfBlastTimeout, true });
         Register({ "anim.summon_gambit", ref, "(any follower) the summon through a gambit row (after the first creature is gone)", 120.0f, SummonPre, SummonFixGambit, SummonGambit, AnyTimeout, true });
     }
     void RegisterAnimSession() {

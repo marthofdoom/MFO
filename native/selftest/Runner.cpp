@@ -425,6 +425,9 @@ namespace MFO::SelfTest {
         constexpr const char*      kRetestMarker2 = "_retest.1125";
         constexpr std::string_view kRetestIds2[]  = { "strict.stand_bow", "strict.stand_melee", "strict.keep", "strict.release", "strict.free", "bound_bow.fires",
                                                       "costparity.concentration", "buff.animated_claim_road", "anim.fire_once" };
+        // 11-25 (self blasts M4): anim.blocked_blast now judges the HAZARD arm only (the area arm is offered), so its old result is stale.
+        constexpr const char*      kRetestMarker3 = "_retest.1125m4";
+        constexpr std::string_view kRetestIds3[]  = { "anim.blocked_blast" };
         // A strict.* test closed as SKIP because Harbinger did not serve strict orders runs again on a load where it does. (Asked before g_mx: a leaf.)
         void ApplyCodeRetest() {
             const bool strictAbi = APMFBridge::DevAbi() >= 48;
@@ -446,6 +449,16 @@ namespace MFO::SelfTest {
             g_results[kRetestMarker2] = { true, 0, "the tests changed by the 11-25 strict diagnosis fixes were cleared once so they run again", true };
             spdlog::info("[selftest] code retest {}: cleared {} stale result(s) of {} listed test(s); they run again on this load", kRetestMarker2, cleared,
                          std::size(kRetestIds2));
+        }
+
+        void ApplyCodeRetest3() {
+            std::lock_guard lk(g_mx);
+            if (g_results.contains(kRetestMarker3)) return;
+            std::size_t cleared = 0;
+            for (const auto id : kRetestIds3) cleared += g_results.erase(std::string(id));
+            g_results[kRetestMarker3] = { true, 0, "anim.blocked_blast was cleared once: since M4 it judges the self hazard arm only", true };
+            spdlog::info("[selftest] code retest {}: cleared {} stale result(s) of {} listed test(s); they run again on this load", kRetestMarker3, cleared,
+                         std::size(kRetestIds3));
         }
 
         // One end for every way a run stops. a_complete = PASS / FAIL / INFO (persisted); else RETRY / ABORT.
@@ -779,6 +792,7 @@ namespace MFO::SelfTest {
             ApplyResetIni();
             ApplyCodeRetest();
             ApplyCodeRetest2();
+            ApplyCodeRetest3();
             LogPending("after load", true);
         }
         if (postOrphans) {
