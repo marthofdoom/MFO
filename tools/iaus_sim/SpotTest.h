@@ -15,6 +15,9 @@
 
 namespace Sim {
 
+    // Fights an arm. 12 put the rules on the edge of chance (S2 review F1: 3 of 6 fresh seeds failed with nothing wrong). At 200 fights lost-sight's
+    // true rate is 94 to 97 percent (what is left is the cast claim that closes unfired, not the place), so at 48 its 80 percent rule is over four standard errors away.
+    inline int g_spotFights = 48;
     struct SpotProbe { std::map<std::string, double> v; double& operator[](const char* k) { return v[k]; } };
     struct SpotCase {
         const char* name; const char* scenario; const char* fault; Road road = Road::Point; float pin = 0.0f; double sec = 30.0; bool scripted = false;
@@ -54,9 +57,9 @@ namespace Sim {
     inline std::vector<SpotCase> SpotCases() {
         using namespace SpotDetail; std::vector<SpotCase> v;
         const auto seesOnPlaces = [](const std::vector<SpotProbe>& r, double within, std::string& o) {
-            const int n = static_cast<int>(r.size()), hit = Count(r, [&](const SpotProbe& p) { return Get(p, "hit", 1e9) <= within; }); const double rn = Sum(r, "reach.n"), bl = Sum(r, "blind") / n;
-            o = Fmt("first hit within %.0f s in %d of %d, places reached %.0f, held without sight %.2f s a fight, hold-unreachable %.2f s", within, hit, n, rn, bl, Sum(r, "holdUn") / n);
-            return hit * 10 >= n * 8 && rn >= n * 0.5 && bl <= 1.5 && Sum(r, "holdUn") / n <= 1.0; };
+            const int n = static_cast<int>(r.size()), hit = Count(r, [&](const SpotProbe& p) { return Get(p, "hit", 1e9) <= within; }), filed = Count(r, [](const SpotProbe& p) { return Get(p, "filed", 0) > 0; }); const double rn = Sum(r, "reach.n"), bl = Sum(r, "blind") / n;
+            o = Fmt("first hit within %.0f s in %d of %d, a place filed in %d, places reached %.0f, held without sight %.2f s a fight, hold-unreachable %.2f s", within, hit, n, filed, rn, bl, Sum(r, "holdUn") / n);
+            return hit * 10 >= n * 8 && filed * 2 >= n &&   /* not vacuous: the FIGHTS in which the pass filed a place (places reached counted one fight's many) */ bl <= 1.5 && Sum(r, "holdUn") / n <= 1.0; };
         { SpotCase c{ "lost-sight-firing-spot", "env-lost-sight", "blind" }; c.what = "a caster whose foes stand round a corner takes a place that sees them and fires; he holds no place that does not";
           c.setup = [](Fight& F) { AllStatues(F); for (Body* f : Foes(F)) Put(F, *f, At(F, 21, 9, 16)); Put(F, *Foes(F)[1], At(F, 21, 11, 16)); Put(F, Sub(F), At(F, 14, 4, 16)); Put(F, F.b[0], At(F, 12, 4, 16)); };
           c.script = [](Fight& F) { for (Body& x : F.b) if (x.role == Role::Summon) x.alive = false; };   // his atronach stands in his own line of fire: not what this row is about
@@ -78,8 +81,17 @@ namespace Sim {
         { SpotCase c{ "doorway-block", "env-doorway-block", "portals" }; c.road = Road::Pinned; c.pin = 1.0f; c.scripted = true; c.what = "two blades who both want the chokepoint: one place in the doorway at a time (pinned road, pin kinds on)";
           c.setup = [](Fight& F) { AllStatues(F); int k = 0; for (Body* f : Foes(F)) Put(F, *f, At(F, 13.0f + static_cast<float>(k++), 4, 10)); Put(F, Sub(F), At(F, 2, 3, 10)); Put(F, F.b[static_cast<std::size_t>(F.ctl[1].body)], At(F, 2, 5, 10)); Put(F, F.b[0], At(F, 1, 1, 10)); for (Ctl& c : F.ctl) { c.leash = 0.0f; MFO::Iaus::SetWeight(c.profile, Family::Attack, Cons::SpotAllyDist, 0.0f); }   /* the spacing is off in BOTH arms: only the doorway rule keeps them apart */ };
           c.script = [](Fight& F) { const auto f = Foes(F); for (std::size_t i = 0; i < 2; ++i) Script(F, i, { Want(Family::Attack, f[0]->c.id, 0.80f, 150.0f, Sight::Visible, true) }); };
-          c.watch = [](Fight& F, SpotProbe& p) { const EQ::View w = EnvViewOf(F); auto door = [&](const MoveClaim& q) { return q.on ? MV::PortalsAt(w, F.move->pic.wallVert, q.tri, q.p, DefaultTuning()) : std::array<std::uint64_t, 2>{}; }; const auto a = door(F.move->claim[0]), b = door(F.move->claim[1]); bool both = false; for (auto x : a) for (auto y : b) both |= x && x == y; if (a[0] || b[0]) p["one"] = 1; if (both) p["both"] = 1; };
-          c.rule = [](const std::vector<SpotProbe>& r, std::string& o) { const int n = static_cast<int>(r.size()); o = Fmt("the doorway was held in %.0f of %d, two in it in %.0f", Sum(r, "one"), n, Sum(r, "both")); return Sum(r, "one") * 10 >= n * 9 && Sum(r, "both") == 0; }; v.push_back(c); }
+          // GEOMETRY, not PortalsAt (the function under test): the one square of floor between the two rooms (map column 10, row 4 of 9) and 100 units round it, beyond which a body leaves the way free
+          c.watch = [](Fight& F, SpotProbe& p) { const auto in = [](const EQ::Vec3& q) { return std::hypot(q.x - std::clamp(q.x, 1280.0f, 1408.0f), q.y - std::clamp(q.y, 512.0f, 640.0f)) < 100.0f; }; int n = 0, stand = 0;
+              for (std::size_t i = 0; i < 2; ++i) { const MoveClaim& q = F.move->claim[i]; if (q.on && in(q.p)) ++n; const Body& x = F.b[static_cast<std::size_t>(F.ctl[i].body)]; stand += in({ x.c.x, x.c.y, x.c.z }); }
+              if (n) p["one"] = 1; if (n > 1) p["both"] = 1; if (stand) p["stand"] = 1; };
+          c.rule = [](const std::vector<SpotProbe>& r, std::string& o) { const int n = static_cast<int>(r.size()); o = Fmt("a place in the gap in %.0f of %d (stood in it in %.0f), two places in it in %.0f", Sum(r, "one"), n, Sum(r, "stand"), Sum(r, "both")); return Sum(r, "one") * 10 >= n * 9 && Sum(r, "both") == 0; }; v.push_back(c); }
+        { SpotCase c{ "peel-bow-in-hand", "env-tower-stairs", "melee-hands" }; c.scripted = true; c.sec = 12.0; c.what = "a warrior with his bow in hand is never sent between an attacker and the player he stands on: a body blocks, a bow shoots (scripted: he ranks the shot at an attacker he sees)";
+          c.setup = [](Fight& F) { AllStatues(F); Put(F, F.b[0], At(F, 10, 8, 11)); Put(F, *Foes(F)[0], At(F, 11, 8, 11)); Put(F, Sub(F), At(F, 4, 8, 11)); F.ctl[0].leash = 0.0f; F.ctl[0].profile.spot[static_cast<std::size_t>(MFO::Iaus::SpotKind::Peel)] = 4.0f; /* wanted in both arms: only the rule keeps him off it */ };
+          c.script = [](Fight& F) { Script(F, 0, { Want(Family::Attack, Foes(F)[0]->c.id, 0.8f, 1800.0f, Sight::Visible, false) }); };
+          c.watch = [](Fight& F, SpotProbe& p) { const MoveClaim& q = F.move->claim[0]; p["win"] = F.move->pic.window; const Body& f = *Foes(F)[0]; const EQ::Vec3 mid{ 0.5f * (F.b[0].c.x + f.c.x), 0.5f * (F.b[0].c.y + f.c.y), F.b[0].c.z };
+              if (q.on && (q.kinds & MV::KindBit(MFO::Iaus::SpotKind::Peel))) p["peel"] = 1; if (q.on && MV::Dist(q.p, mid) < 250.0f) p["between"] = 1; };
+          c.rule = [](const std::vector<SpotProbe>& r, std::string& o) { const int n = static_cast<int>(r.size()), won = Count(r, [](const SpotProbe& p) { return Get(p, "win", 0) >= 10; }); o = Fmt("windows decided in %d of %d, a peel place in %.0f, a place between them in %.0f", won, n, Sum(r, "peel"), Sum(r, "between")); return won == n && Sum(r, "peel") == 0 && Sum(r, "between") == 0; }; v.push_back(c); }
         { SpotCase c{ "healer-round-corner", "env-heal-corner", "no-heal" }; c.scripted = true; c.what = "a healer whose patient fights round the corner walks to where he reaches and sees him (scripted: Generate offers no heal past its reach)";
           c.setup = [](Fight& F) { AllStatues(F); Put(F, F.b[0], At(F, 14, 3, 11)); F.b[0].c.hp = 0.4f * F.b[0].c.hpMax; Put(F, Sub(F), At(F, 4, 2, 11)); Put(F, F.b[static_cast<std::size_t>(F.ctl[1].body)], At(F, 2, 3, 11)); F.ctl[0].leash = 0.0f; int k = 0; for (Body* f : Foes(F)) Put(F, *f, At(F, 15.0f, 2.0f + static_cast<float>(k++), 11)); };
           c.script = [](Fight& F) { const Body& s = Sub(F); const bool see = EnvSees(F, F.b[0], s); Script(F, 0, { Want(Family::CastHeal, F.b[0].c.id, 1.2f, 1000.0f, see ? Sight::Visible : Sight::Occluded, false) }); };
@@ -101,10 +113,11 @@ namespace Sim {
     }
 
     inline int RunSpotTests(const Data& D, const std::vector<SimClass>& classes, std::uint64_t seed, int threads) {
-        const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3); const std::vector<Scenario> all = AllScenarios(true, true, true); constexpr int N = 12; int fails = 0, checks = 0;
+        const std::vector<SimClass> t1(classes.begin(), classes.begin() + 3); const std::vector<Scenario> all = AllScenarios(true, true, true); const int N = g_spotFights; int fails = 0, checks = 0;
         const Tuning* base = ActiveTuning(); const char* traced = std::getenv("SIM_SPOTTRACE");   // <case name>:<arm 0|1>:<fight>: one event trace (--threads 1)
         const std::vector<SpotCase> cases = SpotCases();
-        for (const SpotCase& c : cases) {
+        const char* only = std::getenv("SIM_SPOTCASE");   // a scenario name's beginning: that one alone (diagnostics)
+        for (const SpotCase& c : cases) { if (only && std::strncmp(c.name, only, std::strlen(only))) continue;
             const Scenario* sc = nullptr; for (const Scenario& s : all) if (!std::strcmp(s.name, c.scenario)) sc = &s; if (!sc) { std::printf("SPOT-TEST %s: no scenario %s\n", c.name, c.scenario); return 2; }
             Tuning t = *base; t.spotPinKinds = c.pin; ActiveTuning() = &t; g_road = c.road;
             for (int arm = 0; arm < 2; ++arm) {

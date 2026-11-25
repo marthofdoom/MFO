@@ -50,7 +50,7 @@ namespace Sim {
             m.anchor = { F.b[0].c.x, F.b[0].c.y, F.b[0].c.z }; m.leash = 0.0f;
             if (x.ctl >= 0) { const Ctl& c = F.ctl[static_cast<std::size_t>(x.ctl)]; MoveClaim& q = S.claim[static_cast<std::size_t>(x.ctl)];
                 m.leash = c.leash; m.classId = static_cast<std::uint8_t>(x.ctl); m.kinds = MV::SpotKindsFor(c.gate) & ~g_moveFault->kinds; m.decides = !MoveBodyTaken(F, x);
-                m.top = q.top; m.nTop = q.nTop; m.ageSec = static_cast<float>(F.now - q.topAt);
+                m.top = q.top; m.nTop = q.nTop; if (g_moveFault->meleeHands) for (auto& a : m.top) a.melee = a.target != 0; m.ageSec = static_cast<float>(F.now - q.topAt);
                 // what the holder finds: he was hit hard, and a place the leash no longer lets him stand on (a leash wins over a point, kLeashStandU past it he still stands)
                 if (x.burstMax > q.burstSeen + 1.0f && x.burstMax >= kOneHitLine * x.c.hpMax) m.marks |= MV::kMarkHitHard;
                 q.burstSeen = x.burstMax;

@@ -45,7 +45,7 @@ namespace Sim {
     struct MoveFaultRow {
         const char* name; std::uint32_t kinds = 0 /* never offered */; bool terrainBlind = false /* the pass's rays do not see the ground */; bool blind = false /* ... nor the walls */;
         bool reachBlind = false /* who cannot be walked to is not known */; bool noPortals = false /* no place stands in a doorway */; bool noExits = false /* a dead end counts as a way on */;
-        bool noRays = false /* no ray is ever answered */; bool stayHolds = false /* "stay" is carried out as a claim on his own place */;
+        bool noRays = false /* no ray is ever answered */; bool stayHolds = false /* "stay" is carried out as a claim on his own place */; bool meleeHands = false /* the pass is told every attack is a blade's */;
     };
     inline constexpr MoveFaultRow kMoveFaults[] = {
         { .name = "none" },
@@ -57,6 +57,7 @@ namespace Sim {
         { .name = "exits", .noExits = true },
         { .name = "rays", .noRays = true },
         { .name = "stay-holds", .stayHolds = true },
+        { .name = "melee-hands", .meleeHands = true },
     };
     inline const MoveFaultRow* g_moveFault = &kMoveFaults[0];
     [[nodiscard]] inline const MoveFaultRow* MoveFaultByName(std::string_view n) { for (const MoveFaultRow& f : kMoveFaults) if (n == f.name) return &f; return nullptr; }

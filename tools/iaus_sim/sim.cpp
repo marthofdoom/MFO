@@ -845,6 +845,7 @@ static int RealMain(int argc, char** argv) {
                 if (q == std::string::npos) break; p0 = q + 1; } }
         else if (!std::strcmp(argv[i], "--move-fault") && i + 1 < argc) { g_moveFault = MoveFaultByName(argv[++i]); if (!g_moveFault) { std::fprintf(stderr, "--move-fault:"); for (const MoveFaultRow& r : kMoveFaults) std::fprintf(stderr, " %s", r.name); std::fprintf(stderr, "\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--spot-test")) spotTest = true;
+        else if (!std::strcmp(argv[i], "--spot-fights") && i + 1 < argc) g_spotFights = std::max(1, std::atoi(argv[++i]));
         else if (!std::strcmp(argv[i], "--env") && i + 1 < argc) envFile = argv[++i];
         else if (!std::strcmp(argv[i], "--env-set") && i + 1 < argc) envSet = argv[++i];
         else if (!std::strcmp(argv[i], "--env-class") && i + 1 < argc) envClass = argv[++i];

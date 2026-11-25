@@ -389,6 +389,26 @@ namespace {
             const auto r3 = Window(room, q, t); const auto* me = Of(r3, 0x42);
             Row(Of(r3, 0x41)->spot >= 0 && !(me->kinds & KindBit(SpotKind::Firing)) && me->spot < 0, "F1 a firing spot of an archer is not offered to a melee attack");
         }
+        {   // S2 review F4: the peel rules. The row's own generator, then the pass
+            const std::vector<std::string> hall{ "##############", "#............#", "#............#", "#............#", "#............#", "##############" };
+            const auto m = Build(hall);
+            const auto fight = [&](RankedAction a, float foeX) { PartyPicture p; p.party = { Who(0x51, At(2, 2), { a }), Who(0x52, At(8, 2), {}) }; p.party[1].decides = false; p.foes = { Bad(0x91, At(foeX, 2), 0x52) }; return p; };
+            const auto peels = [&](PartyPicture p) { Window(m, p, t); int n = 0; for (const auto& o : p.work.offers) if (o.kinds & KindBit(SpotKind::Peel)) ++n; return n; };
+            const RankedAction blade = Act(Family::Attack, 0x91, 0.7f, 150.0f, Sight::Visible, true), bow = Act(Family::Attack, 0x91, 0.7f, 1800.0f, Sight::Visible);
+            Row(peels(fight(blade, 9.5f)) > 0, "F4 a blade is offered a peel place between an attacker and the ally he stands on");
+            Row(peels(fight(bow, 9.5f)) == 0, "F4 a bow never is");
+            Row(peels(fight(Act(Family::CastControl, 0x91, 0.7f, 1800.0f, Sight::Visible), 9.5f)) > 0 && peels(fight(Act(Family::Taunt, 0x91, 0.7f, 1800.0f, Sight::Visible), 9.5f)) > 0, "F4 a control and a taunt are");
+            Row(Dist(At(12, 2), At(8, 2)) > 2.0f * t.spotPeelU && peels(fight(blade, 12.0f)) == 0, "F4 nor anyone for an attacker farther from the ally than twice spotPeelU");
+            // a kept peel: the attacker leaves the ally, the place is given up
+            PartyPicture k = fight(blade, 9.5f); Profile pr; pr.spot[static_cast<std::size_t>(SpotKind::Peel)] = 4.0f;
+            static Profile held; held = pr; const MP::ClassProfiles prof = [](std::uint8_t) -> const Profile& { return held; };
+            const auto r1 = Window(m, k, t, 1.0e9f, true, prof); const bool got = k.party[0].commit.on && (k.party[0].commit.kinds & KindBit(SpotKind::Peel));
+            PartyPicture k2 = k;
+            k.party[0].marks = kMarkHitHard; const auto r2 = Window(m, k, t, 1.0e9f, true, prof);
+            k2.foes[0].p = At(1, 4); k2.party[0].marks = kMarkHitHard; const auto r3 = Window(m, k2, t, 1.0e9f, true, prof);
+            Row(got && Of(r1, 0x51)->spot >= 0 && k.party[0].commit.on && Of(r2, 0x51)->key == Of(r1, 0x51)->key, "F4 a kept peel stands while the attacker stands on the ally");
+            Row(got && !(k2.party[0].commit.on && (k2.party[0].commit.kinds & KindBit(SpotKind::Peel))), "F4 a kept peel is given up when the attacker left the ally");
+        }
         {   // F2: the target runs 185 u a window behind a wall while the shooter is on his way
             const auto m = Build({ "##############################", "#............................#", "#............................#", "######....##########.........#", "#............................#", "#............................#", "#............................#", "##############################" });
             Env::Scratch s; const auto v = m.Get();
