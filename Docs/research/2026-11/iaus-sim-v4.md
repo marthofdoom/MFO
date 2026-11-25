@@ -1883,6 +1883,8 @@ Its score is Stay's score, times the kind weight `spot.hold`, times ten factors 
 | `hold_player` | the player's place in `t.orderLeadSec` over the leash | his walk is `Member::anchorVel`, unread = where he is |
 | `hold_kept` | `t.orderHoldMomentum` | the hysteresis. Off while he has a committed place: there the momentum is the place's own |
 
+On a committed place that is still offered no Hold row competes at all (R2-1): the place has none of these factors, so they are no reason over it. A hold begins when the place is gone.
+
 - The hysteresis multiplies: a kept hold has `hold_kept`, and a new place must beat the bar (his hold's score) by `1 + t.spotPreempt` on top.
 - `hold_kept`'s exponent and `t.orderHoldMomentum` are ONE degree of freedom (momentum to the power of the weight). A search moves one of the two, the other stays at its value.
 - Not his place but where he IS: sight, exposure, cover, the stay key and the plan position are read at his body, while the point of a kept hold is up to twice its leash off (128). Only `hold_player` reads the point. The pin row needs exactly that. S5-C must evaluate an option at the order's point.
@@ -1924,3 +1926,97 @@ Twenty new `strict-*` spot rows (five of the review round: `strict-refile-own`, 
 ### 22.5 Cost
 
 User CPU, one core, 4 classes, 480 fights on fixtures: off 2.38 (main) and 2.11, point 4.40 and 4.35, strict 5.22 and 5.20. Thief and nightingale strict 2.01 and 1.97. `i_Skyrim-0213A0` strict,kite 5.75 and 5.59. No change beyond noise.
+
+## 23. The oracle over places and modes (s5-plan.md package S5-C, branch `feat/s5-c`, 2026-11-25)
+
+Code: `Oracle.h` (`Order`, `RunRace`, `OrderRefuses`), `MoveWorld.h` (`PicksBefore`, `PicksAfter`, `MoveNoteFront`), `Move.h` (`OrderPick`), `Policy.h` (`Policy::Window`). No native change but R2-1.
+
+Before it (first commit of the branch): R2-1 (22.1, golden and shipped digests untouched) and R2-2 (`dueBlock` counts from `max(now, carriedAt)`).
+
+### 23.1 The claim
+
+The oracle's subject is ranked for the pass each lap like anybody: IAUS's own ranking (`MoveNoteRanked`), with the action the oracle is on first, and the chosen one first as soon as it is begun. VERIFIED for the rollouts (the plan's open question): `RolloutPolicy` serves through `IausPolicy::ServeWith`, which calls `MoveNoteRanked`, so every body it serves has a ranking. It does not while a body is held to an option (`commitUntil`), so the option's action is put first when it is applied. The oracle's own IAUS pick now reads `t.sp` too (`hasSpotAction`), as IAUS does.
+
+### 23.2 The window
+
+`Policy::Window` runs before every step and does something only when that step will close a movement window (`MoveStep`), never between windows. He is asked when the pass would decide for him: free, not committed or marked, ranked, phase 1 done. A forced arm is never asked.
+
+Options = the default (THE PASS GOES ON, 23.7: no order of the oracle's, alone and with each action) and orders x his ranked actions (the three the pass pairs). An action that is refused (class, ruling) or on a hard cooldown has no option. A move-only one has no candidate: the order then goes with what IAUS does.
+
+| Order | Note |
+|---|---|
+| Free | his own place |
+| Hold | the caps and his class mask only. TARGET-FREE (F5): he may hold while he drinks. The point is `HoldPoint`'s (the standing order's, at its radii), so it is evaluated where it stands by playing it out |
+| a pooled place | in the mode of its `kOrderRows` row, and in each other served mode the executor carries out DIFFERENTLY |
+
+- Places the generator paired with none of his actions are offered too when his class and the caps allow a kind of theirs (`paired=0`, the (c) divergence of the plan). Refusals go through `ClassRefuses` (`OrderRefuses`: cap, class kind, leash, trust, another body, no way) and `RulingRefuses` (a Kite order is ground given, a Disengage a run).
+- He is made a fixed member before the same Phase 3 (`PicksBefore`), so the others are planned around him. A place that another fixed or undecided body has is refused.
+- An order ends by TIME or a mark, never by an end event: a place after `--oracle-order-sec` (5 s), his own place after 2.5 s unless a mark ends it, raced and played alike: until then he is not asked again.
+- The action of the pair is begun in the rollout at his first free lap within a second. In the fight the oracle races actions again at that lap, under the order.
+- The race is the one race (`RunRace`), with the cuts. The pick is 23.6's. The streams' plan is the action race's, so `oracle_replay.py --check` reads a dump with orders (`"order":1`) as it is.
+
+### 23.3 What is printed
+
+`ORCMODE` one line an order decision (gap pass, `--gap-dump`): time, options, streams, the winner (mode, kind, action, paired), IAUS's own order, and per served mode the best of the options that stood longest, the winner's paired lead over it and its standard error. `GAPORD` the divergences of the order (not `GAPSIT`: the driver's classes do not know them). `ORCORDER` windows, options, rollouts, wins a mode against the pass's, claim share. `ORCASSIGN` per party size the winner's lead over the pass's order (plan item 7, the subject's, or everybody's without `--oracle-subject-only`). It reads high: it is a race's winner.
+
+`--oracle-orders on|rank|off`: rank = the claim alone, off = the oracle as before S5-C.
+
+### 23.4 Differences from the plan
+
+- Under `strict,kite` the modes of one place are ONE option. `StrictWorld.h` reads nothing of a mode but Disengage, and GoTo's free aim under the disengage cap, so "walk there as Stand, Kite or GoTo" are the same order to the last bit and would be raced as twins. The option counts under its place's own row. Consequence for S5-D: in `ORCMODE` Kite means a kite PLACE, and GoTo has no option for a class with no regroup or flank place. With the disengage cap GoTo and Disengage are options of their own at every place.
+- The pass's own gate (`HoldOffered`) still asks for a target (plan 3.1). Only the oracle holds without one, so a hold while drinking that IAUS cannot make shows up as a divergence. Whether the gate opens is read from `GAPORD` and the free / stand leads.
+- Equal outcomes keep the default (23.6). Free against Hold is often exactly equal (an archer who would not have moved): a tie, not a Free win.
+- The rollout's pass is not frozen (cut 6): it is at most 31 percent of the cost (review of S5-C), so it buys at most 1.45x. Not built, not measured.
+- `hold_kept`'s exponent and `t.orderHoldMomentum` are one degree of freedom: a search takes `t.orderHoldMomentum` and leaves the exponent (S5-E2's not-searched list).
+- `displaceDownU` gives no verdict in a cell without a paralysis foe. Nothing here reads a verdict.
+
+### 23.5 Proof and cost
+
+Proof on baa2d811 (later commits are docs): road off v2 v3 v4 at 1 and 8 threads, point and pinned byte identical with a8f9c24b. The road-off oracle, and the strict and point oracle with `--oracle-orders off`, print the same ORC / GAP / SPELL lines as the commit before S5-C. Strict 1 = 8 threads and = that commit. Harness 0 failed, golden untouched. 63 spot scenarios, seeds 1 4 913 6161. CLI-CHECKS pass (five new ones).
+
+The table and the timing below are the FIRST version's (fc8668b3) and are superseded by 23.6: its arms shared no luck, and the single-fight reversals in them were luck. Gap sign (oracle less IAUS, same fights, ceiling 32, the tune's cuts; mean and standard error):
+
+| Set | Fights | Orders on | `off` (no claim) |
+|---|---|---|---|
+| evoker on the ridge (the F3 symptom), seed 7 | 10 | +2.72 (0.87), every fight at or above 0 | +10.45 (8.21), one knife-edge fight |
+| warrior natural, seed 7 | 10 | +11.08 (8.46) | |
+| evoker natural, seed 7 | 10 | +9.01 (7.36) | |
+| knight, seeds 21 22 | 24 | +12.97 (5.89) | on less off -2.58 (3.27), on less rank +3.83 (3.16) |
+| evoker, seeds 21 22 | 24 | +6.13 (6.24) | on less off +4.22 (6.38), on less rank +4.23 (6.61) |
+| warrior, seeds 21 22 | 24 | +2.52 (0.95) | on less off +0.08 (0.34), on less rank +0.82 (0.36) |
+
+Claim share, oracle against IAUS: ridge evoker 35 / 32, warrior 60 / 69, knight 38 / 18 percent. Over the claim alone the order race is beyond 2 standard errors for the warrior only, one class of three. Against a subject who is never ordered (off = Free all fight) no difference is resolved on these sets: single knife-edge fights (6 or 90) go either way and make the standard error.
+
+Timing, the 12 fights of s5-plan.md 7.1 (archer, knight, thief, warrior, strict,kite, full ceiling, user CPU): planner's binary 1,506 s, this one with orders off 2,022 s, with orders on **5,377 s** (2.7 times off, a share of it one archer fight that ran to the time limit: 190 order windows at 919 rollouts for the three archer fights). Contended machine. That one fight makes a ratio from 12 fights rough, S5-F owes cuts 4 and 6 and the re-pricing of section 8 before a round.
+
+### 23.6 The fix round (review of S5-C, findings 1 to 9)
+
+Strict road only. The road-off, point and pinned oracle is what it was, to the bit.
+
+- **Luck (1, 4).** A race's seed is a hash of the fight, the time, the follower, the race's kind and its size (`RaceSeed`, `Fight::raceSeed`), never a draw of the world's, so on, rank, off and IAUS share their luck until they differ. Every stream reseeds `avSeed` (block, carry, aversion draws), the same for every option of the stream, and `StrictRedraw` draws again what an order in hand has drawn and not shown. `--gap-luck N` plays every fight N times on other luck (ModeSet's way), `GAPLUCK` a line each, `GAPFIGHT` the mean. `--oracle-dump` writes order utilities to 9 decimals (to 4, two options a hair apart replayed as twins).
+- **The pick (2).** (The default is 23.7's since round 2.) `Choose`: the default is the pass's order (its best row, whatever action it is paired with), then the order in hand IF a confirmed lead put him on it. A default is left only when the winner's paired lead is over 2 standard errors and over 0.3 U on the race's streams AND on as many fresh ones (at least 8). The action race has the same rule (IAUS's pick, then the action in hand if it won its place). `GAPORD` and `ORCASSIGN` read the fresh lead where it confirmed (conditioned on that, 23.7). The first try made the order in hand the last default without that condition: every fight starts Free, nothing left it, and the claim share was 0. `--oracle-pick best` is the old rule (DIAGNOSTIC).
+- **Nested (3).** Free to the fight's end is an option (`own_end`: a mark does not end it), so the plan `off` plays is raced. It is asked again every 2.5 s like the other Free.
+- **Evaluated is played (9).** Free and Hold are held 2.5 s in the fight as in the rollout, unless marked.
+- **Cuts** (`--oracle-order-cuts`; 23.7: the default is 1 and the screen is gone): 1 the pair width is 0.3 U, the tie's own (both races), 2 the orders are screened at one action (16 streams, kept) and the survivors crossed, 4 a Free or Hold that was kept is not raced again while the pool, the kinds, his three actions and the marks are unchanged, 8 places of one kind set, offer and doorway within an arrive radius (or one triangle and 128 u) are one option. The pass's own place and the one he is on are never clustered.
+- **Rows (6).** Five spot rows (`race-*`): own luck, trust refusal, unpaired places, Free to the end and the held Free, the pick rule. The header of any road run with a claim says it is not comparable with a road record from before S5-C (8): never mix caches across it.
+- **Driver (5).** `GAPORD` is read with `GAPSIT` and classified (refused = b, unpaired = c, else a, with no action family to search). `gap_by_class` splits the gap by the classes' share of the cost and sums to it.
+
+Proof on c0dae7b0 (later commits are docs): road off v2 v3 v4 at 1 and 8 threads, point and pinned, byte identical with a8f9c24b. The road-off oracle and the point oracle with `--oracle-orders off` print the lines they printed before S5-C (the strict one is changed on purpose). Strict IAUS fights at 1 = 8 threads = before S5-C. 68 spot scenarios at seeds 1 4 913 6161, harness 0 failed, golden untouched (gcc and MSVC), CLI-CHECKS pass, MSVC build exit 0. Eleven mutations (the review's three among them) all fail a `race-*` row.
+
+Cuts, 12 natural fights (knight, evoker, archer, warrior, seed 31, ceiling 32, 4 luck reruns, contended machine), U paired with no cut: all four 2,330 s against 2,572 s of user CPU (9 percent less), +0.10 U (se 0.06). The pair width alone 2,422 s, +0.08 (se 0.06). The skip and the clustering hardly fire on these sets (11 of about 620 windows, under 0.1 places a window). What is left is races that reach the ceiling undecided: 53 to 78 percent of the action races, 45 to 81 of the order races.
+
+Everything measured on c0dae7b0 or earlier is superseded: its default was a held order (23.7).
+
+### 23.7 Round 2 (review findings R2-1 to R2-6)
+
+- **The default is a real option, "the pass goes on" (R2-1).** On c0dae7b0 the default was the pass's answer GIVEN as an order and held 2.5 s: 45 to 55 percent of the knight's and the warrior's time went into a Free that IAUS itself would have left at the next half second, so the oracle was not IAUS when it agreed with IAUS. Now option 0 of every order race is no order at all (`OrderPick` off, in the fight and in the rollout, what was given before is taken back), with the pass's action and with each of his own. It is IAUS's row in the race. 2.5 s is held only by an order that left it on a confirmed lead. An order that was given is the incumbent until a race returns him to the pass. Row `race-default` (fault `oracle-lock` is the old rule). Cost: while the pass goes on and he is free he is asked every half second, not every 2.5 s.
+- **The screen cut is removed (R2-2)**: it dropped orders it had not beaten (a place retired as indifferent at the first action, a place whose mode at another action differs) for 3 percent of the CPU. Cuts default = 1, the pair width. Skip (4) and cluster (8) stay behind the switch, both hardly fire.
+- **Leads (R2-3).** When the winner beats IAUS's answer and not the incumbent, the incumbent stands and is reported with its own race lead, not the winner's. The fresh lead in `GAPORD` / `ORCASSIGN` is the one that CONFIRMED: conditioned, it reads high. `ORCORDER` prints the mean fresh lead over every test, confirmed or not: that one is unbiased for the winners that were tested.
+- **The oracle's floor (R2-4).** A lead under 0.3 U is a tie: ties go to the default, the pair rule retires options within that width, and chains of retirements can drift a little past it. So up to 0.3 U a decision is never seen, in up to some 40 windows a fight. The oracle is a LOWER bound by that much: a gap near 0 does not say IAUS is optimal.
+- **Luck (R2-6).** A stream keeps the aversion draws of the 6 s window he is in (`Fight::avHold`): the foes have made them.
+
+A window's share in `ORCORDER`: `the pass goes on` is the default, the mode shares are orders given. `ORCMODE` prints `win=pass:<its order>` for it.
+
+**The measurement** (`_tuning/s5-c3`, unit `s5c3-main`, reader `read.py`). Verdict stated before it ran: ORDERS HELP = on less off AND on less rank over 2 standard errors on ALL with no class under -2; NO HARM = on less off, less 2 standard errors, over -0.5; a claim about a class needs 2 standard errors there. Standard errors by fight (a fight = its mean over its 8 luck reruns). The action rule (`best` against `on`, `offbest` against `off`) is read from the same 96 fights. No claim that orders help is made before it has run.
+
+Proof on the last commit of round 2 (`_tuning/s5-c3/final.sha`; the measurement binary is 9ffa1b51, spot rows are the only code since): road off v2 v3 v4 at 1 and 8 threads, point and pinned, byte identical with a8f9c24b. Road-off oracle and point oracle with `--oracle-orders off` print the lines they printed before S5-C. Strict IAUS fights at 1 = 8 threads = before S5-C. 69 spot scenarios at seeds 1 4 913 6161, harness 0 failed, golden untouched (gcc and MSVC), CLI-CHECKS pass, MSVC build exit 0, driver tests pass. Mutations of the default (fight and rollout), the incumbent's report, the aversion window and round 1's rules all fail a `race-*` row.

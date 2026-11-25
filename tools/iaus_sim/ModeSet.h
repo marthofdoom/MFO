@@ -6,7 +6,7 @@
 // `--mode-test [--mode-n N] [--mode-fights F]` plays a balanced sample of N cells with every class of kModeClasses under FORCED ARMS of the strict road, and counts which
 // mode is best: the acceptance of the plan. With --env-set the set's own places are extra terrain rows.
 //
-// The oracle is not asked: its subject has no ranking in the picture, so he holds no claim (S2 finding F3, S5's work). What is measured here is a TOURNAMENT OF CONSTANT
+// The oracle is not asked for orders under a forced arm (its order race is Oracle.h, S5-C). What is measured here is a TOURNAMENT OF CONSTANT
 // RULES (kModeArms) over the same fights with his own IAUS choosing the actions: a lower bound on how often a mode is right, never an optimum.
 //
 // TO ADD: a foe kind = a kModeKinds row + its case in ModeFoes. A terrain = a fixture (envs/) + a kModeTerrain row. An arm = a kModeArms row + its case in ModeRule.
@@ -232,7 +232,7 @@ namespace Sim {
             // ONE SCENARIO IS ONE FIGHT (builds, foes, places, who is on whom); fight f is the same one with other luck, the same for every arm
             { const std::uint64_t luck = Fight::Mix64(fs.seed ^ (0x9E3779B97F4A7C15ull * static_cast<std::uint64_t>(f + 1)) ^ (o.null ? 0xC2B2AE3D27D4EB4Full * (a + 1) : 0ull)); F.R.g.seed(luck); F.V.g.seed(Fight::Mix64(luck + 1)); F.avSeed = Fight::Mix64(luck + 2); }
             IausPolicy P; P.T = ActiveTuning(); OraclePolicy OP; OP.cfg = oc; OP.iaus.T = ActiveTuning(); Policy& pol = o.oracle ? static_cast<Policy&>(OP) : static_cast<Policy&>(P);
-            while (!F.over) { if (F.now >= F.nextPump && !F.ctl.empty()) { F.nextPump += TM::pump; pol.Serve(F, F.rr); F.rr = (F.rr + 1) % static_cast<int>(F.ctl.size()); } F.StepWorld(); }
+            while (!F.over) { if (F.now >= F.nextPump && !F.ctl.empty()) { F.nextPump += TM::pump; pol.Serve(F, F.rr); F.rr = (F.rr + 1) % static_cast<int>(F.ctl.size()); } pol.Window(F); F.StepWorld(); }
             used = o.null ? 1.0 : F.t.upSec > 0 ? F.t.strictSec / F.t.upSec : 0.0; ns += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count(); ++played; return Utility(F); };
         auto work = [&]() { for (;;) { const int j = next.fetch_add(1); if (j >= jobs) return; const int s = j / static_cast<int>(C); const std::size_t ci = static_cast<std::size_t>(j) % C; if (!o.cls.empty() && o.cls != kModeClasses[ci]) continue;
             const Cell cell = cellOf(s); const SimEnv* place = s >= o.n ? g_envPool.draw[static_cast<std::size_t>((s - o.n) / kMK) % places] : nullptr; ModeResult& r = res[static_cast<std::size_t>(j)]; std::array<std::vector<double>, A> u; for (std::size_t a = 0; a < A; ++a) r.up[a] = o.null || ModeServed(kModeArms[a]);

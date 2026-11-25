@@ -26,6 +26,7 @@
 // Every decision where IAUS's own pick differs from the oracle's is logged with the utility it cost (Disagreement):
 // the gap ledger's evidence.
 #include "iaus_sim/Policy.h"
+#include "iaus/MoveOrder.h"
 
 #include <functional>
 
@@ -86,12 +87,20 @@ namespace Sim {
         static const char* n[] = { "", "ext:step_back", "ext:sprint_back", "ext:to_player", "ext:to_healer", "ext:get_sight", "ext:block", "ext:bash", "ext:scroll", "ext:hide", "ext:flee", "ext:clear_line" };
         return n[static_cast<std::size_t>(e)];
     }
+    // S5-C: an ORDER the oracle may give him (mode x place), before the class filter. kinds: what the place is good for (0 = his own place), away: why the place itself is out.
+    struct OrderAsk { MV::MoveMode mode = MV::MoveMode::Free; std::uint32_t kinds = 0; bool leash = false, taken = false, refused = false, noWay = false; };
+    inline constexpr const char* kModeName[] = { "free", "stand", "goto", "kite", "disengage", "path" };
+    // --move-caps: the modes the mover serves. Two modes the executor carries out alike (StrictWorld.h reads Disengage, and GoTo's free aim under the disengage cap,
+    // and nothing else of a mode) are ONE option at a place: raced twice they would be twins on every stream.
+    [[nodiscard]] inline bool ModeServedBy(const MV::RoadCaps& c, MV::MoveMode m) { return m == MV::MoveMode::Kite ? c.kite : m == MV::MoveMode::Disengage ? c.disengage : m != MV::MoveMode::Path && m != MV::MoveMode::kCount; }
+    [[nodiscard]] inline int ModeCarried(const MV::RoadCaps& c, MV::MoveMode m) { return m == MV::MoveMode::Free ? 0 : m == MV::MoveMode::Disengage ? 1 : m == MV::MoveMode::GoTo && c.disengage ? 2 : 3; }
     struct Opt {                       // one thing he could do now
         const Candidate* k = nullptr;  // a catalogue candidate (nullptr with ext None = his own AI)
         Ext   ext = Ext::None;
         int   idx = -1;                // Scroll: the book entry
         std::uint32_t target = 0;
-        [[nodiscard]] std::string Label() const { return ext != Ext::None ? std::string(Name(ext)) : k ? std::string(MFO::Iaus::Name(k->family)) : std::string("idle"); }
+        const OrderAsk* order = nullptr;   // S5-C: an order (ClassRefuses / RulingRefuses only: the order race keeps its own list)
+        [[nodiscard]] std::string Label() const { if (order) return std::string("order:") + kModeName[static_cast<std::size_t>(order->mode)]; return ext != Ext::None ? std::string(Name(ext)) : k ? std::string(MFO::Iaus::Name(k->family)) : std::string("idle"); }
         [[nodiscard]] bool Same(const Opt& o) const { return ext == o.ext && idx == o.idx && target == o.target && ((!k && !o.k) || (k && o.k && KeyOf(*k) == KeyOf(*o.k))); }
     };
 
@@ -171,7 +180,18 @@ namespace Sim {
     //                         BackOff / Step: ALWAYS a class ability. Movement is not an ability (coordinator brief 11-17). The class's written
     //                         rulings may still forbid a move (RulingRefuses: kPsNoRetreat, kPsBackOnly, kPsNearPlayer).
     // To add an ability rule: one line here. To add an Ext action: its enum, its ExtOptions offer, its Apply case and its line here.
+    //   an ORDER (S5-C)       a mode the caps do not serve, a place of no kind his class (SpotKindsFor) and the mover (AllowedKinds) both allow, a place past his
+    //                         leash, under another body, one trust has refused him, or with no way to it. His own place is Free's and Hold's, with no gate but the caps
+    [[nodiscard]] inline const char* OrderRefuses(const Fight& F, const Ctl& c, const OrderAsk& a) {
+        static const auto tok = [] { std::array<std::array<std::string, 2>, MFO::Iaus::kSpotKindCount> t; for (std::size_t i = 0; i < t.size(); ++i) { const std::string n = MV::kSpotKinds[i].name; t[i] = { "order:" + n + ":cap off", "order:" + n + ":class has no " + n + " kind" }; } return t; }();
+        static const auto mode = [] { std::array<std::string, 6> t; for (std::size_t i = 0; i < t.size(); ++i) t[i] = std::string("order:") + kModeName[i] + ":cap off"; return t; }();
+        const MV::RoadCaps& caps = F.move->pic.caps; const std::uint32_t allowed = MV::AllowedKinds(caps, *ActiveTuning()), his = MV::SpotKindsFor(c.gate);
+        if (!ModeServedBy(caps, a.mode)) return mode[static_cast<std::size_t>(a.mode)].c_str();
+        if (a.kinds && !(a.kinds & allowed & his)) for (std::size_t i = 0; i < tok.size(); ++i) if (a.kinds & (1u << i)) return tok[i][allowed & (1u << i) ? 1 : 0].c_str();
+        return a.leash ? "order:place:past his leash" : a.refused ? "order:place:trust has refused it" : a.taken ? "order:place:another body has it" : a.noWay ? "order:place:no way there" : nullptr;
+    }
     [[nodiscard]] inline const char* ClassRefuses(const Fight& F, const Ctl& c, const Opt& o) {
+        if (o.order) return OrderRefuses(F, c, *o.order);
         const ClassGate& g = c.gate; if (!g.resolved) return nullptr;
         const Body& x = F.b[static_cast<std::size_t>(c.body)];
         const bool blade = x.spec->shield || (g.weaponMelee && x.spec->melee.Has());   // the shield, or a melee weapon of the class set
@@ -216,16 +236,16 @@ namespace Sim {
         const bool toMelee = k && k->family == Family::Posture && (k->f.posture == PostureKind::Melee || k->f.posture == PostureKind::Silver);
         const bool meleeAct = (k && (k->family == Family::PowerAttack || k->family == Family::Bash)) || o.ext == Ext::Bash;
         const bool flee = (k && k->family == Family::Retreat) || o.ext == Ext::Flee || (k && k->family == Family::Disengage && k->f.disengageFlee), back = o.ext == Ext::StepBack || (k && k->family == Family::GiveGround), run = o.ext == Ext::SprintBack,
-                   hide = o.ext == Ext::Hide || (k && k->family == Family::Disengage && !k->f.disengageFlee);
+                   rear = o.order && o.order->mode == MV::MoveMode::Kite, off = o.order && o.order->mode == MV::MoveMode::Disengage, hide = o.ext == Ext::Hide || (k && k->family == Family::Disengage && !k->f.disengageFlee);
         if ((fb & kPsNoMelee) && (toMelee || meleeAct)) {   // the blade only when he has nothing else left
             bool other = c.book.kit.potionsMagicka > 0;
             for (const SpellEntry& e : c.book.entries) other |= e.nature == Prune::Nature::Offense && (e.source == SpellSource::Staff ? e.charged : e.source == SpellSource::Scroll ? e.count > 0 : e.cost <= x.c.mp);
             if (other) return "ruling:kPsNoMelee"; }
         if ((fb & kPsNoMeleeSwap) && toMelee && x.arrows > 0) return "ruling:kPsNoMeleeSwap";
         if ((fb & kPsGoIn) && (toMelee || meleeAct) && !F.GoInOk(c, x)) return "ruling:kPsGoIn";
-        if ((fb & kPsNoRetreat) && (flee || back || run || hide)) return "ruling:kPsNoRetreat";
-        if ((fb & kPsBackOnly) && (flee || run)) return "ruling:kPsBackOnly";
-        if ((fb & kPsNearPlayer) && (flee || back || run) && Fight::Dist(x, F.b[0]) > 900.0f) return "ruling:kPsNearPlayer";
+        if ((fb & kPsNoRetreat) && (flee || back || run || hide || rear || off)) return "ruling:kPsNoRetreat";
+        if ((fb & kPsBackOnly) && (flee || run || off)) return "ruling:kPsBackOnly";
+        if ((fb & kPsNearPlayer) && (flee || back || run || rear || off) && Fight::Dist(x, F.b[0]) > 900.0f) return "ruling:kPsNearPlayer";
         return nullptr;
     }
     [[nodiscard]] inline bool ClassAllows(const Fight& F, const Ctl& c, const Opt& o) { return RulingRefuses(F, c, o) == nullptr; }
@@ -266,7 +286,7 @@ namespace Sim {
     //            and the rule before 11-17 was K = 8): never a tuning setting; the results file records it.
     //   commit   how long a rollout HOLDS the option before the base policy takes over again (an attack order, a retreat, his own AI). It is
     //            part of the rollout MODEL, not a budget: the oracle itself is asked again at his next decision point.
-    struct OracleCfg { int K = 0, nMin = 8, ceiling = 128; double pOne = 0.001; double pair = -1.0;   /* pair: THE COST CUTS below (g_oraclePrune's comment); < 0 = off */ double H = 150.0, every = 0.0, commit = 2.5; double minDU = 1.0; bool allFollowers = true, ext = true, split = true; };
+    struct OracleCfg { int K = 0, nMin = 8, ceiling = 128; double pOne = 0.001; double pair = -1.0;   /* pair: THE COST CUTS below (g_oraclePrune's comment); < 0 = off */ double H = 150.0, every = 0.0, commit = 2.5; double orderSec = 5.0; /* S5-C: an order to a place ends after this, or by a mark (OrderPick) */ double minDU = 1.0; int cuts = 1; /* the races' cost cuts, OraclePolicy::kCut* */ bool leadRule = true; /* strict road: the default is left on a lead (Choose). false = DIAGNOSTIC, the 0.3 rule of the other roads */ bool allFollowers = true, ext = true, split = true; };
 
     // One-sided Student-t critical value at p for n paired samples (df = n - 1): the Cornish-Fisher expansion about the normal quantile
     // (4.76 at n = 8 against the table's 4.785, 3.73 at 16, 3.37 at 32, 3.12 at 256 for p = 0.001). n < 2 has no variance: +infinity.
@@ -288,15 +308,27 @@ namespace Sim {
         long decisions = 0, options = 0, rollouts = 0, streams = 0;   // options offered after the class filter; rollouts run; streams at the stop (summed)
         long twins = 0;   // options the pair rule retired (OracleCfg::pair): told apart from no standing option by more than its width, or the same outcome as an earlier one on every stream
         long bound = 0, standing = 0; double unresolved = 0, unresolvedMax = 0;   // decisions the ceiling ended with more than one option standing; how many stood; the best's lead over the best other standing (summed, and the largest)
+        // S5-C, the order race: windows he was asked at, options, rollouts, wins by mode, wins of a place no action of his was paired with, orders that stood, races the
+        // ceiling ended, and per party size the winner's paired lead over the pass's own order (the winner of a race: it reads high)
+        long orders = 0, orderOpts = 0, orderRolls = 0, unpaired = 0, orderKept = 0, orderBound = 0, orderSkip = 0, orderClust = 0, orderPass = 0 /* the pass went on */, freshN = 0; double freshU = 0; /* Choose's fresh lead over IAUS's answer, confirmed or not */ std::array<long, 6> modeWin{}, modeIaus{};
+        struct Lead { long n = 0, same = 0; double sum = 0; }; std::map<int, Lead> party;
         std::map<std::string, long> refused;   // option offers refused, by reason (ClassRefuses / RulingRefuses token)
         void Merge(const OracleStats& o) { decisions += o.decisions; options += o.options; rollouts += o.rollouts; streams += o.streams; twins += o.twins; bound += o.bound; standing += o.standing; unresolved += o.unresolved; unresolvedMax = std::max(unresolvedMax, o.unresolvedMax);
+            orders += o.orders; orderOpts += o.orderOpts; orderRolls += o.orderRolls; unpaired += o.unpaired; orderKept += o.orderKept; orderBound += o.orderBound; orderSkip += o.orderSkip; orderClust += o.orderClust; orderPass += o.orderPass; freshN += o.freshN; freshU += o.freshU; for (std::size_t i = 0; i < 6; ++i) { modeWin[i] += o.modeWin[i]; modeIaus[i] += o.modeIaus[i]; }
+            for (const auto& kv : o.party) { Lead& l = party[kv.first]; l.n += kv.second.n; l.same += kv.second.same; l.sum += kv.second.sum; }
             for (const auto& kv : o.refused) refused[kv.first] += kv.second; }
     };
+    // His body is not free for another action now.
+    [[nodiscard]] inline bool OracleHeld(const Fight& F, const Ctl& c, const Body& x) { return x.hitAt >= 0 || F.now < x.staggerUntil || F.now < x.ctrlUntil || (x.actIaus && F.now < x.actEnd) || F.now < c.moveUntil; }
 
     // The rollout policy inside the search: IAUS, except that a follower holds an option he was given until commitUntil.
+    // His ranking reaches the movement pass each lap as in the game (IausPolicy::ServeWith calls MoveNoteRanked), but not while he is held to the option: what he is held to
+    // was put first when it was applied. An order option has an action too (`first`): it is begun at his first free lap, within a second.
     struct RolloutPolicy : Policy {
-        IausPolicy iaus;
-        void Serve(Fight& F, int ci) override { if (ServiceRun(F, ci)) return; if (F.now < F.ctl[static_cast<std::size_t>(ci)].commitUntil) return; iaus.Serve(F, ci); }   // card G3's run is serviced every lap, committed or not
+        IausPolicy iaus; std::function<bool(Fight&)> first; int firstCi = -1; double firstUntil = 0.0;
+        void Serve(Fight& F, int ci) override { if (ServiceRun(F, ci)) return; const Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; if (F.now < c.commitUntil) return;
+            if (ci == firstCi && first) { if (F.now > firstUntil) first = nullptr; else if (!OracleHeld(F, c, F.b[static_cast<std::size_t>(c.body)])) { const auto f = std::move(first); first = nullptr; if (Fight::Up(F.b[static_cast<std::size_t>(c.body)]) && f(F)) return; } }
+            iaus.Serve(F, ci); }   // card G3's run is serviced every lap, committed or not
     };
 
     // ── SPELL REGRET, ALTERNATE TABLES, EXACT PRUNING (sim v4 batch C, iaus-sim-v4.md 7.3 and 15) ──────────────────────────────────────────
@@ -342,6 +374,7 @@ namespace Sim {
     //                    own (much wider) t; what it buys is that twins and near-twins leave after 4 rollouts instead of 8.
     inline int g_oraclePrune = 1;
     inline constexpr int kTwinMin = 16;
+    inline constexpr float kClusterU = 128.0f;    // two places of one triangle this near are one option (kCutCluster)
     // `--oracle-dump <file>` (DIAGNOSTIC, the proof of the cuts): after each race of the SUBJECT every option that could be applied is run on
     // every stream up to the ceiling (about three times the fight's cost) and the decision is appended as one JSON line: the options (label,
     // target, form, IAUS's pick, the spell's numbers and its factor on the foe) and their utility per stream. A stream's seed does not depend
@@ -460,18 +493,219 @@ namespace Sim {
             c.commitUntil = (k->family == Family::Attack || k->family == Family::Retreat) ? G.now + commit : std::max(G.now + 0.3, x.actEnd);
             return true;
         }
+        // THE RACE, the same for actions and for orders: N options, roll(G, i) applies option i to a stream's copy and plays it out (false = it cannot be done now).
+        // Streams are shared by all options (stream k has one seed for every option), so two options are compared on the same luck and the test is on their PAIRED
+        // difference.
+        // ON THE STRICT ROAD the race's luck is a hash of the fight, the time and the size of the race, never a draw of the world's: the worlds of on / rank / off / IAUS
+        // share their luck until they differ, and every stream has block, carry and aversion draws of its own (review findings 1 and 4). Elsewhere as before, to the bit.
+        enum : int { kCutPair = 1, kCutSkip = 4, kCutCluster = 8 };   // (2 was a screen of the orders at one action: removed, 3 percent)
+        static constexpr double kTieU = 0.3;   // a lead under this is a tie. On the strict road also the pair rule's width
+        [[nodiscard]] bool cut(int c) const { return g_road == Road::Strict && (cfg.cuts & c); }
+        [[nodiscard]] double pairW() const { return cfg.pair >= 0.0 && cut(kCutPair) ? std::max(cfg.pair, kTieU) : cfg.pair; }
+        [[nodiscard]] bool leads() const { return g_road == Road::Strict && cfg.leadRule; }
+        [[nodiscard]] static std::uint64_t RaceSeed(Fight& F, std::size_t N, int ci, bool order) { if (g_road != Road::Strict) return F.R.g(); return Fight::Mix64(F.raceSeed ^ Fight::Mix64(static_cast<std::uint64_t>(F.now * 1000.0 + 0.5) * 31 + N * 7) ^ Fight::Mix64(static_cast<std::uint64_t>(ci * 2 + (order ? 1 : 0)) + 0xC2B2AE3D27D4EB4FULL)); }
+        struct Race { std::vector<std::vector<double>> U; std::vector<char> alive; std::vector<double> u; std::size_t best = 0, live = 0; int n = 0, ceil = 0; long retired = 0; std::uint64_t s0 = 0; };
+        [[nodiscard]] double until(const Fight& F) const { return cfg.H >= F.maxSec ? -1.0 : F.now + cfg.H; }
+        [[nodiscard]] Fight Stream(const Fight& F, std::uint64_t s0, int k) const { Fight G = F; G.trace = nullptr; G.R.g.seed(s0 + 7919ULL * static_cast<std::uint64_t>(k)); if (g_road == Road::Strict && !g_moveFault->oracleAv) { if (const std::int64_t w = Fight::AvWindow(F.now); G.avHoldWin != w) { G.avHoldWin = w; G.avHold = F.avSeed; } /* the aversion draws of the window he is in are made: the foes have them */ G.avSeed = Fight::Mix64(s0 + 13ULL * static_cast<std::uint64_t>(k)); G.V.g.seed(Fight::Mix64(G.avSeed + 1)); StrictRedraw(G); } if (cfg.split) { G.split = true; G.splitSeed = s0 + 7919ULL * static_cast<std::uint64_t>(k); G.xs.clear(); } return G; }
+        static double Lead(const std::vector<std::vector<double>>& U, std::size_t a, std::size_t b, double* sd) {   // the mean and the sample deviation of U[a] - U[b] over the streams both ran
+            const std::size_t m = std::min(U[a].size(), U[b].size()); if (!m) { if (sd) *sd = 0; return 0.0; }
+            double sum = 0, sq = 0; for (std::size_t k = 0; k < m; ++k) { const double d = U[a][k] - U[b][k]; sum += d; sq += d * d; }
+            const double mean = sum / double(m); if (sd) *sd = m > 1 ? std::sqrt(std::max(0.0, (sq - sum * mean) / double(m - 1))) : 0.0; return mean; }
+        template <class Roll> Race RunRace(Fight& F, std::size_t N, std::uint64_t seed, const std::vector<char>& guard, const Roll& roll, long& rollouts) {
+            Race r; r.U.resize(N); r.alive.assign(N, 1); r.u.assign(N, -1e9); auto& U = r.U; auto& alive = r.alive; auto& u = r.u; long& retired = r.retired;
+            const std::uint64_t s0 = r.s0 = seed; int ceil = std::max(1, cfg.K > 0 ? cfg.K : cfg.ceiling); r.ceil = ceil; const double pair = pairW(); const int nmin = std::clamp(cfg.nMin, 1, ceil);
+            const auto lead = [&](std::size_t a, std::size_t b, double* sd) { return Lead(U, a, b, sd); };
+            std::size_t best = N - 1, live = N; int n = 0;
+            for (int next = nmin;;) {
+                for (int k = n; k < next; ++k) for (std::size_t i = 0; i < N; ++i) { if (!alive[i]) continue;
+                    Fight G = Stream(F, s0, k);
+                    if (!roll(G, i)) { alive[i] = 0; continue; }
+                    U[i].push_back(Utility(G)); ++rollouts; }
+                n = next; bool any = false;
+                for (std::size_t i = 0; i < N; ++i) { if (!alive[i]) continue; double sum = 0; for (double v : U[i]) sum += v; u[i] = sum / double(U[i].size()); if (!any || u[i] > u[best]) { best = i; any = true; } }   // the first of equal means stands (IAUS's order)
+                const double tc = TCrit(n, cfg.pOne), rn = std::sqrt(double(n)); live = 0;
+                for (std::size_t i = 0; i < N; ++i) { if (!alive[i]) continue; if (i == best) { ++live; continue; }
+                    double sd = 0; const double d = lead(best, i, &sd);
+                    if (n >= 2 && (sd <= 0.0 ? (d > 0.0 || (d >= 0.0 && (pair < 0.0 || n >= kTwinMin))) : d > tc * sd / rn)) alive[i] = 0; else ++live; }   // with the cuts on, a duplicate of the best is a twin like any other: not retired under kTwinMin streams (choice review SEV-4: at 4 or 8 streams half of the twins still differ later)   // sd 0: the same outcome on every stream (a duplicate of the best, or beaten on every one)
+                // PAIRWISE INDIFFERENCE (OracleCfg::pair, the block comment above g_oraclePrune): from the last option to the first, so of two twins the earlier stands
+                if (pair >= 0.0 && n >= 2 && live > 1) for (std::size_t i = N; i-- > 0;) { if (!alive[i] || i == best || guard[i]) continue;
+                    for (std::size_t j = 0; j < N; ++j) { if (j == i || !alive[j]) continue;
+                        double sd = 0; const double d = lead(j, i, &sd);
+                        if (sd <= 0.0 ? (d >= 0.0 && j < i && n >= kTwinMin) : (pair > 0.0 && d > tc * sd / rn - pair && d > -0.5 * pair)) { alive[i] = 0; --live; ++retired; break; } } }
+                if (live <= 1 || n >= ceil) break;
+                next = std::min(ceil, n * 2);
+            }
+            r.best = best; r.live = live; r.n = n; return r;
+        }
+        // THE PICK ON THE STRICT ROAD (review finding 2). A race's winner is the highest of N noisy means: taken as it is, the oracle plays the noise. Its default is what
+        // IAUS would do, then what he is on IF he was put on it by a confirmed lead (else the first Free of a fight, which nobody chose, would be a default nothing leaves). Each is left only on a PAIRED lead of the winner over 2 standard errors and over a tie's width, and only when the same lead
+        // stands on streams the race has not seen (fresh(i, k), the same luck for both). The fresh lead of the race's winner over IAUS's own answer is `fresh` (no race selected it: unbiased, read it whether it confirms or not). `won` is the same number
+        // where it did confirm: conditioned on that, so it reads high.
+        struct Pick { std::size_t best = 0; bool left = false; double won = 0.0; bool drawn = false; double fresh = 0.0; };   // left: IAUS's answer was left for the race's winner, on a confirmed lead (won). The incumbent standing = not left: its lead is the race's own (Lead)
+        [[nodiscard]] static bool Beats(double d, double sd, std::size_t n) { return n >= 2 && d > kTieU && d > 2.0 * sd / std::sqrt(double(n)); }
+        template <class Fresh> static Pick Choose(const Race& R, int iausIdx, int lastIdx, const Fresh& fresh) {
+            Pick p; p.best = R.best; std::vector<std::vector<double>> FU(R.U.size());
+            for (const int di : { iausIdx, lastIdx }) { if (di < 0 || R.U[static_cast<std::size_t>(di)].empty() || static_cast<std::size_t>(di) == p.best) continue; const auto d = static_cast<std::size_t>(di);
+                double sd = 0; double m = Lead(R.U, p.best, d, &sd); bool go = Beats(m, sd, std::min(R.U[p.best].size(), R.U[d].size()));
+                if (go) { const int K = std::max(8, R.n); for (const std::size_t i : { p.best, d }) while (static_cast<int>(FU[i].size()) < K) { const std::optional<double> v = fresh(i, static_cast<int>(FU[i].size())); if (!v) break; FU[i].push_back(*v); }
+                    m = Lead(FU, p.best, d, &sd); go = Beats(m, sd, std::min(FU[p.best].size(), FU[d].size())); if (di == iausIdx) { p.drawn = true; p.fresh = m; } }
+                if (!go) { p.best = d; p.left = false; p.won = 0.0; } else if (di == iausIdx) { p.left = true; p.won = m; } }
+            if (static_cast<int>(p.best) == iausIdx) { p.left = false; p.won = 0.0; }
+            return p; }
+        static constexpr int kFreshK = 1 << 20;   // the first stream the races never reach
+        template <class Roll> [[nodiscard]] auto FreshOf(const Fight& F, std::uint64_t s0, const Roll& roll, long& rollouts) const { return [this, &F, s0, &roll, &rollouts](std::size_t i, int k) -> std::optional<double> { Fight G = Stream(F, s0, kFreshK + k); if (!roll(G, i)) return std::nullopt; ++rollouts; return Utility(G); }; }
+        // A candidate as the movement pass reads an action: its own row of the ranking, else the top row's score (the oracle holds it: it is no worse than that).
+        [[nodiscard]] static MFO::Iaus::RankedAction RankedOf(const Candidate& k, const MFO::Iaus::RankedAction& top) { return { k.family, k.scrollOf, k.form, k.target, top.score > 0.0f ? top.score : 1.0f, k.f.reach, k.f.meleeRange, k.f.sight }; }
+        [[nodiscard]] static MFO::Iaus::RankedAction RankedOf(const Candidate& k, const Decision& d, const Generated& g) {
+            MFO::Iaus::RankedAction a = RankedOf(k, MFO::Iaus::RankedAction{}); bool found = false; float top = 0.0f;
+            for (const Scored& s : d.ranked) if (s.idx < g.actions.size()) { top = std::max(top, s.score); if (KeyOf(g.actions[s.idx]) == KeyOf(k)) { a.score = s.score; found = true; } }
+            if (!found && top > 0.0f) a.score = top;
+            return a; }
+
+        // ── S5-C: THE ORDER RACE (s5-plan.md 4.2). At the end of a movement window at which the pass itself would decide for him (not committed, or marked), and never
+        // between windows: orders x his ranked actions, raced like actions. The pass's own assignment for that window is IAUS's order. ──
+        std::map<std::string, SitRec>* orderSit = nullptr;   // divergences of the order: "iaus order|oracle order|paired or not|situation"
+        std::vector<std::string>* orderLines = nullptr;      // the ORCMODE lines
+        [[nodiscard]] static bool Asked(const Fight& F, int ci) {
+            if (g_road != Road::Strict || g_oracleOrders != OracleOrders::On || !F.move) return false;
+            const MoveState& S = *F.move.s; if (!S.open || F.now < S.winEnd - 1e-9 || S.force != Force::None || static_cast<std::size_t>(ci) >= S.claim.size()) return false;   // MoveStep closes it in this very step
+            if (S.pic.work.stage != MV::Work::Stage::Done) return false;
+            const Body& x = F.b[static_cast<std::size_t>(F.ctl[static_cast<std::size_t>(ci)].body)];
+            for (const MV::Member& m : S.pic.party) if (m.id == x.c.id) { const OrderPick& k = S.claim[static_cast<std::size_t>(ci)].pick; if (k.on && !k.fresh && !k.spot && !m.seen && F.now < k.askAt - 1e-9) return false;   /* his own place is held as long as it was raced (finding 9) */ return m.decides && !m.fixed && m.nTop > 0 && m.tri >= 0 && !MoveBodyTaken(F, x); }
+            return false; }
+        struct OrdOpt { OrderPick pick; const Candidate* k = nullptr; OrderAsk ask; bool paired = true, iaus = false, pass = false; /* THE PASS GOES ON: no order is given. pick only says what the pass's own order is */
+            [[nodiscard]] bool Same(const OrdOpt& o) const { return pass == o.pass && (pass || (pick.SameOrder(o.pick) && pick.end == o.pick.end)); } };
+        std::function<void(const std::vector<OrdOpt>&, const Race&, std::size_t)> peek;   // the spot tests read an order race
+        std::vector<OrderPick> wonOrder; std::vector<std::pair<bool, Key>> wonAct;   // the order / action that won over IAUS's own, per follower, while it stands (Choose)
+        std::vector<std::uint64_t> keptSig;   // a Free or Hold that was kept, per follower: what it was decided on (kCutSkip)
+        [[nodiscard]] static std::string KindName(const OrderPick& p) { return !p.spot ? (p.kinds & MV::KindBit(MFO::Iaus::SpotKind::Hold) ? "hold" : p.end ? "own_end" : "own") : MV::kSpotKinds[static_cast<std::size_t>(MV::OrderRowOf(p.kinds).kind)].name; }
+        void Window(Fight& F) override { for (int ci = 0; ci < static_cast<int>(F.ctl.size()); ++ci) if ((cfg.allFollowers || ci == 0) && Asked(F, ci)) Order(F, ci); }
+        void Order(Fight& F, int ci) {
+            using MFO::Iaus::SpotKind; MoveState& S = *F.move.s; MoveClaim& q = S.claim[static_cast<std::size_t>(ci)]; Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; const Body& x = F.b[static_cast<std::size_t>(c.body)]; const bool subj = ci == 0;
+            const Tuning& T = *iaus.T; std::size_t mi = 0; while (S.pic.party[mi].id != x.c.id) ++mi; const MV::Member& m = S.pic.party[mi];
+            // CUT: his own place, unmarked, and nothing the race was about has changed (the pool, what each action was offered, his three actions): it stands again
+            std::uint64_t sig = 0; if (cut(kCutSkip)) { const auto mix = [&](std::uint64_t z) { sig = Fight::Mix64(sig ^ z); }; for (const MV::Spot& sp : S.pic.pool) { mix(sp.key); mix(sp.kinds); } for (std::uint8_t a = 0; a < m.nTop; ++a) { mix(static_cast<std::uint64_t>(m.top[a].family)); mix(m.top[a].form); mix(m.top[a].target); } mix(m.seen);
+                if (keptSig.size() < F.ctl.size()) keptSig.resize(F.ctl.size(), 0); auto& was = keptSig[static_cast<std::size_t>(ci)];
+                if (q.pick.on && !q.pick.fresh && !q.pick.spot && !m.seen && was == sig) { q.pick.askAt = F.now + cfg.commit; if (!q.pick.end) q.pick.until = q.pick.askAt; OracleStats one; one.orderSkip = 1; st.Merge(one); if (subj) stSubj.Merge(one); return; } was = 0; }
+            // the pass's own answer, on a copy
+            MV::PartyPicture probe = S.pic; std::vector<MV::Assignment> as; tl_moveFight = &F; MP::Phase3(probe, &MoveProfile, T, as); MP::Adopt(probe, as); MP::Orders(probe, as, T);
+            MV::Assignment mine; for (const MV::Assignment& a : as) if (a.who == m.id) mine = a;
+            const MV::MoveMode iausMode = probe.party[mi].order.mode;
+            // his actions: the three the pass pairs. One that is refused, cooling or only a wish from afar (moveOnly) has no candidate: the order then goes with whatever IAUS does
+            Served sv; MakeSnapshot(F, ci, sv.sn); sv.g = SimGenerate(sv.sn, c.gate, T); FillCooldowns(c, sv.g.actions, F.now, T);
+            std::array<const Candidate*, 3> act{}; std::array<char, 3> use{}; int nUse = 0;
+            for (std::uint8_t a = 0; a < m.nTop; ++a) { const auto& r = m.top[a]; bool bad = false;
+                if (!r.moveOnly) for (const Candidate& k : sv.g.actions) if (k.family == r.family && k.form == r.form && k.target == r.target) { if (k.f.hardCooldownSec > 0.0f && k.f.hardCooldownLeft > 0.0f) bad = true; else { Opt o; o.k = &k; if (Ok(F, c, o)) act[a] = &k; else bad = true; } break; }
+                use[a] = !bad; nUse += !bad; }
+            if (!nUse) use[0] = 1;
+            // the orders
+            long clustered = 0; const std::uint32_t allowed = MV::AllowedKinds(S.pic.caps, T) & m.kinds; const EQ::View v = EnvViewOf(F, true); std::vector<OrdOpt> opt;
+            const auto ok = [&](const OrderAsk& a) { Opt o; o.order = &a; return Ok(F, c, o); };
+            const auto add = [&](OrderPick p, const OrderAsk& ask, std::uint8_t a, bool paired) { p.on = p.fresh = true; p.act = use[a] ? m.top[a] : MFO::Iaus::RankedAction{}; OrdOpt o; o.pick = p; o.k = act[a]; o.ask = ask; o.paired = paired; opt.push_back(o); };
+            // THE DEFAULT (review R2-1): the pass goes on. No order of the oracle's stands, in the fight or in the rollout, and the pass may decide again at the next window.
+            // First as IAUS plays it, then with each of his actions (so an order is never preferred for the action it was paired with). ii = the first row
+            { OrdOpt o; o.pass = o.iaus = true; o.pick.spot = mine.spot >= 0; o.pick.key = mine.key; o.pick.kinds = mine.kinds; o.pick.mode = iausMode; o.pick.act = mine.act; opt.push_back(o); o.iaus = false;
+              for (std::uint8_t a = 0; a < m.nTop; ++a) if (use[a] && act[a]) { o.k = act[a]; o.pick.act = m.top[a]; opt.push_back(o); } }
+            for (const MV::MoveMode md : { MV::MoveMode::Kite, MV::MoveMode::Disengage }) if (!ModeServedBy(S.pic.caps, md)) { OrderAsk a; a.mode = md; (void)ok(a); }   // a mode that is not served is refused once a window
+            const double soon = F.now + cfg.commit;   // his own place is held as long as an action option is, unless a mark ends it. Free is offered to the end too: what `off` plays (finding 3)
+            { OrderAsk fr, ho; ho.mode = MV::MoveMode::Stand; ho.kinds = MV::KindBit(SpotKind::Hold); const bool okF = ok(fr), okH = ok(ho) && (allowed & ho.kinds);
+              for (std::uint8_t a = 0; a < m.nTop; ++a) if (use[a] || a == 0) {
+                OrderPick p; p.until = p.askAt = soon; p.kinds = MV::KindBit(SpotKind::Stay); if (okF) { add(p, fr, a, true); if (!g_moveFault->oracleNoEnd) { OrderPick z = p; z.end = true; z.until = 1e9; add(z, fr, a, true); } }
+                p.mode = MV::MoveMode::Stand; p.kinds = ho.kinds; if (okH) add(p, ho, a, true); } }   // no target asked for: he may hold while he drinks
+            // CUT: places that are one place to him (the same kinds and offers, one triangle or one arrive radius apart) are one option. His own and the pass's own stay
+            std::vector<std::size_t> order; std::vector<std::uint32_t> offs; for (std::size_t si = 0; si < S.pic.pool.size(); ++si) { std::uint32_t any = 0; for (std::uint8_t a = 0; a < m.nTop; ++a) any |= S.pic.work.Offered(static_cast<std::int32_t>(si), static_cast<std::uint32_t>(mi), a); offs.push_back(any); order.push_back(si); }
+            const auto first0 = [&](std::size_t si) { const MV::SpotKey k = S.pic.pool[si].key; return (m.commit.on && m.commit.key == k) || (mine.spot >= 0 && mine.key == k); };
+            if (cut(kCutCluster)) std::stable_sort(order.begin(), order.end(), [&](std::size_t l, std::size_t r) { const int a = first0(l) ? 2 : offs[l] != 0, b = first0(r) ? 2 : offs[r] != 0; return a > b; });
+            std::vector<std::size_t> heads;
+            const auto twin = [&](std::size_t si) { const MV::Spot& s = S.pic.pool[si]; for (const std::size_t h : heads) { const MV::Spot& z = S.pic.pool[h]; if (z.kinds == s.kinds && offs[h] == offs[si] && z.portals == s.portals && (MV::Dist(z.p, s.p) <= T.orderArrive || (z.tri == s.tri && MV::Dist(z.p, s.p) <= kClusterU))) return true; } return false; };
+            for (const std::size_t si : order) { const MV::Spot& sp = S.pic.pool[si];
+                if (cut(kCutCluster) && !first0(si) && twin(si)) { ++clustered; continue; }
+                std::uint32_t any = 0; for (std::uint8_t a = 0; a < m.nTop; ++a) any |= S.pic.work.Offered(static_cast<std::int32_t>(si), static_cast<std::uint32_t>(mi), a);
+                const bool stands = m.commit.on && m.commit.key == sp.key; OrderAsk ask; ask.kinds = sp.kinds;
+                ask.leash = c.leash > 0.0f && std::hypot(sp.p.x - F.b[0].c.x, sp.p.y - F.b[0].c.y) > c.leash + kLeashStandU;
+                ask.refused = !g_moveFault->oracleDistrusted && TR::Refused(S.pic.trustNow, m.id, sp.key);
+                for (std::size_t o = 0; o < S.pic.party.size(); ++o) { const MV::Member& w = S.pic.party[o]; if (o == mi || (!w.fixed && w.decides && w.nTop)) continue;   // MovePass Taken, for those who are planned before anybody
+                    const std::array<std::uint64_t, 2>* po = &w.portals; if (w.fixed) { ask.taken = ask.taken || w.commit.key == sp.key; for (const MV::Spot& z : S.pic.pool) if (z.key == w.commit.key) po = &z.portals; }
+                    for (const auto e : sp.portals) for (const auto f : *po) ask.taken = ask.taken || (e && e == f); }
+                bool way = stands; for (const auto& p : S.pic.work.pairs) way = way || (p.member == mi && p.spot == static_cast<std::int32_t>(si));
+                if (!way && !ask.leash && !ask.refused && !ask.taken) { EQ::Path p; ask.noWay = !(EQ::FindPath(v, { m.p, sp.p, m.tri, sp.tri, m.who, S.pic.avoid }, tl_envScratch, p) && p.reachable); }
+                std::array<char, 6> said{};   // a refusal is counted once a place and mode, whatever it is paired with
+                for (std::uint8_t a = 0; a < m.nTop; ++a) { if (!use[a] && a) continue;
+                    std::uint32_t mask = S.pic.work.Offered(static_cast<std::int32_t>(si), static_cast<std::uint32_t>(mi), a); const bool paired = mask != 0; if (!mask && !g_moveFault->oraclePaired) mask = sp.kinds & allowed;
+                    if (stands && !paired) mask = m.commit.kinds & allowed;
+                    OrderAsk aa = ask; aa.mode = mask ? MV::OrderRowOf(mask).mode : MV::MoveMode::Stand; if (!mask) aa.kinds = sp.kinds & ~allowed; std::array<char, 4> carried{};
+                    for (const MV::MoveMode md : { aa.mode, MV::MoveMode::Stand, MV::MoveMode::GoTo, MV::MoveMode::Kite, MV::MoveMode::Disengage }) {
+                        if (md == MV::MoveMode::Free) continue;
+                        if (md != aa.mode && !ModeServedBy(S.pic.caps, md)) continue;   // said above
+                        char& seen = carried[static_cast<std::size_t>(ModeCarried(S.pic.caps, md))]; if (seen) continue; seen = 1;
+                        OrderAsk am = aa; am.mode = md; if (said[static_cast<std::size_t>(md)]) continue;
+                        if (!ok(am) || !mask) { said[static_cast<std::size_t>(md)] = 1; continue; }
+                        OrderPick p; p.spot = true; p.key = sp.key; p.kinds = mask; p.mode = md; p.until = F.now + cfg.orderSec; add(p, am, a, any != 0); if (heads.empty() || heads.back() != si) heads.push_back(si); } } }
+            const std::size_t N = opt.size(); if (N < 2) { q.pick = OrderPick{}; return; }
+            // what stands now, if a lead put him on it (the incumbent: it wins a tie, as the action he is on does), and IAUS's own answer: the pass goes on
+            int last = -1; const int ii = 0; const auto first = [&](const OrderPick& w, const MFO::Iaus::RankedAction& a, bool modeToo) { int alt = -1; for (std::size_t i = 0; i < N; ++i) { const OrderPick& p = opt[i].pick; if (opt[i].pass || p.spot != w.spot || p.end != w.end || (p.spot ? p.key != w.key : p.kinds != w.kinds) || (modeToo && p.spot && p.mode != w.mode)) continue; if (alt < 0) alt = static_cast<int>(i); if (p.act.family == a.family && p.act.form == a.form && p.act.target == a.target) return static_cast<int>(i); } return alt; };
+            { OrderPick w; w.end = q.pick.on && q.pick.end; w.spot = m.commit.on; w.key = m.commit.key; w.mode = m.order.mode; w.kinds = MV::KindBit(m.order.mode == MV::MoveMode::Free ? SpotKind::Stay : SpotKind::Hold); last = first(w, m.top[0], true); if (last < 0) last = first(w, m.top[0], false); }
+            if (wonOrder.size() < F.ctl.size()) wonOrder.resize(F.ctl.size()); OrderPick& won = wonOrder[static_cast<std::size_t>(ci)];
+            if (last < 0 || !won.on || !won.SameOrder(opt[static_cast<std::size_t>(last)].pick) || won.end != opt[static_cast<std::size_t>(last)].pick.end) last = ii;
+            bool offered; { OrderPick w; w.spot = mine.spot >= 0; w.key = mine.key; w.kinds = mine.kinds; offered = first(w, mine.act, false) >= 0; }   // false: the filter refuses the oracle the order the pass gives
+            std::vector<char> guard; if (cfg.pair >= 0.0) { guard.assign(N, 0); guard[static_cast<std::size_t>(last)] = guard[0] = 1; }
+            const auto given = [&](const OrdOpt& o) { if (!o.pass) return o.pick; OrderPick p; if (g_moveFault->oracleLock) { p = o.pick; p.on = p.fresh = true; p.until = p.askAt = soon; } return p; };
+            const auto roll = [&](Fight& G, std::size_t i) {
+                G.move->claim[static_cast<std::size_t>(ci)].pick = given(opt[i]); RolloutPolicy rp;
+                if (opt[i].k) { rp.firstCi = ci; rp.firstUntil = F.now + 1.0; rp.first = [&, i](Fight& H) { Opt o; o.k = opt[i].k; if (!Apply(H, ci, o, cfg.commit, cfg.every)) return false; MoveNoteFront(H.move->claim[static_cast<std::size_t>(ci)], opt[i].pick.act); return true; }; }
+                RunFor(G, rp, until(F)); return true; };
+            long rolls = 0; const std::uint64_t seed = RaceSeed(F, N, ci, true); const Race R = RunRace(F, N, seed, guard, roll, rolls);
+            const auto& U = R.U; std::size_t best = R.best;
+            const auto label = [&](const OrdOpt& o, bool forIaus = false) { return std::string("order:") + (o.pass && !forIaus ? "pass:" : "") + kModeName[static_cast<std::size_t>(o.pick.mode)] + ":" + KindName(o.pick); };   // free:own_end = to the end
+            if (g_oracleDump && subj) {
+                bool comma = false;
+                std::string o = "{\"t\":" + std::to_string(F.now) + ",\"order\":1,\"n\":" + std::to_string(R.n) + ",\"best\":" + std::to_string(best) + ",\"last\":" + std::to_string(last) + ",\"opts\":[";
+                for (std::size_t i = 0; i < N; ++i) { std::vector<double> full = U[i]; for (int k = static_cast<int>(full.size()); k < R.ceil; ++k) { Fight G = Stream(F, R.s0, k); if (!roll(G, i)) break; full.push_back(Utility(G)); }
+                    o += std::string(comma ? "," : "") + "{\"l\":\"" + label(opt[i]) + "\",\"tg\":" + std::to_string(opt[i].pick.act.target) + ",\"form\":" + std::to_string(opt[i].pick.act.form) + ",\"key\":" + std::to_string(opt[i].pick.spot ? opt[i].pick.key : 0) + ",\"paired\":" + std::to_string(int(opt[i].paired)) + ",\"n0\":" + std::to_string(U[i].size()) + ",\"iaus\":" + std::to_string(int(opt[i].iaus)) + ",\"u\":[";
+                    for (std::size_t z = 0; z < full.size(); ++z) { char nb[32]; std::snprintf(nb, sizeof nb, "%s%.9f", z ? "," : "", full[z]); o += nb; } o += "]}"; comma = true; }
+                o += "]}\n"; std::fputs(o.c_str(), g_oracleDump); std::fflush(g_oracleDump); }
+            Pick pk; pk.best = best;
+            if (leads()) { 
+                // an order is left for another order, not for the action it was paired with: what stands for it is its best row (the action race decides the action anyway)
+                const auto row = [&](int i) { int b = i; for (std::size_t j = 0; j < N; ++j) if (opt[j].Same(opt[static_cast<std::size_t>(i)]) && (U[j].size() > U[static_cast<std::size_t>(b)].size() || (U[j].size() == U[static_cast<std::size_t>(b)].size() && R.u[j] > R.u[static_cast<std::size_t>(b)]))) b = static_cast<int>(j); return b; };
+                if (!g_moveFault->oracleBest) pk = Choose(R, row(ii), last != ii ? row(last) : -1, FreshOf(F, seed, roll, rolls)); best = pk.best; }
+            else if (R.alive[static_cast<std::size_t>(last)] && R.u[static_cast<std::size_t>(last)] >= R.u[best] - 0.3) best = static_cast<std::size_t>(last);   // a person does not dither
+            if (peek) peek(opt, R, best);
+            const OrdOpt& w = opt[best]; const bool same = w.pass || w.pick.SameOrder(opt[0].pick); won = w.pass ? OrderPick{} : w.pick;   // an order that is given left the pass on a lead
+            { OracleStats one; one.orders = 1; one.orderOpts = static_cast<long>(N); one.orderRolls = rolls; one.unpaired = !w.paired; one.orderKept = static_cast<int>(best) == last; one.orderPass = w.pass; one.freshN = pk.drawn; one.freshU = pk.fresh; one.orderBound = R.live > 1; one.orderClust = clustered; if (!w.pass) ++one.modeWin[static_cast<std::size_t>(w.pick.mode)]; ++one.modeIaus[static_cast<std::size_t>(iausMode)];
+              { auto& l = one.party[static_cast<int>(F.ctl.size())]; l.n = 1; l.same = same; l.sum = same ? 0.0 : pk.left ? pk.won : Lead(U, best, 0, nullptr); }
+              st.Merge(one); if (subj) stSubj.Merge(one); }
+            if (subj && orderLines) {   // per mode: its best option's mean, the streams it ran, the winner's paired lead over it and the standard error
+                char b[320]; std::snprintf(b, sizeof b, "t=%.2f commit=%d marks=%x age=%.2f opts=%zu streams=%d win=%s%s:%s act=%s paired=%d iaus=%s:%s same=%d", F.now, int(m.commit.on), m.seen, F.now - q.topAt, N, R.n, w.pass ? "pass:" : "", kModeName[static_cast<std::size_t>(w.pick.mode)], KindName(w.pick).c_str(), std::string(MFO::Iaus::Name(w.pick.act.family == Family::kCount ? Family::Attack : w.pick.act.family)).c_str(), int(w.paired), kModeName[static_cast<std::size_t>(iausMode)], offered ? KindName(opt[0].pick).c_str() : "refused", int(same));
+                std::string o = b; if (w.pick.act.family == Family::kCount) { const auto at = o.find("act="); o.replace(at, o.find(' ', at) - at, "act=-"); }
+                for (std::size_t md = 0; md < 5; ++md) { if (!ModeServedBy(S.pic.caps, static_cast<MV::MoveMode>(md))) continue;
+                    std::size_t mb = N; for (std::size_t i = 0; i < N; ++i) if (!opt[i].pass && static_cast<std::size_t>(opt[i].pick.mode) == md && !U[i].empty() && (mb == N || U[i].size() > U[mb].size() || (U[i].size() == U[mb].size() && R.u[i] > R.u[mb]))) mb = i;   // of those that stood longest
+                    if (mb == N) { o += std::string("  ") + kModeName[md] + " -"; continue; }
+                    double sd = 0; const double d = Lead(U, best, mb, &sd); const std::size_t k = std::min(U[best].size(), U[mb].size()); std::snprintf(b, sizeof b, "  %s u=%.3f n=%zu lead=%.3f se=%.3f", kModeName[md], R.u[mb], U[mb].size(), d, sd / std::sqrt(double(std::max<std::size_t>(1, k)))); o += b; }
+                orderLines->push_back(o); }
+            if (subj && orderSit && !same && (leads() ? pk.left : !R.alive[0])) {
+                const double dU = pk.left ? pk.won : Lead(U, best, static_cast<std::size_t>(ii), nullptr);
+                if (dU >= cfg.minDU) { SitRec& r = (*orderSit)[(offered ? label(opt[0], true) : std::string("order:") + kModeName[static_cast<std::size_t>(iausMode)] + ":refused") + "|" + label(w) + "|" + (w.paired ? "ranked" : "unpaired") + "|" + Situation(x, sv.sn)]; ++r.n; r.dU += dU; } }
+            q.pick = given(w); if (sig && !w.pass && !w.pick.spot && static_cast<int>(best) == last) keptSig[static_cast<std::size_t>(ci)] = sig;
+            if (F.trace) std::fprintf(F.trace, "%7.2f  ORACLE ORDERS %s: %s with %s -> %u  U %.2f (the pass would: %s, U %.2f)  [%zu options, %d streams, %zu standing]\n", F.now, x.c.name.c_str(), label(w).c_str(), w.pick.act.family == Family::kCount ? "-" : std::string(MFO::Iaus::Name(w.pick.act.family)).c_str(), w.pick.act.target, R.u[best], offered ? label(opt[0], true).c_str() : "refused", R.u[0], N, R.n, R.live);
+        }
+
         void Serve(Fight& F, int ci) override {
             if (!cfg.allFollowers && ci != 0) { iaus.Serve(F, ci); return; }
             if (last.size() < F.ctl.size()) last.assign(F.ctl.size(), -1e9);
             Ctl& c = F.ctl[static_cast<std::size_t>(ci)]; Body& x = F.b[static_cast<std::size_t>(c.body)]; const bool subj = ci == 0;
             if (ServiceRun(F, ci)) return;   // card G3: a hide run or its hold stands
             if (!Fight::Up(x)) return;
-            const bool held = x.hitAt >= 0 || F.now < x.staggerUntil || F.now < x.ctrlUntil || (x.actIaus && F.now < x.actEnd) || F.now < c.moveUntil;
+            const bool held = OracleHeld(F, c, x);
             Served sv; MakeSnapshot(F, ci, sv.sn); sv.g = SimGenerate(sv.sn, c.gate, *iaus.T);
             FillCooldowns(c, sv.g.actions, F.now, *iaus.T); FillCooldowns(c, sv.g.postures, F.now, *iaus.T);
             TickIn in; in.now = F.now; in.rapportRank = 5; in.seed = c.seed; in.commitWindowSec = c.window;
             const bool wantAlt = subj && reg && !Alts().empty(); Mind mind0; if (wantAlt) mind0 = c.mind;   // the mind as it stood before the base table decided
+            const bool claims = F.move && g_oracleOrders != OracleOrders::Off;   // S5-C: he holds a claim like anybody
+            if (claims && F.move->claim[static_cast<std::size_t>(ci)].on) { const auto& a = F.move->claim[static_cast<std::size_t>(ci)].act; in.hasSpotAction = true; in.spotAction = Key{ a.family, PostureKind::None, a.form, a.target }; }
             sv.d = Decide(c.mind, sv.g.actions, c.profile, *iaus.T, in);
+            if (claims) { MoveClaim& q = F.move->claim[static_cast<std::size_t>(ci)]; FillCooldowns(c, sv.g.moveOnly, F.now, *iaus.T); MoveNoteRanked(F, ci, sv.d, sv.g, *iaus.T);
+                if (c.hasLastKey) for (const Candidate& k : sv.g.actions) if (KeyOf(k) == c.lastKey) { MoveNoteFront(q, RankedOf(k, sv.d, sv.g)); break; } }   // the action he is on
             if (subj) IausPolicy::Account(F, c, x, sv);
             if (held || F.now - last[static_cast<std::size_t>(ci)] < cfg.every) return;
             last[static_cast<std::size_t>(ci)] = F.now;
@@ -513,42 +747,20 @@ namespace Sim {
             if (cfg.pair >= 0.0) { guard.assign(opt.size(), 0);
                 for (std::size_t i = 0; i < opt.size(); ++i) { const Candidate* k = opt[i].k; if (!k || opt[i].ext != Ext::None) continue; const Key ky = KeyOf(*k);
                     if ((iausPick && ky == KeyOf(*iausPick)) || (c.hasLastKey && ky == c.lastKey)) guard[i] = 1; for (std::size_t a = 0; a < altKey.size(); ++a) if (altHas[a] && ky == altKey[a]) guard[i] = 1; } }
-            long retired = 0;
             const long rollouts0 = st.rollouts;
-            // EVALUATE: the race (OracleCfg). Streams are shared by all options (stream k has one seed for every option), so two options are
-            // compared on the same luck and the test is on their PAIRED difference.
-            const std::size_t N = opt.size(); std::vector<std::vector<double>> U(N); std::vector<char> alive(N, 1); std::vector<double> u(N, -1e9);
-            const std::uint64_t s0 = F.R.g(); const int ceil = std::max(1, cfg.K > 0 ? cfg.K : cfg.ceiling), nmin = std::clamp(cfg.nMin, 1, ceil);
-            const double until = cfg.H >= F.maxSec ? -1.0 : F.now + cfg.H;
-            auto lead = [&](std::size_t a, std::size_t b, double* sd) {   // the mean and the sample deviation of U[a] - U[b] over the streams both ran
-                const std::size_t m = std::min(U[a].size(), U[b].size()); if (!m) { if (sd) *sd = 0; return 0.0; }
-                double sum = 0, sq = 0; for (std::size_t k = 0; k < m; ++k) { const double d = U[a][k] - U[b][k]; sum += d; sq += d * d; }
-                const double mean = sum / double(m); if (sd) *sd = m > 1 ? std::sqrt(std::max(0.0, (sq - sum * mean) / double(m - 1))) : 0.0; return mean; };
-            std::size_t best = N - 1, live = N; int n = 0;
-            for (int next = nmin;;) {
-                for (int k = n; k < next; ++k) for (std::size_t i = 0; i < N; ++i) { if (!alive[i]) continue;
-                    Fight G = F; G.trace = nullptr; G.R.g.seed(s0 + 7919ULL * static_cast<std::uint64_t>(k)); if (cfg.split) { G.split = true; G.splitSeed = s0 + 7919ULL * static_cast<std::uint64_t>(k); G.xs.clear(); }
-                    if (!Apply(G, ci, opt[i], cfg.commit, cfg.every)) { alive[i] = 0; continue; }   // it cannot be done now
-                    RolloutPolicy rp; RunFor(G, rp, until); U[i].push_back(Utility(G)); ++st.rollouts; }
-                n = next; bool any = false;
-                for (std::size_t i = 0; i < N; ++i) { if (!alive[i]) continue; double sum = 0; for (double v : U[i]) sum += v; u[i] = sum / double(U[i].size()); if (!any || u[i] > u[best]) { best = i; any = true; } }   // the first of equal means stands (IAUS's order)
-                const double tc = TCrit(n, cfg.pOne), rn = std::sqrt(double(n)); live = 0;
-                for (std::size_t i = 0; i < N; ++i) { if (!alive[i]) continue; if (i == best) { ++live; continue; }
-                    double sd = 0; const double d = lead(best, i, &sd);
-                    if (n >= 2 && (sd <= 0.0 ? (d > 0.0 || (d >= 0.0 && (cfg.pair < 0.0 || n >= kTwinMin))) : d > tc * sd / rn)) alive[i] = 0; else ++live; }   // with the cuts on, a duplicate of the best is a twin like any other: not retired under kTwinMin streams (choice review SEV-4: at 4 or 8 streams half of the twins still differ later)   // sd 0: the same outcome on every stream (a duplicate of the best, or beaten on every one)
-                // PAIRWISE INDIFFERENCE (OracleCfg::pair, the block comment above g_oraclePrune): from the last option to the first, so of two twins the earlier stands
-                if (cfg.pair >= 0.0 && n >= 2 && live > 1) for (std::size_t i = N; i-- > 0;) { if (!alive[i] || i == best || guard[i]) continue;
-                    for (std::size_t j = 0; j < N; ++j) { if (j == i || !alive[j]) continue;
-                        double sd = 0; const double d = lead(j, i, &sd);
-                        if (sd <= 0.0 ? (d >= 0.0 && j < i && n >= kTwinMin) : (cfg.pair > 0.0 && d > tc * sd / rn - cfg.pair && d > -0.5 * cfg.pair)) { alive[i] = 0; --live; ++retired; break; } } }
-                if (live <= 1 || n >= ceil) break;
-                next = std::min(ceil, n * 2);
-            }
+            // EVALUATE: the race (OracleCfg).
+            const std::size_t N = opt.size();
+            const MFO::Iaus::RankedAction none; const bool note = F.move && g_oracleOrders != OracleOrders::Off;
+            const auto roll = [&](Fight& G, std::size_t i) {
+                if (!Apply(G, ci, opt[i], cfg.commit, cfg.every)) return false;   // it cannot be done now
+                if (note && opt[i].k && opt[i].ext == Ext::None && opt[i].k->family != Family::Posture) MoveNoteFront(G.move->claim[static_cast<std::size_t>(ci)], RankedOf(*opt[i].k, none));
+                RolloutPolicy rp; RunFor(G, rp, until(F)); return true; };
+            Race R = RunRace(F, N, RaceSeed(F, N, ci, false), guard, roll, st.rollouts); auto& U = R.U; auto& alive = R.alive; auto& u = R.u; std::size_t best = R.best; const std::size_t live = R.live; const int n = R.n, ceil = R.ceil; const std::uint64_t s0 = R.s0; const long retired = R.retired;
+            const auto lead = [&](std::size_t a, std::size_t b, double* sd) { return Lead(U, a, b, sd); };
             if (g_oracleDump && subj) {
                 std::string o = "{\"t\":" + std::to_string(F.now) + ",\"n\":" + std::to_string(n) + ",\"best\":" + std::to_string(best) + ",\"last\":" + std::to_string([&] { if (c.hasLastKey) for (std::size_t i = 0; i < N; ++i) if (opt[i].k && opt[i].ext == Ext::None && KeyOf(*opt[i].k) == c.lastKey) return static_cast<int>(i); return -1; }()) + ",\"opts\":[";
                 for (std::size_t i = 0; i < N; ++i) { std::vector<double> full = U[i];
-                    if (!full.empty()) for (int k = static_cast<int>(full.size()); k < ceil; ++k) { Fight G = F; G.trace = nullptr; G.R.g.seed(s0 + 7919ULL * static_cast<std::uint64_t>(k)); if (cfg.split) { G.split = true; G.splitSeed = s0 + 7919ULL * static_cast<std::uint64_t>(k); G.xs.clear(); }
-                        if (!Apply(G, ci, opt[i], cfg.commit, cfg.every)) break; RolloutPolicy rp; RunFor(G, rp, until); full.push_back(Utility(G)); }
+                    if (!full.empty()) for (int k = static_cast<int>(full.size()); k < ceil; ++k) { Fight G = Stream(F, s0, k); if (!roll(G, i)) break; full.push_back(Utility(G)); }
                     const Candidate* k = opt[i].k; const int bi = k ? BookIndex(c, k->form) : -1; char buf[512]; buf[0] = 0;
                     if (bi >= 0 && opt[i].ext == Ext::None) { const SimSpell& sp = c.build->spells[static_cast<std::size_t>(bi)]; const SpellEntry& e = c.book.entries[static_cast<std::size_t>(bi)]; const Body* tg = F.Find(k->target);
                         float el = 0, mr = 0; if (tg) { el = std::clamp(F.ResistOf(*tg, sp.e.resistAv) / 100.0f, -1.0f, 1.0f); mr = std::clamp(F.ResistOf(*tg, kAvResistMagic) / 100.0f, -1.0f, 1.0f); }
@@ -563,7 +775,12 @@ namespace Sim {
               if (live > 1) { one.bound = 1; one.standing = static_cast<long>(live); double other = -1e9; for (std::size_t i = 0; i < N; ++i) if (alive[i] && i != best) other = std::max(other, u[i]); one.unresolved = one.unresolvedMax = u[best] - other; }
               const long r = one.rollouts; one.rollouts = 0; st.Merge(one); one.rollouts = r; if (ci == 0) stSubj.Merge(one); }
             // pick: the best; the action he is already on wins when it still stands (not separated from the best) and is within 0.3 U of it (a person does not dither)
-            if (c.hasLastKey) for (std::size_t i = 0; i < N; ++i) if (alive[i] && opt[i].k && opt[i].ext == Ext::None && KeyOf(*opt[i].k) == c.lastKey && u[i] >= u[best] - 0.3) { best = i; break; }
+            // On the strict road: IAUS's own pick, then the action he is on, each left on a confirmed lead (Choose). A pick that is not among the options has no row to stand on.
+            if (leads()) { int di = -1, dl = -1; for (std::size_t i = 0; i < N; ++i) { if (opt[i].ext != Ext::None) continue; if (!opt[i].k) { if (!iausPick) di = static_cast<int>(i); continue; } if (iausPick && di < 0 && KeyOf(*opt[i].k) == KeyOf(*iausPick)) di = static_cast<int>(i); if (c.hasLastKey && dl < 0 && KeyOf(*opt[i].k) == c.lastKey) dl = static_cast<int>(i); }
+                if (wonAct.size() < F.ctl.size()) wonAct.resize(F.ctl.size(), { false, Key{} }); auto& won = wonAct[static_cast<std::size_t>(ci)]; const bool held1 = dl >= 0 && won.first && won.second == c.lastKey;
+                const Pick pk = Choose(R, di, held1 || di < 0 ? dl : -1, FreshOf(F, s0, roll, st.rollouts)); best = pk.best; const bool act1 = opt[best].k && opt[best].ext == Ext::None;
+                if (pk.left && act1) won = { true, KeyOf(*opt[best].k) }; else if (!(act1 && won.first && KeyOf(*opt[best].k) == won.second)) won.first = false; }
+            else if (c.hasLastKey) for (std::size_t i = 0; i < N; ++i) if (alive[i] && opt[i].k && opt[i].ext == Ext::None && KeyOf(*opt[i].k) == c.lastKey && u[i] >= u[best] - 0.3) { best = i; break; }
             // what IAUS's own pick costs: the oracle's PAIRED lead over it, on the streams both ran (an option dropped early ran fewer)
             auto cost = [&](std::size_t i) { return U[i].empty() ? 0.0 : lead(best, i, nullptr); };
             ++decisions;
@@ -636,6 +853,7 @@ namespace Sim {
             const Opt& o = opt[best]; const Candidate* k = o.k; Tally& t = F.t;
             const Key key = k ? KeyOf(*k) : Key{ Family::kCount, PostureKind::None, static_cast<std::uint32_t>(o.ext) * 1000u + static_cast<std::uint32_t>(o.idx + 1), o.target };
             if (!Apply(F, ci, o, 0.0)) return;
+            if (claims && k && o.ext == Ext::None && k->family != Family::Posture) MoveNoteFront(F.move->claim[static_cast<std::size_t>(ci)], RankedOf(*k, sv.d, sv.g));
             c.commitUntil = 0;
             if (F.trace && (!c.hasLastKey || !(c.lastKey == key))) std::fprintf(F.trace, "%7.2f  ORACLE %s: %s%s%s -> %u  U %.2f (IAUS would: %s, U %.2f)  [%zu options, %d streams, %zu standing]\n", F.now, x.c.name.c_str(), o.Label().c_str(), k && !k->formName.empty() ? " " : "", k ? std::string(k->formName).c_str() : "", k ? k->target : o.target, u[best], opt[ii].Label().c_str(), u[ii], N, n, live);
             if (subj) {

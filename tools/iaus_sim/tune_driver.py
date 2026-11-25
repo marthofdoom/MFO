@@ -1550,6 +1550,11 @@ def gap_parse(txt, cls, seed):
     if len(fights) < CFG["gap_nat"]:
         raise RuntimeError("gap run of %s seed %d printed %d fights (%d natural expected): a changed dump format or a failed pass:\n%s" % (cls, seed, len(fights), CFG["gap_nat"], txt[-600:]))
     sit = {m.group(1): (int(m.group(2)), float(m.group(3))) for m in re.finditer(r"^GAPSIT %s (\S+) (\d+) ([-0-9.]+)$" % re.escape(cls), txt, re.M)}
+    # the divergences of the ORDER (strict road, iaus-sim-v4.md 23): "iaus order|oracle order|ranked or unpaired|situation", the same four fields
+    orders = {m.group(1): (int(m.group(2)), float(m.group(3))) for m in re.finditer(r"^GAPORD %s (\S+) (\d+) ([-0-9.]+)$" % re.escape(cls), txt, re.M)}
+    if set(orders) & set(sit):
+        raise RuntimeError("gap run of %s seed %d: an order divergence has an action's key: %s" % (cls, seed, sorted(set(orders) & set(sit))[0]))
+    sit.update(orders)
     gen = {m.group(1): int(m.group(2)) for m in re.finditer(r"^GAPGEN %s (\S+) (\d+)$" % re.escape(cls), txt, re.M)}
     dec = re.search(r"^GAPDEC %s (\d+)$" % re.escape(cls), txt, re.M)
     return {"fights": [(seed, j, k, ui, uo) for k, j, ui, uo in fights], "sit": sit, "gen": gen, "dec": int(dec.group(1)) if dec else 0}
@@ -1588,6 +1593,12 @@ def classify(label_i, label_o, kind, gen):
     action has no candidate IAUS ever generates for this class), (d) a modelling suspect (the oracle's version of the action is known
     to be more favourable than the game's: FIDELITY). Returns (class, why, families the (a) search may move)."""
     fi = label_i.rstrip("!")
+    if label_o.startswith("order:"):   # a divergence of the order (GAPORD). No family of actions carries its weight: the families list is empty, gap_search never moves an action's knob for it
+        if label_i.endswith(":refused"):
+            return "b", "the pass ordered %s, which the caps, his class or trust forbid at that moment (a missing gate in the pass)" % label_i, []
+        if kind == "unpaired":
+            return "c", "no action of his was ever paired with that place (%s): the generator's pairing lacks it" % label_o, []
+        return "a", "the pass ranked the oracle's order lower (%s / %s): a spot or hold weight" % (label_i, label_o), []
     if label_o in FIDELITY:
         return "d", FIDELITY[label_o], []
     if label_i.endswith("!"):
@@ -1602,6 +1613,19 @@ def classify(label_i, label_o, kind, gen):
         return "b", "IAUS generated %s and scored it under the floor or vetoed it (a veto, a gate or a missing consideration)" % label_o, []
     fams = sorted({f for f in (fi, label_o) if f not in ("idle",) and not f.startswith("ext:")})
     return "a", "%s: IAUS ranked the oracle's pick lower (%s)" % (kind, " / ".join(fams) or "the act floor"), fams
+
+
+def class_gap(gap, rows):
+    """The gap (a mean, U a fight) split over the classes by their share of the divergence cost, so the classes sum to it. No divergence
+    (or a cost that sums to 0): all of it is `unseen`."""
+    tot = sum(du for _, du in rows)
+    if tot <= 0.0:
+        return {"a": 0.0, "b": 0.0, "c": 0.0, "d": 0.0, "unseen": round(gap, 3)}
+    out = {k: round(gap * sum(du for c, du in rows if c == k) / tot, 3) for k in "abcd"}
+    top = max(out, key=lambda k: abs(out[k]))
+    out[top] = round(out[top] + round(gap, 3) - sum(out.values()), 3)   # the rounding's crumb
+    out["unseen"] = 0.0
+    return out
 
 
 def stage_gap():
@@ -1679,12 +1703,15 @@ def stage_gap():
             r["situations"][sit] = r["situations"].get(sit, 0.0) + du / nf
         tot = sum(r["dU_per_fight"] for r in rows.values()) or 1.0
         out = []
+        raw = []   # (class, unrounded cost)
         for r in sorted(rows.values(), key=lambda r: -r["dU_per_fight"]):
             cl, why, fams = classify(r["iaus"], r["oracle"], r["kind"], allp["gen"])
+            raw.append((cl, r["dU_per_fight"]))
             r.update({"class": cl, "why": why, "families": fams, "share": round(r["dU_per_fight"] / tot, 3), "dU_per_fight": round(r["dU_per_fight"], 3),
                       "situations": [[k, round(v, 3)] for k, v in sorted(r["situations"].items(), key=lambda kv: -kv[1])[:3]]})
             out.append(r)
         st["clusters"][c] = {"fights": nf, "decisions": allp["dec"], "dU_per_fight": round(tot, 3), "by_class": {k: round(sum(r["dU_per_fight"] for r in out if r["class"] == k), 3) for k in "abcd"},
+                             "gap_by_class": class_gap(mse([uo - ui for *_, ui, uo in allp["fights"]])[0], raw),
                              "rows": out, "generated": allp["gen"]}
         SUMMARY["stages"]["gap"] = st
         save_summary()
