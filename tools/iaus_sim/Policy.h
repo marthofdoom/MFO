@@ -372,6 +372,7 @@ namespace Sim {
         const bool hostile = fam == Family::Attack || fam == Family::PowerAttack || fam == Family::Taunt || fam == Family::CastOffense || fam == Family::CastControl || (fam == Family::Scroll && k.scrollOf == Family::CastOffense);
         if (hostile && (!tg || !Fight::Up(*tg) || tg->Party())) return Fired::Invalid;
         const bool bodyHeld = x.hitAt >= 0 || F.now < x.staggerUntil || F.now < x.ctrlUntil || (x.actIaus && F.now < x.actEnd);
+        if (F.move && g_road == Road::Strict && StrictNoAttack(F, x) && (hostile || fam == Family::Bash || fam == Family::Exploit)) return Fired::Declined;   // a disengage under way holds his attacks
         if (F.move) if (const int r = MoveReplaces(F, ci, fam)) return r > 0 ? Fired::Yes : Fired::Declined;   // S2 --spots-replace
         auto peel = [&]() { if (subj && tg && c.pressureSince >= 0 && tg->c.targetId == F.b[0].c.id) { t.peelSum += F.now - c.pressureSince; ++t.peelN; c.pressureSince = -2; } };
         // 11-17b (cast/Hands.cpp CanPreemptHand, THREAT ON THE HEALER): a concentration heal does not keep its hand from a non-heal pick while a foe is hurting him.

@@ -327,7 +327,8 @@ namespace Sim {
         "tools/iaus_sim/envs";
 #endif
     inline constexpr const char* kFixtureNames[] = { "open-room", "corridor-l", "doorway", "doorway-open", "doorway-plain", "locked-door", "stair-tower", "ledge", "ridge", "u-corridor", "dead-end", "island", "pillars", "narrow", "seam", "trust-wall", "trust-one-way", "light-hall", "torch-room",
-        "loot-room", "loot-backs", "loot-freeze", "loot-gate", "loot-town", "loot-shop", "loot-watch" };   // batch L: nopool, so no ordinary fight draws them and the pool hash is what it was
+        "loot-room", "loot-backs", "loot-freeze", "loot-gate", "loot-town", "loot-shop", "loot-watch",
+        "mode-open", "mode-bridge", "mode-slope", "mode-water", "mode-stairs" };   // strict movement's mode set (ModeSet.h): nopool too   // batch L: nopool, so no ordinary fight draws them and the pool hash is what it was
     inline bool LoadFixtures(EnvPool& P) { bool ok = true; for (const char* n : kFixtureNames) ok = P.Add(g_envDir + "/" + n + ".mfoenv", true) && ok; return ok; }
     // HELD-OUT PLACES (sim v4 batch C): `--env-hold train|heldout` splits the library by a hash of each place's id, one in kEnvHoldEvery held out, so a
     // tuning is checked on places it never saw. 0 = every place (the default, and what the baselines and the path gate read). The pool's hash is in

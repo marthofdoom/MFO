@@ -37,6 +37,13 @@ namespace Sim {
     inline bool MoveWalk(Fight& F, Body& x);                         // ... true = the spot claim moved his body this step and nothing else does
     inline bool MoveHeld(const Fight& F, const Body& x);              // ... true = he stands on the place he was given
     inline bool MoveBounds(const Fight& F, const Body& x, float tx, float ty, bool away);   // ... true = the claim he holds does not let this move out of its radius
+    inline bool StrictBars(const Fight& F, const Body& x);            // strict orders (iaus_sim/StrictWorld.h): the engine's flee is not picked
+    inline bool StrictNoAttack(const Fight& F, const Body& x);        // ... a disengage that travels starts no attack
+    inline void StrictFeet(Fight& F, Body& x);                        // ... his feet under an order, whatever his hands do
+    inline void StrictLunge(Fight& F, Body& x, const Body& tg, bool power);
+    inline void StrictClampDodge(const Fight& F, const Body& x, float& dx, float& dy);
+    inline void StrictPushed(Fight& F, Body& x, const Body* by);
+    inline double StrictThinkX(const Fight& F, const Body& x);
     inline bool EnvMeleeClear(const Fight& F, const Body& a, const Body& o);
     inline bool EnvInBlast(const Fight& F, float cx, float cy, float cz, float r, const Body& o);
 
@@ -294,6 +301,7 @@ namespace Sim {
         // claims filed / of those a CHANGE of place while he still walked to another / reached / ended blocked / dropped by the engine / released; the path length he
         // was sent on; seconds a claim stood / walked; threat looks: seconds with a threat, of those no threat sees him, and the mean share of threats that do.
         long   spotFiled = 0, spotChanges = 0, spotArrived = 0, spotBlocked = 0, spotDropped = 0, spotReleased = 0, trustMarks = 0, spotKind[MFO::Iaus::kSpotKindCount] = {};
+        std::array<long, 6> strictOrders{}; long strictBlocks = 0, strictUnreach = 0, strictDisplaced = 0, strictLunges = 0; double strictSec = 0, strictStandSec = 0, strictOutSec = 0, strictTravelSec = 0, strictTravelU = 0;   // strict orders, the subject's
         double spotPathLen = 0, spotClaimSec = 0, spotWalkSec = 0, threatSec = 0, coverSec = 0, exposedSec = 0;
         // ... of the pass itself (the whole party): windows / unfinished / a budget that was short (paths skipped, asks, spots, triples) / paths searched / rays asked
         long   moveWindows = 0, moveUnfinished = 0, movePathShort = 0, moveAskShort = 0, moveSpotShort = 0, moveTripleShort = 0, movePaths = 0, moveRays = 0;
@@ -849,6 +857,7 @@ namespace Sim {
             if (x.act == Act::Cast && x.ctl == 0 && x.actIaus && (x.hitAt >= 0 || now < x.actEnd) && g_v3.delivery) ++t.castLost;
             if (x.stream.live) EndStream(x, true);
             x.act = Act::None; x.hitAt = -1; x.staggerUntil = now + sec; x.actEnd = now + sec; x.blockUntil = 0;
+            if (move && x.ctl >= 0 && g_road == Road::Strict) StrictPushed(*this, x, by);
         }
         // Chocolate Poise, HitEventHandler::RecalculateStagger: the poise damage of one weapon hit. A weapon: lerp(type base, weapon
         // weight, WeightContribution) x Melee / Bow mult; a weaponless creature: physical damage x CreatureMult; a bash: the shield
@@ -1143,7 +1152,8 @@ namespace Sim {
             sh.dodged = true; if (d->ctl == 0) ++t.dodges;
             const Body* a = Find(sh.src); float ux = 0, uy = 1; if (a) { const float dx = d->c.x - a->c.x, dy = d->c.y - a->c.y, l = std::max(1.0f, std::hypot(dx, dy)); ux = -dy / l; uy = dx / l; }
             if (RP(*d, 12, 0.5f)) { ux = -ux; uy = -uy; }
-            if (env) { EnvShove(*this, *d, ux * 90.0f, uy * 90.0f); d->movedAt = now; d->ranLast = true; }
+            float dgx = ux * 90.0f, dgy = uy * 90.0f; if (move && g_road == Road::Strict) StrictClampDodge(*this, *d, dgx, dgy);
+            if (env) { EnvShove(*this, *d, dgx, dgy); d->movedAt = now; d->ranLast = true; }
             else if (Standable(d->c.x + ux * 90.0f, d->c.y + uy * 90.0f)) { d->c.x += ux * 90.0f; d->c.y += uy * 90.0f; IntoRoom(*d, arenaR); d->movedAt = now; d->ranLast = true; }
             d->act = Act::None; d->hitAt = -1; d->actEnd = now + 0.4;
             if (trace) std::fprintf(trace, "%7.2f  DODGE %s side steps a projectile (avoid threat %.2f)\n", now, d->c.name.c_str(), p);
@@ -1170,6 +1180,7 @@ namespace Sim {
             x.act = kind; x.actTarget = tg.c.id; x.hitAt = now + dur * hf; x.actEnd = now + dur; x.actIaus = fromIaus; x.swingDist = Dist(x, tg);
             if (x.ctl >= 0 && kind != Act::Bash) { Ctl& c = ctl[static_cast<std::size_t>(x.ctl)]; c.atkWin[c.atkAt] = power ? 1 : 0; c.atkAt = (c.atkAt + 1) % 8; c.atkN = std::min(8, c.atkN + 1); }   // ch.18: one STARTED attack
             Action(x, w.anim == 2 ? dg.soundSilent : dg.soundNormal);   // MODEL: a dagger's detection sound level is Silent, any other swing Normal
+            if (move && x.ctl >= 0 && g_road == Road::Strict) StrictLunge(*this, x, tg, power);
             // the defender may read the swing and block it (MODEL: 0.20 x defensive mult, + 0.25 with a shield)
             if (kind != Act::Bash && Up(tg) && !Busy(tg) && tg.spec->hasStyle && (tg.spec->shield || tg.spec->melee.Has()) && !tg.rangedMode && !tg.casterMode && tg.c.targetId == x.c.id) {
                 const float p = std::clamp(0.20f * StyleOf(tg).def + (tg.spec->shield && !LeftHeld(tg) ? 0.25f : 0.0f), 0.0f, 0.75f);
@@ -1604,7 +1615,8 @@ namespace Sim {
             // flee (a fear effect, or low health for the unconfident)
             Body* threat = nullptr; { float bd = 1e9f; for (auto& o : b) if (Up(o) && o.Party() != x.Party()) { const float d = Dist(x, o); if (d < bd) { bd = d; threat = &o; } } }
             if (!threat) return;
-            if (now < x.fleeUntil || (x.c.hp < FleeBelow(x) * x.c.hpMax && now >= x.think) || now < x.retreatUntil) {
+            const bool barred = c && move && StrictBars(*this, x);   // a strict order beats the engine's flee
+            if ((!barred && (now < x.fleeUntil || (x.c.hp < FleeBelow(x) * x.c.hpMax && now >= x.think))) || now < x.retreatUntil) {
                 if (now >= x.fleeUntil && now >= x.retreatUntil) { x.fleeUntil = now + RU(x, 26, 4, 7); x.c.fleeing = true; }
                 Move(x, x.c.x + (x.c.x - threat->c.x), x.c.y + (x.c.y - threat->c.y), x.spec->run, true); Face(x, x.c.x + (x.c.x - threat->c.x), x.c.y + (x.c.y - threat->c.y));
                 if (now < x.retreatUntil && x.ctl == 0) t.retreatSec += TM::dt;
@@ -1722,6 +1734,7 @@ namespace Sim {
             if (x.ctl == 0 && kind == Act::Power) ++t.engPower;
             StartSwing(x, *tg, kind, false);
             x.think = x.actEnd + RU(x, 34, TM::thinkMin, TM::thinkMax) / std::max(0.25f, st.off);
+            if (move && g_road == Road::Strict && x.ctl >= 0) if (const double k = StrictThinkX(*this, x); k > 1.0) x.think = now + (x.think - now) * k;
             // --foe-styles (Part C, MODEL mapping of a record value): after the blow a foe backpedals with chance = its combat style's close-range
             // Fallback Mult (CSCR[1], read from the world extract: Load.h Style::fallback), for U(0.5, 1.5) s; an aggressive style (low fallback,
             // high offensive mult: the think pause above) presses on. Followers keep their own package movement.
@@ -1738,7 +1751,7 @@ namespace Sim {
             if (g_v3.sidestep && now < x.strafeUntil) { if (std::hypot(x.sgx - x.c.x, x.sgy - x.c.y) > 20.0f) Move(x, x.sgx, x.sgy, x.spec->run); return; }   // SIM V3: the side step of a held caster
             const Body* threat = nullptr; { float bd = 1e9f; for (const Body& o : b) if (Up(o) && o.Party() != x.Party()) { const float d = Dist(x, o); if (d < bd) { bd = d; threat = &o; } } }
             if (!threat) return;
-            if (now < x.fleeUntil || now < x.retreatUntil) {
+            if ((now < x.fleeUntil && !(move && StrictBars(*this, x))) || now < x.retreatUntil) {
                 Move(x, x.c.x + (x.c.x - threat->c.x), x.c.y + (x.c.y - threat->c.y), x.spec->run, true); Face(x, x.c.x + (x.c.x - threat->c.x), x.c.y + (x.c.y - threat->c.y));
                 if (now < x.retreatUntil && x.ctl == 0) t.retreatSec += TM::dt;
                 return;
@@ -1887,6 +1900,7 @@ namespace Sim {
                     if (x.ctl == 0 && x.act == Act::Block && x.actIaus) t.guardSec += TM::dt;
                     continue; }
                 if (x.act != Act::None) { x.act = Act::None; x.c.blocking = false; } Brain(b[i]); }
+            if (move && g_road == Road::Strict) for (const Ctl& sc : ctl) { Body& sb = b[static_cast<std::size_t>(sc.body)]; if (Up(sb)) StrictFeet(*this, sb); }
             if (env) EnvStep(*this);
             // tallies that integrate over time
             Body& pl = Player(); bool pressed = false; bool anyFoe = false, anyParty = false;
