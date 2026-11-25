@@ -289,7 +289,7 @@ The lab book must equal the game book first (L1). On top of that, these rows are
 |---|---|---|
 | Runes (Target Location with a projectile), every nature | nothing is placed, no lab model (MFO-B864) | H2 + M6 |
 | Location bursts | lands at the hand | H1 + M5 |
-| Walls (`IsWallShape`): Vanilla Wall of Flames, Frost, Storms. Tuxborn 6 and LoreRim 5 no-script impact rows | native drops them today, hazard value is untested in game | M3 field-run |
+| Walls (`IsWallShape`): Vanilla Wall of Flames, Frost, Storms. Tuxborn 6 and LoreRim 5 no-script impact rows | M3: native offers them now. The LAB still drops them on purpose (`Data.h` `Classify`): it has no footprint gate and its hazards never hurt the party, and the game scores those 0 | M3 field-run, then the footprint (`areaUnits`) and party hazard damage in the lab |
 | Self blasts: every Self, fire-and-forget hostile area spell (`Drop::SelfBlast`; counts in section 11) | blocked by ruling D2, so no book holds one. Nothing about them may be concluded | M2 + M4 |
 | Both-hands summons (the thralls) | CANDIDATES since M1, but the claim is filed on LEFT with one hand prepared (`BuffClaim`, `Loadout::Prepare`) and no both-hands cast under a claim was ever seen (S9 [pred]). Their rows stay out | S9 / C3 |
 | Reanimate (Dead Thrall) | card C5, not this plan | its own card |

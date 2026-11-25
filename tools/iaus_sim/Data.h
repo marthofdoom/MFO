@@ -564,6 +564,8 @@ namespace Sim {
             for (const J& x : fx) hostileArea |= Prune::HostileAreaEffect(x["hostile"].yes(), x["area"].num() > 0, false, false);
             in.selfBlast = Prune::IsSelfBlastPlacement(self, conc, e.nature == Prune::Nature::Offense || e.nature == Prune::Nature::Control, hostileArea, pl["hazHostile"].yes());
             if (Prune::IsPlacement(in)) { Prune::StaticIn st; st.nature = Prune::Nature::Buff; st.targetLocation = true; st.selfBlast = in.selfBlast; e.drop = Prune::StaticDrop(st); }
+            // LAB ONLY, differs from the game on purpose until the M3 field run (placed-spells-plan 7, MFO-B871): no lab footprint gate and no friendly fire for a wall
+            if (in.wall) e.drop = Prune::Drop::Placement;
             // cast/SpellSupport.cpp CastRoadUnsupported (Drop::Unanimated, tested before Placement as in StaticDrop): a Buff-kind Light aimed or at a location (Magelight).
             if (buffKind && !(conc && !self) && spellShape && anyLight && (dl == "Aimed" || in.targetLocationDelivery)) e.drop = Prune::Drop::Unanimated;
             if (summon && (!buffKind || !SummonRowsServed(fx, self))) e.drop = Prune::Drop::Unanimated;   // cast/BuffRoad.cpp SummonClaimUnservedWhy

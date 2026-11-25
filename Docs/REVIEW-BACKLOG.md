@@ -4076,3 +4076,15 @@ F4 SEV-5 spotAction at momentum 1 is not strictly flat: it switches off pruning 
 F5 SEV-5 "no heal candidate above" counts a heal in `actions` even when Decide vetoes it (cooldown, floor): a patient whose only in-reach heal is on a hard cooldown is not walked to for another. Intended reading of 'reaches', note only.
 F6 SEV-5 parallel vectors moveOnly/moveOnlySight invite F2(5): one struct.
 Off sim seed 991 fights 2 threads 8 beta1 + nightblade,healer,thief,wizard, v3 v4: byte identical (17408/20301/4682/5445 lines). fuzz.cpp kept: _localbuild/hmrev/fuzz.cpp
+
+### PLACED-M3 round 2 review on fda14930 (Opus). R2-1 fixed (lab drops walls until the field run), R2-3 and R2-4 open
+
+# ROUND 2 @fda14930 (Opus 5.5). VERDICT: DO NOT MERGE as is, R2-1 only (one lab line); native half OK to merge.
+F1-F8: all fixed or recorded (F2 party half + F7 in B871). 22 vs 64/3: 3 ft 66 vs 64, inside the 64 body pad; AreaUnits right. Inherit branch: EFIT feet, falls to the record. Floor 64: ok. FightingPartyOrItsOwn: main thread (BuildPass), handles held, only clears crime flag. wallMargin: hostile actors are never listed as bystanders, so dungeon fights are not starved. cullRange 6000 covers reach 4096 + margin.
+Merge-tree vs origin/main 1d052a3e: textually clean, tree 4d4addd881; harness of that tree 0 failed. MSVC of merged tree NOT built.
+R2-1 SEV-3: head's sim --env-test FAILS (126 checks, 1 failed: "placed: a wall is no IAUS candidate, a foe keeps it"; base passes). tools/list_balance/book_census.py:60 also still drops walls (lab != census). The author's M3 plan needs both or neither changed.
+R2-2 SEV-3 (before tune): lab wall entry has areaUnits 0 (Data.h:521; native SpellBook.cpp:363 sets 64+), so no splash_safe / foesInArea / LoF widening: lab streams walls at foes a party member melees, game scores 0. Hazards skip the party in the lab (World.h:1325). Value itself: IAUS book = native's (stream only); world damage exists (sim-pretune-plan item 6, iaus-sim-v4 16.3), ON only with --world v4, so the author's 80.80->80.10 (world v3, hazards off) was measured without it.
+Experiment (seed 1): Vanilla minus the 3 walls, v3 fights 1: base vs head baseline byte-identical (dec.us excluded) => every difference, knights included, is the three pool rows moving the RNG draws of kits/mates. v4 train places field books fights 2: no walls 75.98, walls hazards off 76.33, hazards on 76.40 (one seed, sign differs from v3 = noise scale).
+HANDLING: plan section 7 already excludes walls until the M3 field run. In Data.h Classify after IsPlacement: if (in.wall) e.drop = Prune::Drop::Placement (lab-only, labelled; foeDrop untouched). Fixes R2-1 and R2-2 for the tune, keeps EnvTest + census + baselines. Proof: env-test 126/0, Vanilla baseline == base. Footprint (areaUnits + party hazard damage) after field run.
+R2-3 SEV-4: Generate.cpp:629 WorthOf counts friends with safetyMargin, comment says "same test" (spellWorth.live 0 shipped).
+R2-4 SEV-5: outdoors, deer/wildlife not hostile within 1000 and unowned mounts close walls; log only.
