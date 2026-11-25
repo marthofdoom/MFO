@@ -3934,6 +3934,16 @@ Author: Harbinger serves a fire-once Reanimate spell only with kCastFlag_CorpseT
 - SEV-5 `ExitsAt` (the pooled spot's exits) still counts open directions; only the retreat kind has `CheckExit`.
 - SEV-5 `CheckExit` floods up to 64 times in one Generate unit when nothing passes. Harness "dearest unit" 1.3 ms of the 3 ms slice, host.
 
+### MOVE-S3: what `feat/move-s3` closed of the MOVE-S2 findings below (evidence: iaus-sim-v4.md 18.1)
+- F1 CLOSED: 48 fights a row, the vacuity guard counts fights that filed a place, 16 seeds pass (1, 4, 21 to 26, 31 to 38). Lost-sight's true rate at 200 fights is 97.5 and 94 percent. No rule was loosened.
+- F2 CLOSED: fixtures 4.7x to 2.3x, extracted places 2.3 to 2.5x to 1.7x, oracle env-ridge 5.1x to 2.25x, byte identical baselines.
+- F4 CLOSED: six peel rows and spot-test `peel-bow-in-hand`. Each of the three mutations (Intercepts, 2 x spotPeelU, KeptHolds) fails a row.
+- F5 CLOSED: the doorway is measured by geometry. PortalsAt ring off fails the pass arm.
+- F6 CLOSED: `Trust::Refused` and `MoveClaim::walks` (spot-test `blocked-spot`, `waiting-claim`). F8's cost half CLOSED (cached floods); its behaviour half (a big room on a dense mesh as its own exit, the drift) stays open.
+- OPEN: F3 (S5), F7, the heal move-only candidate.
+- SEV-4 (author, S3): a route's trust is read at points 128 units apart. A distrusted corner clipped between two points is missed.
+- SEV-4 (author, S3): the six static rows of `kTrustSigns`, and `moved-unwalked`, `unplanned-move`, `falling`, have rows and harness checks and no filler (G1 / G3 / M2).
+
 ### MOVE-S2: review findings on 409231ba (Opus, nothing above SEV-3). F1 and the heal finding are taken by the next slot B rounds
 
 PROVEN

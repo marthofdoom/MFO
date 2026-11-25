@@ -159,6 +159,8 @@ void  MovePass::Phase3(const PartyPicture&, const ClassGates&, const Tuning&, co
 
 #### S3. Trust
 
+**Built on `feat/move-s3`: `iaus-sim-v4.md` section 18, differences in 18.5.**
+
 - **Mechanism.** `native/iaus/EnvTrust.h` pure: `Trust::Of(region)`, the `kTrustSigns` table, decay, the clearing facts, and the two facts `spotRegionTrust` and `pathRegionTrust`. In the sim: the lived signs from the world's own leg ends, the "engine" walking true geometry while IAUS plans on a defective mesh, and a mesh that can change mid fight (13.3 says this is missing and two scenarios need it).
 - **Files.** New `native/iaus/EnvTrust.h` (and `.cpp` if it passes 150 lines). `PartyPicture.h` (the table), `Spots.cpp` (the two facts), `tools/iaus_sim/Env.h` (a stamped edit of a loaded place), `EnvWorld.h`, `Scenarios.h`, `harness.cpp`.
 - **Failure modes.** The 11-17 GATED lesson again: one false mark freezing a region. Every mark decays, a single lived sign never distrusts, and the scenario proves both.

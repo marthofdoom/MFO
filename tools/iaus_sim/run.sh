@@ -26,7 +26,7 @@
 #        [--loot-list <loot.json> (tools/list_balance/extract_loot.py; with --env-set <set>)] [--loot-museum <share>] [--loot-rule <name>=<v> | gate=old1117]
 #        [--env-set <set>/heldout] (the set's held-out places); the field side: tools/iaus_sim/calib_loot.py <run-dir> ...
 #        S2, the movement pass (movement-plan.md S2; needs --world v4): [--position-road off|point|pinned] (off by default; naming it also prints the cover / spot
-#        metrics) [--spots-replace <kind,...>] [--move-fault <name>] [--spot-test] (the seven scenarios of 8.5 and a fault variant of each)
+#        metrics) [--spots-replace <kind,...>] [--move-fault <name>] [--spot-test [--spot-fights N]] (the scenarios of 8.5 and of trust (8.9) and a fault variant of each, 48 fights an arm)
 #   <sim.json> comes from tools/list_balance (extract_world.py -> compile_world.py), default dir ~/.cache/mfo-list-balance/,
 #   never committed. Without --list the built-in fixture set runs (no game data).
 # SIM_CLITEST=1 runs the command-line assertions (backlog MFO-B710..B714, B755..B757) instead of a run and prints CLI-CHECKS PASS|FAIL.

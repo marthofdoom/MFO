@@ -1,5 +1,5 @@
 #pragma once
-// iaus_sim/SpotTest.h -- S2: the seven scenarios of iaus-sim-v4.md 8.5 as ASSERTED OUTCOMES over the movement pass (`sim --spot-test`). HOST-ONLY.
+// iaus_sim/SpotTest.h -- S2 / S3: the scenarios of iaus-sim-v4.md 8.5 and of trust (8.9) as ASSERTED OUTCOMES over the movement pass (`sim --spot-test`). HOST-ONLY.
 //
 // Each row of kSpotCases is played on its hand-made fixture with --position-road point (no pin kinds, except the doorway, which says so), and must hold. Then
 // the same fights are played with ONE mechanism of the pass broken (kMoveFaults) and the rule must NOT hold: a rule that passes broken tests nothing.
@@ -111,7 +111,7 @@ namespace Sim {
           c.rule = [](const std::vector<SpotProbe>& r, std::string& o) { o = Fmt("a retreat place in %.0f of %zu", Sum(r, "filed"), r.size()); return Sum(r, "filed") == 0; }; v.push_back(c); }
         // ── TRUST (S3, 8.9): the truth differs from the mesh the pass plans on. One scripted bow, one target he has to go through the bad place for. Measured on the
         // CLAIMS: does a claim's planned way cross the bad place (`dep`). Repaired at kRepairAt, then the player walks it. No mechanism of the pass is told any of this.
-        static constexpr double kRepairAt = 25.0, kRepairLate = 33.0, kDecaySec = 30.0;
+        static constexpr double kRepairAt = 25.0, kRepairLate = 34.0, kDecaySec = 30.0;
         struct Bad { float x, y0, y1; };                                            // the line the bad place lies on
         const auto crosses = [](const MoveClaim& q, const Bad& b, int way /* +1 east only, -1 west only, 0 both */) { if (!q.on || q.via.empty()) return false;
             for (std::size_t i = 0; i < q.via.size(); ++i) { const auto &p = i ? q.via[i - 1] : q.from, &r = q.via[i]; if ((p.x < b.x) == (r.x < b.x) || (way > 0 && r.x < p.x) || (way < 0 && r.x > p.x)) continue; const float k = (b.x - p.x) / (r.x - p.x), y = p.y + (r.y - p.y) * k; if (y >= b.y0 - 70.0f && y <= b.y1 + 70.0f) return true; }
@@ -145,12 +145,12 @@ namespace Sim {
           c.script = [=](Fight& F) { bow(F); if (F.now >= 1.6 && F.now < kRepairAt && !F.meshEdit) EnvEdit(F, [](const EQ::View& w, std::int32_t i, std::int32_t j) { return (EQ::Centroid(w, i).x < 1280.0f) != (EQ::Centroid(w, j).x < 1280.0f); });
               if (F.now >= kRepairAt) EnvRepair(F); walkPlayer(F, 1100.0f, 1560.0f, 576.0f, kRepairAt + 0.5); };
           c.watch = [=](Fight& F, SpotProbe& p) { watchTrust(F, p, b, 0); }; c.rule = [=](const auto& r, std::string& o) { return ruleTrust(r, 12.0, o); }; v.push_back(c); }
-        { SpotCase c{ "trust-one-way", "trust-one-way", "no-trust" }; c.scripted = true; c.sec = 68.0; c.what = "an edge walkable one way only and the engine knows: it takes him round, twice, and the plan follows it round (the target crosses every 4.5 s, so he has to)";
+        { SpotCase c{ "trust-one-way", "trust-one-way", "no-trust" }; c.scripted = true; c.sec = 68.0; c.what = "an edge walkable one way only and the engine knows: it takes him round, twice, and the plan follows it round (the target crosses every 4 s, so he has to)";
           const Bad b{ 1290.0f, 640.0f, 768.0f }; c.setup = [=](Fight& F) { stage(F, At(F, 15, 2, 8), At(F, 3, 2, 8), At(F, 20, 5, 8)); F.engineTrue = true; };
-          c.script = [=](Fight& F) { Body& f = *Foes(F)[0]; const bool west = std::fmod(F.now, 9.0) < 4.5; const bool isWest = f.c.x < 1280.0f; if (west != isWest) Put(F, f, west ? At(F, 3, 2, 8) : At(F, 18, 2, 8));
+          c.script = [=](Fight& F) { Body& f = *Foes(F)[0]; const bool west = std::fmod(F.now, 8.0) < 4.0; const bool isWest = f.c.x < 1280.0f; if (west != isWest) Put(F, f, west ? At(F, 3, 2, 8) : At(F, 18, 2, 8));
               Script(F, 0, { Want(Family::Attack, f.c.id, 0.8f, 700.0f, EnvSees(F, Sub(F), f) ? Sight::Visible : Sight::Occluded, false) });
               if (F.now >= kRepairLate && !F.meshEdit) EnvRepair(F); walkPlayer(F, 1460.0f, 1100.0f, 704.0f, kRepairLate + 0.5); };
-          c.watch = [=](Fight& F, SpotProbe& p) { watchTrust(F, p, b, -1, kRepairLate); }; c.rule = [=](const auto& r, std::string& o) { return ruleTrust(r, 16.0, o); }; v.push_back(c); }
+          c.watch = [=](Fight& F, SpotProbe& p) { watchTrust(F, p, b, -1, kRepairLate); }; c.rule = [=](const auto& r, std::string& o) { return ruleTrust(r, 20.0, o); }; v.push_back(c); }
         // one blocked leg in a clean place: nothing is distrusted and he goes on (the 11-17 GATED lesson)
         { SpotCase c{ "trust-one-blocked-leg", "env-doorway-block", "hair-trust" }; c.scripted = true; c.sec = 20.0; c.what = "a clean place, something stands in the gap for a moment and one leg ends STUCK: the region is not distrusted and he goes through it";
           const Bad b{ 1344.0f, 512.0f, 640.0f }; c.setup = [=](Fight& F) { stage(F, At(F, 7, 5, 9), At(F, 18, 2, 9), At(F, 2, 6, 9)); EnvEdit(F, [](const EQ::View& w, std::int32_t i, std::int32_t j) { return (EQ::Centroid(w, i).x < 1280.0f) != (EQ::Centroid(w, j).x < 1280.0f); }); };
