@@ -179,6 +179,8 @@ namespace MFO::Iaus {
         SpotPortalBusy,     // the walk goes through a doorway another member's chosen place stands in
         SpotServes,         // a movement action (retreat, regroup ...) served by a spot (1) or by standing still (0)
         BoostSpotCover,     // multiplier: from the spot he sees a foe that threatens an ally who has his place (cover each other)
+        SpotRegionTrust,    // (APPENDED, S3) how far the mesh round the spot is trusted (iaus/EnvTrust.h): 1 doubted, 2 distrusted. NOT APPLICABLE while trusted
+        SpotPathTrust,      // (APPENDED, S3) ... and the walk to it
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -576,6 +578,7 @@ namespace MFO::Iaus {
         Tri   laneCrossed = Tri::Unknown, portalBusy = Tri::Unknown, serves = Tri::Unknown;
         float exposure = -1.0f, rangeX = -1.0f, exits = -1.0f, allyDist = -1.0f, leashX = -1.0f;
         float detected = -1.0f, light = -1.0f;   // S4 hooks
+        float spotRegionTrust = -1.0f, pathRegionTrust = -1.0f;   // Trust::Level as a number, -1 while trusted (S3)
         bool  coversAlly = false;
         bool operator==(const SpotFacts&) const = default;
     };

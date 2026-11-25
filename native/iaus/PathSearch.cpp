@@ -106,7 +106,7 @@ namespace MFO::Iaus::Env {
             a_s.state[ci] |= kClosed; ++a_out.expanded;
             if (nd.tri == a_q.toTri) { found = true; break; }
             if (a_t.maxExpand > 0 && a_out.expanded >= static_cast<std::uint32_t>(a_t.maxExpand)) break;
-            const Tri& T = a_v.tris[ci]; const Vec3 P = a_s.entry[ci]; const float gT = a_s.g[ci], mT = TriMult(T, a_t);
+            const Tri& T = a_v.tris[ci]; const Vec3 P = a_s.entry[ci]; const float gT = a_s.g[ci], mT = TriMult(T, a_t) * (a_q.avoid.size() == n ? a_q.avoid[ci] : 1.0f);
             if (gT < a_t.blockPenalty) { const float h = Dist(P, a_q.to); if (h < bestH) { bestH = h; best = nd.tri; } }
             const Door* leaf = T.door >= 0 && a_v.doors[static_cast<std::size_t>(T.door)].leaf && a_v.doors[static_cast<std::size_t>(T.door)].state != DoorState::Open ? &a_v.doors[static_cast<std::size_t>(T.door)] : nullptr;
             for (int k = 0; k < 3; ++k) {
@@ -176,6 +176,12 @@ namespace MFO::Iaus::Env {
             a_s.portals.push_back({ l, r, tn });
         }
         Funnel(a_s.portals, runFirst, a_s.portals.size(), runFrom, goal, a_s.corridor.back().tri, Corner::Goal, a_out.pts);
+        // a straight piece through a place the search was told to avoid is not a shortcut (the walk round it was the point)
+        const auto dear = [&](const Vec3& a, const Vec3& b) {
+            if (a_q.avoid.size() != n) return false;
+            const float l = Dist(a, b);
+            for (float s = 32.0f; s < l; s += 64.0f) { const float k = s / l; const std::int32_t t = TriAt(a_v, { a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k, a.z + (b.z - a.z) * k }); if (t >= 0 && a_q.avoid[static_cast<std::size_t>(t)] > 1.0f) return true; }
+            return false; };
         // The corridor A* chose need not hold the straight line (its nodes are edge middles), so the funnel can leave a corner the
         // open floor does not need. Drop every corner the straight walk from the corner before it to the one after it clears.
         { Vec3 from = a_q.from; std::int32_t fromTri = a_q.fromTri; std::size_t w = 0;
@@ -183,7 +189,7 @@ namespace MFO::Iaus::Env {
               const PathPoint& c = a_out.pts[i];
               const bool last = i + 1 >= a_out.pts.size(), fixed = c.kind != Corner::Walk || last || a_out.pts[i + 1].kind == Corner::DropLand;
               if (!fixed) { const PathPoint& nx = a_out.pts[i + 1]; const Walk wk = WalkLine(a_v, fromTri, from, nx.p, a_q.who);
-                  if (wk.At()) continue; }   // skipped: the next corner is reached without it
+                  if (wk.At() && !dear(from, nx.p)) continue; }   // skipped: the next corner is reached without it
               if (w && std::fabs(a_out.pts[w - 1].p.x - c.p.x) < 0.5f && std::fabs(a_out.pts[w - 1].p.y - c.p.y) < 0.5f && std::fabs(a_out.pts[w - 1].p.z - c.p.z) < 8.0f && a_out.pts[w - 1].kind == Corner::Walk) --w;   // the same point twice
               a_out.pts[w++] = c;
               if (c.kind == Corner::DropLand) { from = c.p; fromTri = c.tri; }

@@ -291,7 +291,7 @@ namespace Sim {
         // S2, the movement pass, of the SUBJECT (iaus_sim/MoveWorld.h). All 0 while the road is off, except cover / exposure under --position-road off.
         // claims filed / of those a CHANGE of place while he still walked to another / reached / ended blocked / dropped by the engine / released; the path length he
         // was sent on; seconds a claim stood / walked; threat looks: seconds with a threat, of those no threat sees him, and the mean share of threats that do.
-        long   spotFiled = 0, spotChanges = 0, spotArrived = 0, spotBlocked = 0, spotDropped = 0, spotReleased = 0, spotKind[MFO::Iaus::kSpotKindCount] = {};
+        long   spotFiled = 0, spotChanges = 0, spotArrived = 0, spotBlocked = 0, spotDropped = 0, spotReleased = 0, trustMarks = 0, spotKind[MFO::Iaus::kSpotKindCount] = {};
         double spotPathLen = 0, spotClaimSec = 0, spotWalkSec = 0, threatSec = 0, coverSec = 0, exposedSec = 0;
         // ... of the pass itself (the whole party): windows / unfinished / a budget that was short (paths skipped, asks, spots, triples) / paths searched / rays asked
         long   moveWindows = 0, moveUnfinished = 0, movePathShort = 0, moveAskShort = 0, moveSpotShort = 0, moveTripleShort = 0, movePaths = 0, moveRays = 0;
@@ -421,6 +421,7 @@ namespace Sim {
         std::vector<Ctl> ctl;
         std::vector<Occluder> occ;
         // SIM V4: the environment (null = the plane of v2 / v3), this fight's door states and their stamp (every route cache keys on it)
+        std::shared_ptr<const MeshEdit> meshEdit; bool engineTrue = false;   // S3: the edited truth, and whose mesh the ENGINE routes on (false = the planner's own, as in every fight without a trust scenario: engine and plan read one navmesh, the body meets the truth)
         const SimEnv* env = nullptr; std::vector<EQ::Door> doors; std::uint64_t doorStamp = 0; double sanityAt = 0;
         void OpenDoor(std::int32_t i) { const std::uint32_t id = doors[static_cast<std::size_t>(i)].id; std::uint64_t h = 0x9E3779B97F4A7C15ULL;
             for (EQ::Door& d : doors) { if (d.id == id) d.state = EQ::DoorState::Open; h = SimEnv::Mix(h ^ static_cast<std::uint64_t>(d.state)); } doorStamp = h; }
