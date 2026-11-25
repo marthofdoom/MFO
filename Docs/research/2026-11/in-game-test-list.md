@@ -465,3 +465,9 @@ Any mage follower on Sentient AI or a gambit, DEV DLL. Judge one watched cast wi
 5. **Hold does not starve.** In the same state give him a second rule below the buff (a plain attack or a heal). PASS = the lower rule still acts while the buff is held (the hold is transparent).
 6. **Heal in the same gap keeps the instant road.** Same state, a heal rule on self or the player: it is cast at once with its `UNANIMATED road` line (marth's default until H-B and A3). FAIL = no heal at all while an ally is hurt.
 7. **AUTO buff and summon in the gap.** Same state: Cast (Auto) with Candlelight: `[cast-hold] ... held at 'auto-fan'`; a summon rule: `held at 'summon-oneshot'`; neither shows its UNANIMATED line.
+
+## Area guard M2 (`feat/placed-m2`; not field run; no setup beyond an area spell in a follower's book)
+1. **Town fight.** Any follower with an aimed area spell (Fireball class), a hostile in a town street with townsfolk close to it. PASS = `[area-guard] <follower>: area spell ... scores 0: bystander|guard <id> is N units from the centre`, he uses something without an area, nobody in the crowd is hit. FAIL = an area cast that hits a townsperson, or a bounty.
+2. **Open field.** Same follower, foes only. PASS = he still casts the area spell. The `picture is not readable` line may appear once at the start of a fight, never through it.
+3. **Stats line.** `[area-guard] since start` once a minute: `ready` close to `asks`, `worst` in microseconds small in a crowded town (report it: over 1000 us needs a look).
+4. **Horse and other followers.** A fight beside the player's horse or another mod's follower: the line names `mount` or `teammate`.

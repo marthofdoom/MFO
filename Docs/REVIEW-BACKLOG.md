@@ -3926,3 +3926,78 @@ Author: Harbinger serves a fire-once Reanimate spell only with kCastFlag_CorpseT
 - F5 SEV-5 OffenseCastFired matches (hand, spell) not target. Not reachable wrongly today: the gate runs only inside handPlan.inFlight (same rule, spell, target). Add c.target to the test if a second caller appears.
 - F6 SEV-5 a spent claim that lapses (6 s TTL, unrenewable) is re-filed by EnsureCastClaimLocked's aged-out branch and its Fired reason is lost. Reachable only when the gate does not run for > 6 s with the replay running (ChooseBuffRoad != Claim, i.e. controller gone, under an in-flight lap). The duration up-read still bounds it.
 - F7 SEV-5 Substrate.cpp: fireOnce is decided again at filing (main for summons). A bApmfCast flip between the worker's choice and the filing files the pair without the bit. Bounded by Harbinger's close on the fire.
+
+## feat/move-s2 (author notes, Opus 5.5, 2026-11-24; no review yet)
+- Closed from feat/move-s1 round 2: R3 (the flood's allocation). R1 stays (does not bite in the lab: phase 1 runs in one go, pins off). R2 stays (the sim always sends t).
+- SEV-3 (design gap, native) `Generate.cpp` drops a heal past its reach / occluded, so `heal_reach` never moves a healer to a patient he cannot reach (iaus-sim-v4.md 17.6 item 1).
+- SEV-4 (design gap, native) `spotAction` momentum read-back of 8.1 is not in `Decide` (17.6 item 2).
+- SEV-5 `ExitsAt` (the pooled spot's exits) still counts open directions; only the retreat kind has `CheckExit`.
+- SEV-5 `CheckExit` floods up to 64 times in one Generate unit when nothing passes. Harness "dearest unit" 1.3 ms of the 3 ms slice, host.
+
+### MOVE-S3: what `feat/move-s3` closed of the MOVE-S2 findings below (evidence: iaus-sim-v4.md 18.1)
+- F1 CLOSED: 48 fights a row, the vacuity guard counts fights that filed a place, 16 seeds pass (1, 4, 21 to 26, 31 to 38). Lost-sight's true rate at 200 fights is 97.5 and 94 percent. No rule was loosened.
+- F2 CLOSED: fixtures 4.7x to 2.3x, extracted places 2.3 to 2.5x to 1.7x, oracle env-ridge 5.1x to 2.25x, byte identical baselines.
+- F4 CLOSED: six peel rows and spot-test `peel-bow-in-hand`. Each of the three mutations (Intercepts, 2 x spotPeelU, KeptHolds) fails a row.
+- F5 CLOSED: the doorway is measured by geometry. PortalsAt ring off fails the pass arm.
+- F6 CLOSED: `Trust::Refused` and `MoveClaim::walks` (spot-test `blocked-spot`, `waiting-claim`). F8's cost half CLOSED (cached floods); its behaviour half (a big room on a dense mesh as its own exit, the drift) stays open.
+- OPEN: F3 (S5), F7, the heal move-only candidate.
+- SEV-4 (author, S3): a route's trust is read at points 128 units apart. A distrusted corner clipped between two points is missed.
+- SEV-4 (author, S3): the six static rows of `kTrustSigns`, and `moved-unwalked`, `unplanned-move`, `falling`, have rows and harness checks and no filler (G1 / G3 / M2).
+
+### MOVE-S2: review findings on 409231ba (Opus, nothing above SEV-3). F1 and the heal finding are taken by the next slot B rounds
+
+PROVEN
+- Road off: main merge-base binary vs branch binary, all classes, seed 5, fights 2, --world v2/v3/v4, 1 and 8 threads: baseline files BYTE IDENTICAL (44244/44260/51520 lines). msvc.log EXIT 0 (194/194). cli.log CLI-CHECKS PASS, EXIT 0.
+- Native: the changed files are Core.h (one t.spot default), MoveDump.h, MovePass.cpp, PartyPicture.h, Spots.cpp/h. Includers of those: only each other (+ TuningFile.cpp / Core.h by name). No MovePass caller in the DLL: inert. Generate.cpp is NOT touched (finding only).
+- Golden: regenerated in one commit only (409231ba). gcc -O2 replay 0 failed. REAL MSVC cl /O2 replay (msvc-wine, wine run of move_rows.exe): 0 failed, every case read. The branch docs record no MSVC replay and neither localbuild nor CI runs it; this run is the record.
+- Determinism with the road on: point 1 vs 8 threads, knight+evoker+warrior, byte identical.
+- Flood memory: touched list cleaned at next call, -1 closed marker consistent, resize safe on a smaller mesh. OK.
+- Executor: EnvMove/EnvTryStep on the true mesh (walls, doors, bodies); drift goes through WalkLine; a claim only clears nav.n. No teleport or wall path found. Locked door/closed door/island/one-way/ignored-wall/narrow traces (2 classes, 3 seeds): 0 blocked loops, spotBlocked/f max 0.05; stuck% 0.046 -> 0.010.
+- Ray budget: pass's own cap (32 facts, 24 spots, 64 pool, 80 paths) is compiled in, so the sim can not exceed it. mv.rays 1.1 a window, no short.
+MUTATIONS (4, native source copy, seeds 1 and 4)
+- CheckExit always true: both dead-end rows fail, 10 golden rows fail. Own-ray No removed: lost-sight fails, 2 golden. PortalsAt ring off: caught (portals fault "STILL HOLDS", 3 golden). Peel Intercepts guard off: NOTHING fails (spot-test 18/18 twice, golden 0).
+FINDINGS
+F1 SEV-3 SpotTest.h: the rules sit on their edge. Fresh seeds 21..26: 3 of 6 runs FAIL. 21 and 25: ridge "places reached 5" (needs 6) though 12/12 hit and 0.00 s blind; 23: lost-sight 9 of 12 hit (<80%), blind 0.54 s. Doc claims seeds 1-6, CI runs 1 and 4. So the pass rules were checked on a few seeds. Fix: 48+ fights a row, ridge vacuity guard should count fights that saw a filed place, lost-sight's real rate is about 80% so either the rule or the pass is wrong: measure it at 200 fights before tune.
+F2 SEV-3 cost. Fixtures, 720 fights, 1 thread: user 2.26 s off -> 10.05 s point = 4.4x (3.1 -> 14 ms a fight; MOVECOST 10.4). With --oracle (env-ridge, evoker, 2 fights): user 14.4 s -> 50.4 s = 3.5x, 620 windows a counted fight (rollouts copy the whole PartyPicture and re-run the pass). The doc's "5 / 13 ms a fight" hides that a fight itself is about 3 ms. Any budget of the tune/oracle must assume about 4x (fixtures) until the flood / PathTo cost is cut; extracted places not measured here.
+F3 SEV-3 oracle (17.6 item 5 as written): the oracle's subject holds no claim, so with the road on the gap is not a gap (env-ridge evoker went +3.81 -> -0.74). S5 must not read oracle gaps with the road on before this is fixed.
+F4 SEV-4 peel rules (Intercepts, 2 x spotPeelU, KeptHolds(Peel)) have no test that fails: mutation M3. Needs a move_rows row + an archer spot-test.
+F5 SEV-4 doorway-block meters "two in it" with PortalsAt itself, the function under test. With the ring off the pass row still says 0 two. Measure by geometry (both claim points within the gap).
+F6 SEV-4 MoveLegEnd clears the commit on BLOCKED/UNREACHABLE; kMarkPathBlocked then excludes nothing, so the next window can re-file the same spot (only EnvWorld retrySec paces it). Not seen in fixtures. S3 trust owns it, say so. Also any goal-less leg (nav.goalBody 0: give ground, run) that ends while a claim waits releases the claim.
+F7 SEV-4 parity: lab phase 1 is one go (native slices at 3 ms; worst window here 8.4 ms, so 1 slice at most 3), 3 rays a fact against up to 6, no lost answers. Lab kinder. Rays could be given an Unknown share like MoveTuning.dropShare. Plan items not built: sharedRadiusMargin / preemptSettle mirrors, calib_point.py (documented 17.6).
+F8 SEV-5 CheckExit floods 256 triangles; on dense meshes f.cut makes `far` small (0.8 x bound) so a big room can be its own exit; UnitOffer also calls it per member/action/spot (backlogged as "64 in one unit"). Drift adds up to 0.4 run speed on top of the brain's own step.
+S1 BACKLOG: R3 flood alloc FIXED. R1 (21.8 ms slices) OPEN, measured 4.5 to 8.4 ms worst window here with small parties, still over one 3 ms slice. R2 re-ask stamp OPEN in native (sim always sends t); must be closed before G2.
+HEAL FINDING (8): real in game. Generate.cpp:969 drops any heal whose recipient is past e.reach or Sight::Occluded (Actuation::HealInReach, same in the cast roads), and the ch.24 held-heal approach (CombatApproach.cpp) is built for a heal already held, so a patient who STARTS out of reach or round a corner gets no approach. heal_reach gets no ranked heal, so its weight can not be tuned: the tune would learn nothing. Do: a small native brief (own review) before S5: emit such a heal as a MOVE-ONLY candidate (scored as if in reach, never a Decide winner, never cast, exported only through TopRanked / MoveNoteRanked), gated so that shipped decisions stay byte identical when no pass asks. Safety: HealRefused must still apply. Then the healer scenario runs unscripted.
+
+### MOVE-S3: review findings on 6996d274 (Opus, nothing above SEV-3). R1 and R2 are fixed at the start of S4; R5 before G2
+
+R1 SEV-3 (determinism) MovePass.cpp UnitGenerate: partial_sort to max(geomPerGen 64, perGen 3), but the new `Trust::Refused -> continue` does not count in `tested`, so a checked kind with k refused spots in its prefix reads k entries of the UNSORTED tail (order implementation defined: gcc vs MSVC, golden/live parity). Fix: drop refused before the sort, or add refused.size() to the bound.
+R2 SEV-3 Trust::Crosses gate plane is only 16 u (aheadU/2) past where he stood and clearU 64 wide: PROVEN with unit program, a body that slides 30 u along a 45 degree wall clears its own true NoGround mark (marks 1 -> 0). Walking round a thin end does the same within 64. Never reaching "repeat" on an oblique wall is possible; my lab variants (starts 9,1 / 9,0 / 8,1) still recovered in 2.6 to 5.5 s, so not seen live. Before G2.
+R3 SEV-4 one crossing clears the whole 512 region: PROVEN, a LengthFar mark 540 u away walked over erased two true NoGround marks. Clear per mark (or marks within a radius).
+R4 SEV-4 independence: PROVEN one leg that goes LengthFar then STUCK = two signs = distrusted; two bodies stuck at one moment = distrusted at once. Rule says different signs, but one leg / one event should be one.
+R5 SEV-3 pre-G2 (Q4): LengthFar doubts every unpassed region of up to 16 points; in game engine routes differ routinely and two followers on one detour distrust all of them for 30 s (spots x0.02 = party stays). Mostly self-heals in 30 s. Rows PLACEHOLDER; needs field calibration before any caller.
+R6 SEV-4 vacuous scenario half: mutation "Walked clears nothing" PASSES spot-test 34/34: "used again within a decay of the walk" is satisfied by decay alone. "allroute" (passed bits ignored), "noexempt", "notrail" also pass spot-test. Harness rows catch all four (1,1,2,1 fails).
+R7 SEV-4 trust scenarios are one fight repeated: worst == mean on all seeds (2.6 s), so 48 fights / 16 seeds add no evidence there. Variant starts 8,1->18,5 and 9,1->13,6: distrusted + recovered, but "used again after repair" 0 of 12 (may be the route not crossing the gap; not traced).
+Q2 clipped corner: backlogged as SEV-4, agree. avoid ×6 softens it. Deviations 1 to 5: acceptable; 1 (0.02) makes R5 costlier.
+NOT DONE: cost sample (running bf849bgi1 output), cli/off4 read, R7 trace.
+
+### MFO-B869 (OPEN, author's own list for `feat/placed-m2`, 2026-11-24; `iaus/AreaCensus.h`, `iaus/AreaActors.*`)
+1. (SEV-4) `kAreaGuard.safetyMargin` 128 is a PLACEHOLDER sized from the cadence, no field number.
+2. (SEV-4) The build cost (actors x asking followers `IsHostileToActor` calls each 133 ms in a fight) is unmeasured in a crowded town: the `[area-guard] since start` line carries it.
+3. (SEV-4) An area cast picked while clear has no MFO re-check between the claim and the release; Harbinger ch.25 is the only guard there.
+4. (SEV-5) The lab leaves `SpellEntry::hostileArea` false and has no bystanders: a follower's hostile control area beside an ally scores in the lab and not in the game. Fill it from the extracted `placed` bits when the sim is next opened.
+5. (SEV-5) A summon that is not hostile to the caster closes every area beside it, his own included (the plan's definition). The field decides whether that is too strict for a conjurer.
+
+### PLACED-M2: review findings on 14968ab8 (Opus, nothing above SEV-3). F1 (crime hole), F3 and the scroll row go into the M3 round; F2 waits for marth
+
+VERDICT: MERGE (nothing above SEV-3).
+F1 SEV-3 AreaActors.cpp:125 hostility bit = IsHostileToActor ("would attack"); bounty / vampire / werewolf names guards + townsfolk, so they drop out of the table while attacking them is a crime (EngageOnSight.cpp:239ff, :250 crime-faction rule). Harbinger ch.25 uses the same predicate, misses it too. Not a regression. Fix: skip the bit when a->GetCrimeFaction() && !FightingParty(a) (EngageOnSight.cpp:234, same file-local test, currentCombatTarget resolves to player/teammate; s.foes still removes live foes by id, so add: foes list must not re-remove a crime-faction non-fighter) .
+F2 SEV-3 (ruling) AreaActors.cpp:122-127 party summons / player's horse are bystanders. Plan text says so; Harbinger ch.25 Bystander (CastGuard.cpp:319) excludes party-commanded + player-owned per marth 2026-11-02 "Bystanders only". But ch.25 LineOfFire Friendly (:311, area+64) already HOLDS aimed blasts near any non-hostile, summons included, so M2 mostly turns an unfired claim into a re-pick; extra = 128 margin. A conjurer whose atronach tanks: every aimed AoE at that foe closed. Ask marth.
+F3 SEV-4 cost, AreaActors.cpp:108-133: no distance cull, rows x casters IsHostileToActor (up to 64 casters). Estimate 1-3 us/call (2 combat-group lookups, faction reaction, a recursion for teammates): 40x3 ~0.1-0.4 ms; 100x10 ~1-3 ms per 133 ms. Fix: skip actors farther than ~6000 u from every caster BEFORE the hostility calls.
+F4 SEV-4 MFO has no VerifiedAddresses row for IsHostileToActor (36537/37537; ~25 existing callers); Harbinger has one. Pre-existing.
+F5 SEV-4 margin 128: ok as placeholder. Aimed recheck: ch.25 LineOfFire does re-measure per frame at release, non-hostile within area+64, so MFO-B869.3 is overstated when Harbinger is present and armed; absent = none.
+F6 SEV-5 mutations survive: (a) Generate.cpp:606 drop hits.bystanders from friends; (b) AreaCensus.h nearest -> farthest (log only); (c) kScrollOffense SplashSafe removed. Caught: NaN-as-clear, control-ally. (c) is a real untested consumer: add a scroll row.
+F7 SEV-5 ghosts count as bystanders (MFO-B111, no IsGhost row). Dead/disabled/deleted excluded; commanded foes resolve through commander in engine; teammates resolve to the player (disasm 0x6796b0).
+Freshness: no starvation. Tick gate requires pass t-1, so age<=1 in any run tick. Only Read answers NotReady when follower's lap falls on the first combat tick (or right after a pause = tick skipped anyway); re-read next lap <=1.3 s/10 followers. Wants TTL 60 covers it.
+Threads: leaf mutex, shared_ptr const, held NiPointers, Clear after StopPump: ok. Layouts via GetActorRuntimeData, ProcessLists 0x30/0x60 untouched by version: ok. 1.7.104 exe not unpacked here, not disassembled.
+Sim: BASELINE-IDENTICAL; simcmp.log's 292-398 diff is the dec.us timing column. Cons/enum unchanged; SplashSafe appended last on kControl, Off when open.
+merge-tree vs 8ae6f6c6: only Docs/STATUS.md conflicts (Generate/Catalogue/Core/Snapshot/Candidates/harness automerge). Not built merged.

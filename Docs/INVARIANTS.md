@@ -1331,7 +1331,9 @@ the worker calls `GetInventory`, `GetInventoryCounts`, `GetInventoryChanges`, `G
   high-process actor, anyone asked for), with each effect's source form, base MGEF, flags, duration, elapsed and
   magnitude, a summon's commanded-actor state, and the base MGEFs the engine's own `HasMagicEffect` answered yes
   for. SpellBook's foe mirror (`WantFoeFx` / `FoeFx`) is a view of it.
-- Both are immutable once published. A reader never waits on the main thread. A ref with no readable snapshot
+- **Bystanders: `AreaActors` (`native/iaus/AreaActors.h`, package M2).** The nearby actors and the followers each is hostile to.
+  The process lists and `IsHostileToActor` are walked on main only. Too old or never built = the area guard is CLOSED.
+- All are immutable once published. A reader never waits on the main thread. A ref with no readable snapshot
   answers **"not yet"** (a null view), is asked for, and the next tick has it.
 
 **The rules a change must keep.**

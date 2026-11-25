@@ -25,6 +25,8 @@
 #        [--loot-plan mixed|stands|walks-on|opens-chest|loots-too|faces-away] [--loot-wave mixed|off|<seconds>] [--loot-sec S] [--loot-guards N]
 #        [--loot-list <loot.json> (tools/list_balance/extract_loot.py; with --env-set <set>)] [--loot-museum <share>] [--loot-rule <name>=<v> | gate=old1117]
 #        [--env-set <set>/heldout] (the set's held-out places); the field side: tools/iaus_sim/calib_loot.py <run-dir> ...
+#        S2, the movement pass (movement-plan.md S2; needs --world v4): [--position-road off|point|pinned] (off by default; naming it also prints the cover / spot
+#        metrics) [--spots-replace <kind,...>] [--move-fault <name>] [--spot-test [--spot-fights N]] (the scenarios of 8.5 and of trust (8.9) and a fault variant of each, 48 fights an arm)
 #   <sim.json> comes from tools/list_balance (extract_world.py -> compile_world.py), default dir ~/.cache/mfo-list-balance/,
 #   never committed. Without --list the built-in fixture set runs (no game data).
 # SIM_CLITEST=1 runs the command-line assertions (backlog MFO-B710..B714, B755..B757) instead of a run and prints CLI-CHECKS PASS|FAIL.
@@ -54,7 +56,7 @@ if [[ -z "${SIM_NOBUILD:-}" ]]; then
     "${CXX:-g++}" -std=c++23 -O2 -pthread -Wall -Wextra -Wno-misleading-indentation -Wno-parentheses ${SIM_CXXFLAGS:-} \
         -DSIM_ENV_DIR="\"${SIM_ENV_DIR:-$ROOT/tools/iaus_sim/envs}\"" -include "$GEN/simknobs.h" -I "$P" -I "$GEN" -I "$ROOT/tools/iaus_sim/stub" -I "$ROOT/native" -I "$ROOT/tools" \
         "$P/iaus/Curves.cpp" "$P/iaus/Catalogue.cpp" "$P/iaus/ClassCurves.cpp" "$P/iaus/Score.cpp" \
-        "$P/iaus/Decide.cpp" "$P/iaus/Explain.cpp" "$P/iaus/Generate.cpp" "$P/iaus/EnvQuery.cpp" "$P/iaus/PathSearch.cpp" "$P/iaus/SpellWorth.cpp" \
+        "$P/iaus/Decide.cpp" "$P/iaus/Explain.cpp" "$P/iaus/Generate.cpp" "$P/iaus/EnvQuery.cpp" "$P/iaus/PathSearch.cpp" "$P/iaus/EnvTrust.cpp" "$P/iaus/SpellWorth.cpp" "$P/iaus/Spots.cpp" "$P/iaus/MovePass.cpp" \
         "$ROOT/native/classes/ClassTable.cpp" "$ROOT/tools/iaus_sim/RealClasses.cpp" \
         "$ROOT/tools/iaus_sim/sim.cpp" -o "$OUT"
 fi
@@ -139,6 +141,10 @@ if [[ -n "${SIM_CLITEST:-}" ]]; then
     # TargetEffect rows outright and today's game does not; today a spell fired into an immunity nobody can read is counted, and --seat-immunity seen ends that.
     chk "sim v4 world: a held-off spell costs the turn; --seats old refuses the rows ABI 46 seats; a fire that leaves nothing is counted (review F4, adopt-seats)" 'T="$(mktemp -d)"; R --world v4 --seats old --classes beta1 --baseline "$T/old" >/dev/null; R --world v4 --classes beta1 --baseline "$T/new" >/dev/null; R --world v4 --seat-immunity seen --classes beta1 --baseline "$T/seen" >/dev/null; nz() { grep -E "\\|$2=" "$1" | awk -F= "\$2 + 0 > 0" | wc -l; }; a="$(nz "$T/old" cs.heldTurns/f)"; b="$(nz "$T/old" cs.unseated/f)"; c="$(nz "$T/new" cs.unseated/f)"; d="$(nz "$T/new" cs.zeroFire/f)"; e="$(nz "$T/old" cs.zeroFire/f)"; f="$(nz "$T/seen" cs.zeroFire/f)"; g="$(nz "$T/new" cs.heldTurns/f)"; rm -rf "$T"; [[ "$a" -gt 0 && "$b" -gt 0 && "$c" == 0 && "$d" -gt 0 && "$e" == 0 && "$f" -lt "$d" && "$g" -gt 0 ]]'
     chk "sim v4 world: the solo walk on the fixtures: every trip with a route ends AT its goal, its height included (review F1)" 'R --solo-walk 60 | grep -q "WRONG 0 (0.000%), of them over or under the goal 0  off-mesh steps 0  => PASS"'
+    # S2 (movement-plan.md): the movement pass. Off by default: the three baseline checks above are the proof that nothing moved.
+    chk "move S2 + S3: the scenarios of 8.5 and of trust (8.9) hold and each fault variant fails its rule, at two seeds" 'R --spot-test --seed 1 | grep -q "^SPOT-TESTS PASS: 17 scenarios, 34 checks, 0 failed" && R --spot-test --seed 4 | grep -q "^SPOT-TESTS PASS: 17 scenarios, 34 checks, 0 failed"'
+    chk "move S2: the same fights at 1 thread and at 8 with the road on, and the road off is the run without the flag (its metrics aside)" 'T="$(mktemp -d)"; for n in 1 8; do "$OUT" --no-json --threads $n --world v4 --position-road point --classes knight,evoker --fights 4 --baseline "$T/$n" >/dev/null 2>&1; done; cmp -s "$T/1" "$T/8" && "$OUT" --no-json --threads 8 --world v4 --position-road off --classes knight,evoker --fights 4 --baseline "$T/off" >/dev/null 2>&1 && "$OUT" --no-json --threads 8 --world v4 --classes knight,evoker --fights 4 --baseline "$T/plain" >/dev/null 2>&1 && [[ -z "$(grep -v "^#" "$T/plain" | sort | comm -23 - <(grep -v "^#" "$T/off" | sort))" ]]; r=$?; rm -rf "$T"; [[ $r == 0 ]]'
+    chk "move S2: the road is in the world tag, t.spot rows are knobs, and a bad road / kind / fault / world is an error" '[[ "$(R --world v4 --position-road point --spots-replace kite --classes mage --seeds 1 | tail -1)" == *"+road=point+replace=kite  t2=all" && "$(R --list-params)" == *"t.moveDecisionSec t.spotPinKinds t.spotMomentum t.spotPreempt"* ]] && R --position-road nope | grep -q "position-road off|point|pinned" && R --world v4 --position-road point --spots-replace nope | grep -q "unknown kind" && R --position-road point --classes mage --seeds 1 | grep -q "need an environment" && R --world v4 --move-fault blind --classes mage --seeds 1 | grep -q "need --position-road"'
     # SIM V4 BATCH L (iaus-sim-v4.md 14): looting in the fight world
     chk "sim v4 loot: the loot fixtures are what their .txt says" 'python3 "$FX/make_fixtures.py" --check loot-room loot-backs loot-freeze loot-gate loot-town loot-shop loot-watch >/dev/null'
     chk "sim v4 loot: the 24 scenarios hold (three of them reproduce a fault of the builds before efd097dc)" 'R --loot-test | grep -q "^LOOT-TESTS PASS: 24 scenarios, 0 failed (3 of them reproduce a fault of the builds before efd097dc)"'

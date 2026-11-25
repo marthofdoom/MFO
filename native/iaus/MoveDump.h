@@ -4,6 +4,7 @@
 // The tuning is ShippedTuning() plus the case's own `u` lines (name value, SetTuningScalar). The profiles are NOT in it: the replayer maps Member::classId
 // (the harness: 0xFF no class, 1 its fixed test profile). A change of a t.spot* / spot curve rewrites the cases.
 // The PATH CACHE is not in it either: a writer clears PartyPicture::paths before the window it dumps (a cached path is up to t.spotFactMoveU old).
+// PartyPicture::sight is not in it: a dumped window ran on the shipped rules.
 // Walls and the grid are rebuilt from the mesh. TO ADD AN INPUT: a field at the END of its line's writer and reader, and raise kVersion.
 #include "iaus/MovePass.h"
 
@@ -77,6 +78,9 @@ namespace MFO::Iaus::MoveDump {
         for (const auto& [k, x] : a_pic.facts) { line("k"); o << k.first << k.second << x.sees << x.t << x.actorTri << x.actorAt << x.spotAt; }
         for (const auto& q : a_pic.carried) { line("q"); o << q.spot << q.p << q.viewer; }
         for (const auto& q : a_pic.late) { line("b"); o << q.spot << q.p << q.viewer << q.t << q.viewerAt << q.viewerTri; }
+        for (const auto& m : a_pic.trust.marks) { line("w"); o << m.sign << m.who << m.region << m.t << m.at << m.dx << m.dy << m.a << m.b; }   // S3
+        for (const auto& r : a_pic.trust.refused) { line("z"); o << r.who << r.spot << r.t; }
+        for (const auto& q : a_pic.trust.trail) { line("y"); o << q.p << q.t; }
         for (const auto& a : a_answers) { line("n"); o << a.spot << a.viewer << a.sees << a.t << a.viewerAt; }
         for (const auto& a : a_as) { line("x"); o << a.who << a.key << a.action << a.form << a.target << a.score; }
         f << "\nend\n";
@@ -108,6 +112,9 @@ namespace MFO::Iaus::MoveDump {
             else if (k == "k") { Move::PairKey key; Move::PairFact x; i >> key.first >> key.second >> x.sees >> x.t >> x.actorTri >> x.actorAt >> x.spotAt; P.facts[key] = x; }
             else if (k == "q") { Move::RayAsk q; i >> q.spot >> q.p >> q.viewer; P.carried.push_back(q); }
             else if (k == "b") { Move::RayAsk q; i >> q.spot >> q.p >> q.viewer >> q.t >> q.viewerAt >> q.viewerTri; P.late.push_back(q); }
+            else if (k == "w") { Trust::Mark m; i >> m.sign >> m.who >> m.region >> m.t >> m.at >> m.dx >> m.dy >> m.a >> m.b; if (m.sign >= Trust::Sign::kCount) { a_err = "sign: " + row; return nullptr; } P.trust.marks.push_back(m); P.trust.gen = 1; }
+            else if (k == "z") { Trust::Refusal r; i >> r.who >> r.spot >> r.t; P.trust.refused.push_back(r); }
+            else if (k == "y") { Trust::Trail q; i >> q.p >> q.t; P.trust.trail.push_back(q); }
             else if (k == "u") { const std::string n = i.Tok(); float x = 0.0f; i >> x; c->tuning.push_back({ n, x }); }
             else if (k == "n") { Move::RayAnswer a; i >> a.spot >> a.viewer >> a.sees >> a.t >> a.viewerAt; c->answers.push_back(a); }
             else if (k == "x") { Expect e; i >> e.who >> e.key >> e.family >> e.form >> e.target >> e.score; c->expect.push_back(e); }

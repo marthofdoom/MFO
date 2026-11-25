@@ -123,6 +123,10 @@ namespace Sim {
     struct LootRef { EQ::Vec3 p, on; std::int32_t tri = -1; float navDist = 0; std::uint32_t id = 0; std::uint8_t kind = 0, baseSig = 0; bool owned = false, locked = false; std::uint16_t count = 0; std::string key, name; };
     struct LootSpot { EQ::Vec3 a, b; bool flag = false; };   // a fixture's guard (a to b), bystander or body (flag: hostile at death)
 
+    // A STAMPED EDIT OF A LOADED PLACE, one fight's own (S3): the TRUTH changes while the fight runs (a link goes, a patch is found under a wall, and comes back),
+    // the planner's copy does not. The place itself is shared by every fight and never written. Made by EnvEdit (EnvWorld.h), dropped with Fight::meshEdit = null.
+    struct MeshEdit { std::vector<EQ::Tri> tris; std::vector<EQ::Wall> walls; EQ::Grid grid; std::uint64_t stamp = 0; };
+
     struct SimEnv {
         std::string name, cls, set, file; bool interior = true, pool = true; std::uint64_t hash = 0;   // hash: of the file's bytes (the library hash of a run is built from these)
         std::vector<EQ::Vec3> verts;

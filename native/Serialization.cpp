@@ -24,6 +24,7 @@
 #include "CrimeProbe.h"
 #include "SelfStatus.h"
 #include "logistics/InvSnapshot.h"   // InvSnap::Clear (INVARIANTS #84)
+#include "iaus/AreaActors.h"         // AreaActors::Clear
 #include "iaus/EffectMirror.h"       // EffectMirror::Clear   // ResetAllState: drop the poisoned-state mirror
 #include "iaus/PerkEffects.h"        // PerkEffects::Clear (FormIDs are reused across loads)
 #include "iaus/Engine.h"      // IAUS card I6: ResetAllState clears the Minds ...
@@ -1212,6 +1213,7 @@ namespace MFO {
         SelfStatus::Clear();   // the poisoned-state mirror (gambit conditions): a pre-load answer must not survive the load
         InvSnap::Clear();        // INVARIANTS #84: the worker's inventory snapshots (FormIDs are reused across loads); after StopPump + MainThread::Clear
         EffectMirror::Clear();   // ... and its active-effect mirrors
+        AreaActors::Clear();     // ... and the bystander picture (M2)
         PerkEffects::Clear();    // ... and the perk-effect tables (1dfcuabd2pk)
         // IAUS card I6 (runtime only, never saved; after StopPump like every clear here): the Minds / readouts /
         // source notes, the spell-book mirror (its generation bump drops a refresh in flight) and the gather's

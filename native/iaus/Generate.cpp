@@ -1,6 +1,7 @@
 // iaus/Generate.cpp -- the PURE candidate generator (contract in iaus/Generate.h). Card I4.
 // Standard headers only: tools/iaus_harness/run.sh builds this file with the host compiler.
 #include "iaus/Generate.h"
+#include "iaus/AreaCensus.h"   // M2: who an area hits
 
 #include "iaus/Disengage.h"   // card G3: "has a foe found him" (the seam to G2 Layer 1)
 #include "iaus/Estimate.h"
@@ -601,12 +602,8 @@ namespace MFO::Iaus {
             float foes = -1.0f, friends = -1.0f;
             if (e.nature == Prune::Nature::Offense && e.areaUnits > 0.0f) {   // the same area test the candidate's foesInArea / splashSafe make
                 const Combatant& centre = e.selfDelivery ? x.s.self : a_target;
-                int inArea = 0;
-                for (const Combatant* o : a_foes) if (Between(*o, centre) <= e.areaUnits) ++inArea;
-                int hurt = 0;
-                const float reachOut = e.areaUnits + (e.selfDelivery ? 0.0f : Estimate::kFireBodyPad);
-                for (const auto& a : x.s.allies) if (Between(a, centre) <= reachOut) ++hurt;
-                foes = static_cast<float>(inArea); friends = static_cast<float>(hurt);
+                const AreaHits hits = Estimate::AreaCensus(x.s, a_foes, centre, e.areaUnits, e.selfDelivery ? 0.0f : Estimate::kFireBodyPad);
+                foes = static_cast<float>(hits.foes); friends = static_cast<float>(hits.allies + hits.bystanders);
             }
             const Estimate::SpellIn in = Estimate::MakeSpellIn(e, a_target, x.s, x.t.spellWorth, foes, friends);
             return Estimate::SpellWorthOn(e, a_target, x.s, x.t.spellWorth, in, x.t.concChannelSec);
@@ -916,17 +913,18 @@ namespace MFO::Iaus {
                         }
                         if (e.areaUnits > 0.0f) {
                             const Combatant& centre = e.selfDelivery ? s.self : *foe;
-                            int inArea = 0;
-                            for (const Combatant* o : a_foes)
-                                if (Between(*o, centre) <= e.areaUnits) ++inArea;
-                            bool safe = true;   // marth: never splash the party (his own blast does not hit him)
+                            // marth: never splash the party (his own blast does not hit him) and, M2, never a bystander: ONE reader (iaus/AreaCensus.h).
                             // 11-17b: a blast at the TARGET reaches a body past its area (Estimate::kFireBodyPad, the ch.25 cast guard's area + 64); his own does not
-                            const float reachOut = e.areaUnits + (e.selfDelivery ? 0.0f : Estimate::kFireBodyPad);
-                            for (const auto& a : s.allies)
-                                if (Between(a, centre) <= reachOut) { safe = false; break; }
+                            const AreaHits hits = Estimate::AreaCensus(s, a_foes, centre, e.areaUnits, e.selfDelivery ? 0.0f : Estimate::kFireBodyPad);
                             c.f.hasArea = true;
-                            c.f.foesInArea = static_cast<float>(inArea);
-                            c.f.splashSafe = safe;
+                            c.f.foesInArea = static_cast<float>(hits.foes);
+                            c.f.splashSafe = hits.allies == 0;
+                            // Every offense area is guarded; a control area only when an effect of it is hostile (Harmony's calm is not), and then for allies too.
+                            const bool control = e.nature == Prune::Nature::Control;
+                            if (!control || e.hostileArea) {
+                                c.f.areaGuardOk = hits.BystandersSafe() && !(control && hits.allies > 0);
+                                if (!hits.BystandersSafe()) x.out.areaBlocked.push_back({ e.form, foe->id, hits.blind ? 0u : hits.firstBystander, hits.firstKind, hits.firstDist, e.areaUnits });
+                            }
                         }
                         if (e.nature == Prune::Nature::Offense) {   // S11b: the reader's answer, blended in where it KNOWS the cast (live 0: this block changes nothing)
                             if (const Estimate::Worth w = WorthOf(x, e, *foe, a_foes); w.known) {

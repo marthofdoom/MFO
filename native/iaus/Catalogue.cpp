@@ -85,7 +85,7 @@ namespace MFO::Iaus {
             "buff_foes", "perks", "consumable_worth", "spell_perks", "hand_lost", "heal_rate",   // batch 3 (review F7: the old name threat was FoeThreat's; every appended name is unique)
             "spot_path", "spot_sight", "spot_exposure", "spot_fire_line", "spot_range", "spot_path_exposed", "spot_exits", "spot_ally_dist",
             "spot_hostile_area", "spot_leash", "spot_climb", "spot_drop", "spot_detected", "spot_light", "spot_foe_reach", "spot_lane",
-            "spot_portal_busy", "spot_serves", "spot_cover",
+            "spot_portal_busy", "spot_serves", "spot_cover", "spot_region_trust", "spot_path_trust",
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -439,6 +439,9 @@ namespace MFO::Iaus {
                 at(Cons::SpotPortalBusy) = Bin(1.0f, 0.2f);
                 at(Cons::SpotServes) = Bin(0.4f, 1.0f);
                 at(Cons::BoostSpotCover) = Bin(1.0f, 1.1f);
+                static constexpr std::array<std::array<float, 2>, 3> trust{ { { 0.0f, 1.0f }, { 1.0f, 0.8f }, { 2.0f, 0.02f } } };   // distrusted: under staying where he is even without sight (compensated about 0.04), which hands him back to the engine. Not a veto: a mark decays
+                at(Cons::SpotRegionTrust) = Piece(trust);
+                at(Cons::SpotPathTrust) = Piece(trust);
             }
             at(Cons::BashNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
             // regroup need: the largest of three reasons, see Input. Under 0.05 there is no reason: veto.
@@ -612,7 +615,7 @@ namespace MFO::Iaus {
                 { Cons::CooldownSoft, 1 }, { Cons::FoeThreat, 1.5f }, { Cons::BoostCaster, 1 },
                 { Cons::FoeControlled, 1 }, { Cons::WillWork, 1 }, { Cons::TargetCond, 1 },
                 { Cons::FoeCountControl, 1 }, { Cons::Affordable, 1 }, { Cons::MpReserve, 0.5f }, { Cons::ClassFit, 1 },
-                { Cons::ControlWorth, 1 }, { Cons::BoostSpellPerks, 1 },
+                { Cons::ControlWorth, 1 }, { Cons::BoostSpellPerks, 1 }, { Cons::SplashSafe, 1 },
             };
             constexpr U kHeal[] = {
                 { Cons::HealReach, 1 }, { Cons::Los, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 },
@@ -771,7 +774,10 @@ namespace MFO::Iaus {
             case Cons::TargetCond:    return f.targetCond == Tri::No ? 0.0f : 1.0f;
             case Cons::AlreadyActive: return B(!f.alreadyActive);
             case Cons::HandFree:      return B(f.handFree);
-            case Cons::SplashSafe:    return (f.hasArea || !f.splashSafe) ? B(f.splashSafe) : In::Off();   // 11-17b: a blocked line of fire (no area) vetoes too
+            case Cons::SplashSafe:
+                if (!f.areaGuardOk) return B(false);   // M2: a bystander in the area (AreaCensus.h)
+                if (c.family == Family::CastControl) return In::Off();   // control reads the area guard alone; its line of fire is the willWork note (Candidates.cpp g_fireRefused)
+                return (f.hasArea || !f.splashSafe) ? B(f.splashSafe) : In::Off();   // 11-17b: a blocked line of fire (no area) vetoes too
             case Cons::Exploit:       return f.resist;
             case Cons::ClassFit:
                 // Ruling Q34. On-class: not applicable (no shading), unless the strict reading is on and this is
@@ -944,7 +950,7 @@ namespace MFO::Iaus {
             case Cons::SpotPath: case Cons::SpotSight: case Cons::SpotExposure: case Cons::SpotFireLine: case Cons::SpotRange: case Cons::SpotPathExposed:
             case Cons::SpotExits: case Cons::SpotAllyDist: case Cons::SpotHostileArea: case Cons::SpotLeash: case Cons::SpotClimb: case Cons::SpotDrop:
             case Cons::SpotDetected: case Cons::SpotLight: case Cons::SpotFoeReach: case Cons::SpotLane: case Cons::SpotPortalBusy: case Cons::SpotServes:
-            case Cons::BoostSpotCover: return In::Off();
+            case Cons::BoostSpotCover: case Cons::SpotRegionTrust: case Cons::SpotPathTrust: return In::Off();
             case Cons::kCount:        break;
             }
             return In::Off();

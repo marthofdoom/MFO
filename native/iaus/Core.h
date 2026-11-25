@@ -179,6 +179,8 @@ namespace MFO::Iaus {
         SpotPortalBusy,     // the walk goes through a doorway another member's chosen place stands in
         SpotServes,         // a movement action (retreat, regroup ...) served by a spot (1) or by standing still (0)
         BoostSpotCover,     // multiplier: from the spot he sees a foe that threatens an ally who has his place (cover each other)
+        SpotRegionTrust,    // (APPENDED, S3) how far the mesh round the spot is trusted (iaus/EnvTrust.h): 1 doubted, 2 distrusted. NOT APPLICABLE while trusted
+        SpotPathTrust,      // (APPENDED, S3) ... and the walk to it
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -378,7 +380,7 @@ namespace MFO::Iaus {
         float spotEyeU = 110.0f;                 // the eye over the floor, geometry rays only
         float spotHighU = 96.0f;                 // high ground stands this far over the target
         float spotPortalU = 180.0f;              // a walk edge between two walls narrower than this is a doorway: one body
-        float spotPortalStandU = 60.0f;          // a point this near to it stands in it
+        float spotPortalStandU = 100.0f;         // a point this near to it stands in it. A gap one square (128) deep is ONE doorway, both its edges (at 60 two bodies stood in it)
         float spotExitU = 500.0f;                // a route out must lead this far
         float spotPeelU = 250.0f;                // a peel spot lies this near to the middle between attacker and ally
         float spotArriveU = 90.0f;               // inside this of a committed spot he has arrived
@@ -481,6 +483,7 @@ namespace MFO::Iaus {
         bool  alreadyActive = false;
         bool  handFree = true;            // HealStandsOnHand / CastInFlightOnHand on the needed hand
         bool  splashSafe = true;          // no party member inside area of the target
+        bool  areaGuardOk = true;         // M2 (AreaCensus.h): no bystander in a hostile area and the picture is readable (Control: no party member either). Read by splash_safe
         // element and area
         float resist = 0.0f;              // target's resist AV for the spell's element; 0 = none / non-elemental
         bool  hasArea = false;
@@ -576,6 +579,7 @@ namespace MFO::Iaus {
         Tri   laneCrossed = Tri::Unknown, portalBusy = Tri::Unknown, serves = Tri::Unknown;
         float exposure = -1.0f, rangeX = -1.0f, exits = -1.0f, allyDist = -1.0f, leashX = -1.0f;
         float detected = -1.0f, light = -1.0f;   // S4 hooks
+        float spotRegionTrust = -1.0f, pathRegionTrust = -1.0f;   // Trust::Level as a number, -1 while trusted (S3)
         bool  coversAlly = false;
         bool operator==(const SpotFacts&) const = default;
     };

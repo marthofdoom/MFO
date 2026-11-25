@@ -1529,3 +1529,113 @@ Conjurations are nearly all `TargetLocation`, and native and the lab both drop t
 
 - **Conjurations never reach IAUS** (`iaus/Prune.h:93`, filled at `iaus/SpellBook.cpp:253`). By data: Vanilla 14 of 14 taught, Tuxborn 307 of 311, LoreRim 204 dropped. The design rule (iaus-design.md section 2) names "runes and other Target Location spells", and a summon is caught by the delivery. It has its own cast road, so the reason for the rule (where to put it) does not hold.
 - **`HasImpactHazard` (`cast/Archetype.cpp:214`) calls a missed bolt's burn mark a wall.** In Vanilla: Firebolt, Flames, Frostbite, Fireball, Ice Spike, Ice Storm, Incinerate, the Icy Spear, Expel / Banish / Command Daedra read shape Wall, and IAUS drops Wall as Placement. In lists whose spells carry a Script effect (Tuxborn and most of LoreRim) the shape is ScriptRider, tested first, so they are kept. The lab does not model this: it drops `TargetLocation` only, so its VANILLA world offers spells the game's IAUS would drop.
+
+## 17. The movement pass in the sim's world (movement-plan.md S2, branch `feat/move-s2`, 2026-11-24)
+
+Off by default. `--world v4` without the flag compares with 0 metrics changed against the three baselines, at 1 and at 8 threads.
+
+### 17.1 Where things are
+
+| What | Where | To change it |
+|---|---|---|
+| Switches, the mover's numbers, the fault variants, the per-fight state | `tools/iaus_sim/Move.h` | a number: `MoveTuning`. A fault: one row of `kMoveFaults` |
+| The window, the rays, the claim, the executor | `tools/iaus_sim/MoveWorld.h` | an input of the picture: `MoveFill`. An event: where its mark is set (`MoveFill`, `MoveLegEnd`) |
+| The scenarios of 8.5, asserted | `tools/iaus_sim/SpotTest.h`, `sim --spot-test` | one row of `SpotCases` |
+| Hooks | `World.h` (`StepWorld`, `Brain`, `Feet`, `Move`), `EnvWorld.h EnvLegEnd`, `Policy.h` (the ranking, `--spots-replace`) | |
+| Metrics | `sim.cpp Metrics`: `cover%`, `exposed%`, `spot/f`, `spotChange/f`, `spotLen`, `spotBlocked/f`, `claim%`, `toSpot%`, `sk.<kind>`, `mv.*` (budgets) | |
+
+CLI: `--position-road off|point|pinned`, `--spots-replace <kind,...>`, `--move-fault <name>`, `--spot-test`. Naming the road (also `off`) prints the cover and spot metrics. The road is in the world tag, so a compare across roads is refused. `MOVECOST` on stderr is host time.
+
+### 17.2 How it runs
+
+One window is `MoveDecisionSec`. At its start the picture is filled, frozen and phase 1 runs in one go. The ray asks are cast at an even rate across the window, by the true geometry at that moment, and each answer carries its time and the viewer's place. At the end phase 3 runs and the claims change. An event only sets a mark.
+
+A claim is ch.24 point and hold: he walks by the sim's own mover at run speed (same routes, doors, bodies and leg ends), a blade fights a foe in reach on the way, and then his own movement stays inside the radius. Retreat, flee, hide, back-off, step, regroup, give ground and the hold row keep their precedence, and a member under one of them is a body the pass plans around. A leg that ends BLOCKED or UNREACHABLE is the engine dropping the claim. STUCK only marks him. Past the leash the claim waits and the pass is told.
+
+### 17.3 What it changed in S1's files (golden regenerated once)
+
+- The Dijkstra flood allocated one float a triangle a call. It keeps one array a thread now (review R3).
+- `peel` was offered to a bow, and for an attacker shooting from across the place. A warrior stood half way to a tower archer for the whole fight. Now: melee, taunt or control only, the attacker within 2 x `t.spotPeelU` of the ally, and a kept peel is asked again.
+- A retreat place needs `CheckExit`: a place farther on that he reaches before any foe. Counting open directions called a pocket room a way on.
+- A place he stands on counts as unseeing when his own ray says so. The point may see while he, inside the radius, does not.
+- A doorway one square deep has two edges on two triangles. Both bodies got a place in it. `PortalsAt` looks one triangle round, and `t.spotPortalStandU` is 100 (was 60).
+- `PartyPicture::sight`: the geometry rays' rules are an input, so the lab can switch a layer off.
+
+### 17.4 The scenarios (`--spot-test`, 12 fights an arm, seeds 1 to 6 checked)
+
+| Scenario | Rule | Result | Fault | With the fault |
+|---|---|---|---|---|
+| lost-sight-firing-spot | hits within 15 s in 80 percent, at most 1.5 s a fight on a place without sight | 10 of 12, 0.50 s | blind | 5 of 12, 15.8 s |
+| ridge-self-occlusion | the same | 12 of 12, 0.00 s | terrain | 5 of 12, 6.7 s |
+| tower-stairs, blade | beside him on the top within 20 s in 90 percent, at most 1 s below him | 12 of 12, 0.00 s | stay-holds | 2 of 12, 15.0 s |
+| tower-stairs, archer | hits from below, never on the top | 12 of 12, 0 on the top | blind | 0 of 12 |
+| above-through-wall (scripted) | no window decided for the foe no road leads to | 0 of 696 | reach | 696 of 696 |
+| doorway-block (scripted, pinned road) | the doorway is held, never by two | 12 of 12, 0 | portals | two in 12 of 12 |
+| healer-round-corner (scripted) | he reaches and sees the patient within 12 s | 12 of 12 | no-heal | 0 of 12 |
+| dead-end-retreat, a way on (scripted) | never sent into the pocket | 0 of 12 | exits | 4 of 12 |
+| dead-end-retreat, none (scripted) | no retreat place offered | 0 of 12 | exits | 12 of 12 |
+
+Scripted: his ranking is replaced by a fixed one. The rule is then about the place.
+
+### 17.5 Measured
+
+The pass costs 5 ms a fight in extracted Tuxborn places and 13 ms in the hand-made fixtures on a loaded host (0.12 and 0.27 ms a window). Paths: the gate is not worse with the road on (fixtures 1 cell failing off, 3 on, of 105. Tuxborn 2 off, 1 on, of 32. The bounds are placeholders). U on the 14 environment scenarios is within 1 point of the road off except `trust-ignored-wall` (+6.8) and `env-heal-corner` (-4.0). Every weight and curve is S1's placeholder. S5 searches them.
+
+### 17.6 Open, for the next package
+
+1. **A heal that does not reach is no candidate.** `Generate.cpp` drops a heal whose recipient is past its reach or occluded, so the pass never hears of it and `heal_reach` can only improve a heal that already works. The healer scenario is scripted for that reason. A fix belongs in native (a candidate scored as if he stood where it works, handed to the pass only) and is not in S1 or S2.
+2. **`spotAction` is not read back.** 8.1 says the action facet gives the pass's action its momentum bonus. `Decide` has no such input. A place chosen for his second action does not make him take it.
+3. The mirrors of `t.sharedRadiusMargin` and `t.preemptSettle` (plan S2) are not built. They are casting rules, and would move every baseline with the road off.
+4. `calib_point.py` waits for a line format: G0b's exerciser has not merged.
+5. The oracle's own subject has no ranking in the picture, so it holds no claim. Its rollouts copy and run the pass for the others. S5.
+6. The sim runs phase 1 in one go. A party of ten on a 16k mesh with pins would not finish in the game's window (S1 review R1), so the lab is kinder there. Pins are off and the lab's parties are small.
+
+## 18. Trust, and the S2 review's findings (movement-plan.md S3, branch `feat/move-s3`, 2026-11-24)
+
+Road off: `--world v2`, `v3` and `v4` baselines are byte identical with main at 1 and 8 threads. The native pass has no caller in the DLL.
+
+### 18.1 The S2 findings
+
+- **F1.** The spot test plays 48 fights an arm (`--spot-fights`), and the vacuity guard counts fights that filed a place. At 200 fights lost-sight hits within 15 s in 195 (seed 1) and 188 (seed 23): the misses are cast claims that close unfired, not places. The 80 percent rule stands and was not loosened. 16 seeds pass.
+- **F2.** User CPU, road on against off, 1 thread, four classes, 480 fights: fixtures 4.7x before, 2.3x now. `i_Skyrim-0213A0` 2.6x, now 1.7x. `x_Darkend-000D62_-2_-10` 2.3x, now 1.7x. `i_Clockwork-52F496` 2.3x, now 1.7x. Oracle env-ridge 5.1x, now 2.25x. What was cut: edge lengths of the mesh once a stamp, a body that has not moved keeps its flood and its ways out, a spot's ways out and its exit flood once a stamp, a member's candidate points once a window, foes flooded only when kite or retreat is asked with somebody on him, and phase 1's memory dropped once it is done (rollouts copy the picture). Byte identical: four point / pinned baselines, two of them in extracted places, before and after.
+- **F4, F5.** Peel rows in `move_rows.cpp` and `peel-bow-in-hand`; the doorway by geometry. Each mutation fails its row.
+- **F6.** Below.
+
+### 18.2 Where things are
+
+| What | Where | To change it |
+|---|---|---|
+| Signs, marks, levels, what clears them, the log line | `native/iaus/EnvTrust.h/.cpp` | a sign: one row of `kTrustSigns`. A number: `Rules` |
+| The two facts, the route price | `MovePass.cpp FillStatic`, `Freeze` (`avoid`), `Catalogue.cpp` | the curve `trust` |
+| The lived signs | `MoveWorld.h MoveTrustLeg`, `MoveTrustWalk` | |
+| A mid-fight edit of the truth, the engine on the true mesh | `Env.h MeshEdit`, `EnvWorld.h EnvEdit / EnvRepair`, `Fight::engineTrue` | |
+| Scenarios | `SpotTest.h` | |
+
+### 18.3 How it works
+
+One lived sign doubts a region (0.8 on the spot's and the route's score, 1.5x on the route's search). A repeat, or a second sign, distrusts it (0.02, 6x). Marks last 30 s. A walk across the mark, in its direction, or a stamp change clears it. The pass reads the table as `Freeze` copied it. While a place is trusted neither fact applies, so scores and the older golden cases are what they were (the golden file gained three cases and lost no line).
+
+The three steps of 8.9: spots and routes that do not depend on the region win by the facts and by `avoid`. The player's own trail makes a spot trusted. Else no spot is filed and he is the engine's again.
+
+F6: a leg that ended BLOCKED or refused is not filed again on that spot for that member for 10 s (`Trust::Refused`). A leg ends a claim only when the step was the claim's own.
+
+### 18.4 The scenarios (48 fights an arm, 16 seeds)
+
+| Scenario | Defect, whose mesh the engine routes on | Result | Off arm |
+|---|---|---|---|
+| trust-ignored-wall | a wall the mesh does not know, engine on the same mesh | recovered 2.6 s after the first sign | 21 s (to the repair) |
+| trust-buried-patch | a patch under a wall the rays see, the same mesh | 2.6 s | 21 s |
+| trust-missing-link | a link goes at 1.6 s, engine on the truth | 0 s (stuck, then refused, two signs at once) | 21 s |
+| trust-one-way | engine on the truth, the target changes rooms every 4 s | 9 s (the second trip distrusts, the third is planned round; 17 s in a few fights whose second trip measured nothing) | 22 s |
+| trust-one-blocked-leg | something stands in the gap for a second | nothing distrusted, his claim takes him through | `hair-trust`: never through within 15 s |
+| blocked-spot, waiting-claim | F6 | hold | `no-memory`, `any-leg` fail |
+
+The first four also hold: the place is used again within one decay of the repair and the player's walk, osc/min under 8 (worst seen 0), one log line a region and level. False marks in ordinary fights: 0.003 a fight on the fixtures, 0.023 in the Tuxborn places.
+
+### 18.5 Differences from the plan
+
+1. 8.9 says a distrusted region is priced "so that only stay here is worse". Built: staying wins (0.02). At 0.15 a shooter without sight kept being sent into the wall, and step 3 (hand him back) never came.
+2. "The player walks through the region" clears: built stricter, he has to cross the mark's own place in its direction. A walk elsewhere in 512 units proves nothing about the wall.
+3. The engine's mesh is a switch of the scenario. Ignored wall and buried patch: engine and plan read one mesh and the body meets the truth (STUCK). Missing link and one way: the engine routes on the truth (refused, length far).
+4. The static signs have rows and no filler (G1). Moved-unwalked, unplanned-move and falling likewise (no such event in the lab).
+5. Two scenarios are not in `Scenarios.h`: a new scenario there moves the v4 baseline, which had to stay byte identical.

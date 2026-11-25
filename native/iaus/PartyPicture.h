@@ -11,10 +11,12 @@
 //   an event that frees a commit ......... Mark
 #include "iaus/Core.h"
 #include "iaus/EnvQuery.h"
+#include "iaus/EnvTrust.h"
 
 #include <array>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <set>
 #include <utility>
 #include <vector>
@@ -102,6 +104,7 @@ namespace MFO::Iaus::Move {
         int   pathSamples = 4;       // points of a walk tested for exposure
     };
     inline constexpr MoveBudget kMoveBudget{};
+    inline constexpr std::size_t kExitFloods = 256;   // memory only: past it the cache is emptied
     // What a budget cost this window. The pass counts, the holder logs (once per fight).
     struct MoveCounts { std::uint32_t spotsDropped = 0, pathsSkipped = 0, asksShort = 0, asksCarried = 0, triplesDropped = 0, generated = 0, paths = 0, triples = 0,
         unfinished = 0,                                // Phase3 ran before Phase1 was done
@@ -113,15 +116,26 @@ namespace MFO::Iaus::Move {
         bool reachable = false; float length = 0.0f, climb = 0.0f, drop = 0.0f;
         Env::Vec3 from; std::array<Env::Vec3, 8> at{}; std::uint8_t nAt = 0;
         std::array<std::uint64_t, 6> portals{}; std::uint8_t nPortals = 0;
+        std::array<Env::Vec3, 16> via{}; std::uint8_t nVia = 0;   // the walk as points at most 128 apart (farther on a long one), its end the last: what trust reads
     };
     struct PathKey { FormID who = 0; std::int32_t fromTri = -1; SpotKey to = 0; std::int32_t toTri = -1; bool actor = false; auto operator<=>(const PathKey&) const = default; };
 
+    // CACHES OF EXACT INPUTS (S3, the cost of S2). Nothing here changes a result: each value is the one a fresh computation gives, for the same inputs to the last
+    // bit, and all of it is dropped when the view's stamp moves. A copied picture (a rollout) shares them; a shared one is never written (Own()).
+    struct MeshFacts { std::vector<Env::Vec3> cen; std::vector<std::array<float, 3>> in, out; };   // per triangle: its middle, and per edge the way middle -> edge middle -> the neighbour's middle
+    struct ExitMemo { float exitU = -1.0f; std::vector<std::uint16_t> open; };                     // per spot point (KeyOfPoint), for a plain Walker: the open octants (OpenOctants), 0xFFFF = not worked out
+
     // The pass's working memory for one window. Nothing outside MovePass.cpp / Spots.cpp reads it.
+    struct SpotPoint { SpotKey key = 0; Env::Vec3 p; std::int32_t tri = -1; float walk = 0.0f; };
     struct Work {
         enum class Stage : std::uint8_t { Flood, Generate, Merge, Place, Select, Offer, Queue, Paths, Asks, Done } stage = Stage::Done;
         std::size_t cursor = 0;
         struct Flood { FormID who = 0; std::vector<std::pair<std::int32_t, float>> d; float bound = 0.0f; bool cut = false; [[nodiscard]] float At(std::int32_t a_tri) const; };   // sorted by triangle. < 0 = not reached, so at least `bound` away
-        std::vector<Flood> memberFlood, foeFlood;      // memberFlood by party index (empty for who does not decide), foeFlood by foe index
+        struct Walked { FormID who = 0; std::shared_ptr<const Flood> f; [[nodiscard]] const Flood& Get() const { static const Flood none; return f ? *f : none; } };
+        std::vector<Walked> memberFlood, foeFlood;     // memberFlood by party index (empty for who does not decide), foeFlood: the foes whose walk is asked
+        // CheckExit's flood of a spot, by (spot, WalkerBits) and for its exact point and reach: the same for every member, action and window of one stamp
+        struct ExitFlood { Env::Vec3 p; float radius = -1.0f; std::shared_ptr<const Flood> f; };
+        using ExitFloods = std::map<std::pair<SpotKey, std::uint32_t>, ExitFlood>;
         struct Hit { Spot s; std::int32_t rank = 0; };
         std::vector<Hit> hits;                         // what the generators found; after Stage::Merge one per key
         // A spot is SHARED, what it is good for is not: a kind is a claim about ITS member, action, target and threats. Every pooled spot is asked again per
@@ -129,6 +143,7 @@ namespace MFO::Iaus::Move {
         struct Offer { std::int32_t spot; std::uint32_t member; std::uint8_t action; std::uint32_t kinds; };
         std::vector<Offer> offers;
         [[nodiscard]] std::uint32_t Offered(std::int32_t a_spot, std::uint32_t a_member, std::uint8_t a_action) const;   // 0 = not his
+        std::vector<std::vector<SpotPoint>> points;    // by party index: the candidate points of his gather, once for all his (action, kind) units
         struct GenUnit { std::uint32_t member, action, kind; };
         std::vector<GenUnit> gen;
         struct PathUnit { std::uint32_t member; std::int32_t spot; FormID actor; std::int32_t near; };   // spot < 0: the walk to the actor (target reachability)
@@ -148,12 +163,24 @@ namespace MFO::Iaus::Move {
         std::vector<Area>   areas;
         std::vector<LightAt> light;
         RoadCaps caps;
+        Env::SightTuning sight;                        // the geometry rays' rules (what is worth asking). Shipped = Env::kSightTuning; the sim's sight layers are switches
+        // THE TRUST TABLE (S3). The holder writes it whenever it lives something (Trust::Leg, Note, Walked), and takes `log` to print. The pass reads the copy
+        // Freeze makes, so nothing that happens between Freeze and Adopt changes a window.
+        Trust::Table trust;
+        Trust::Table trustNow;                         // frozen
+        std::vector<float> avoid;                      // per triangle: what a route pays there (1 = plain). Empty while everything is trusted
+        std::uint32_t trustGen = 0;
         // carried across windows
         std::map<PairKey, PairFact> facts;
         std::map<PathKey, PathFact> paths;
         std::vector<RayAsk> carried;                   // wanted, not answered: asked first next window
         std::vector<RayAsk> late;                      // filed in an earlier window, not answered yet, oldest first: an answer is still taken
         std::vector<std::uint8_t> wallVert;            // per vertex: an end of a Wall edge (the doorway test), for envStamp
+        std::shared_ptr<const MeshFacts> mesh;         // for envStamp
+        std::shared_ptr<ExitMemo> exitMemo;
+        mutable std::shared_ptr<Work::ExitFloods> exitFlood;   // bounded (kExitFloods); copied before a write while another picture shares it
+        struct Still { FormID who = 0; Env::Vec3 p; std::int32_t tri = -1; std::uint32_t bits = 0; float radius = -1.0f; std::shared_ptr<const Work::Flood> flood; float exitU = -1.0f; std::uint8_t open = 0; };
+        std::vector<Still> still;                      // a body that has not moved at all: its walk and its ways out are last window's
         std::uint32_t window = 0;
         // this window
         std::vector<Spot> pool;                        // sorted by key

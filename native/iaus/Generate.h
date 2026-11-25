@@ -58,6 +58,9 @@ namespace MFO::Iaus {
         bool  spellsHold = false;          // Postures: a Mage-line class (ClassGate::casterLine) with an affordable kept offense / control spell -> no melee / silver posture candidate wins
         bool  healRefused = false;         // Casts: a concentration / touch heal was dropped because its recipient is in a foe's reach and would not survive (the heal safety rule)
         std::vector<std::pair<std::uint32_t, std::uint32_t>> fireBlocked;   // (spell form, foe id) pairs refused this lap for a party member in the line of fire; Candidates remembers them
+        // M2 (AreaCensus.h): the area casts a bystander closed this lap (bystander 0 = the picture was not readable), for the [area-guard] line
+        struct AreaBlocked { std::uint32_t spell = 0, foe = 0, bystander = 0; AreaKind kind = AreaKind::Person; float dist = 0.0f, radius = 0.0f; };
+        std::vector<AreaBlocked> areaBlocked;
         std::vector<SpellTarget> capQueued;   // fix/spell-worth F2: (spell, foe) pairs the BOOK's level cap would bar and WillWork has not answered: kept this lap, asked for the next (NoteDecision)
         std::array<std::uint16_t, kFamilies> perFamily{};   // candidates per family (the over-cap WARN, tests)
         // P1 / P2 drops, for the generation log line: spells dropped as unaffordable, off-class, two-handed with a
