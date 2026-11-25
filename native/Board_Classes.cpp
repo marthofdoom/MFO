@@ -334,7 +334,7 @@ namespace MFO::Board {
                     ImGui::PopID();
                     if (armed) ImGui::PopStyleColor();
                 }
-                // placed-spells D2 (marth 11-24): a spell the AI is blocked from for now is shown greyed with the reason, never taught from this page.
+                // placed-spells D2 (marth 11-24), narrowed by M4 to a self hazard (Blizzard, the circles): a spell the AI is blocked from for now is shown greyed with the reason, never taught from this page.
                 for (const auto& t : who->teachableSpells) {
                     if (!t.iausSelfBlast) continue;
                     ++listed;

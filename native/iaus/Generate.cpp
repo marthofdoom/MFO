@@ -891,6 +891,9 @@ namespace MFO::Iaus {
                         const Combatant* foe = x.top[ti];
                         if (foe->noApproach) continue;   // 11-17: a foe kept past the chase cap is a threat read, never a cast target (spell reach 0 would not veto it)
                         if (e.undeadOnly && !foe->undead) { ++x.out.droppedTarget; continue; }   // its own target rule (FoeBarred's)
+                        // M4 (placed-spells-plan 3.3): a SELF blast is centred on HIM, so the foe it is for must stand inside its radius (the range curve's 1.15 x slack is for a
+                        // spell that is aimed: this one lands nowhere else). A foe past it is no target (not a candidate); the same unit as the census (units, centre to centre).
+                        if (e.selfDelivery && e.areaUnits > 0.0f && !(Finite(foe->dist, 1.0e9f) <= e.areaUnits)) { ++x.out.droppedTarget; continue; }
                         // marth 2026-11-13 ("all effect spell detection"): a spell whose lingering effects would all merely replace ones live on
                         // THIS foe (same base MGEF, or a keyword dispel: SpellBook's FoeFx mirror) is invalid until they run out.
                         if (FxAllReplaced(e.lingerFx, foe->liveFx)) { ++x.out.droppedTarget; continue; }

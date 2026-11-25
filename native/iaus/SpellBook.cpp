@@ -218,6 +218,7 @@ namespace MFO::Iaus::SpellBook {
             const char* explosionSrc = "none";
             float units = 0.0f;                   // Prune::BlastUnits: the radius IAUS uses, 0 = no area
             bool  hostileArea = false;            // an effect that is hostile by its own flag AND has an area of its own (Prune::HostileAreaEffect)
+            float hostileUnits = 0.0f;            // M4: the radius of THOSE effects' own areas (EFIT feet -> units, and the explosion that carries the damage), 0 = none
         };
         Blast BlastOf(RE::SpellItem* a_sp, const Actuation::SpellArchetype& a_arch) {
             Blast b;
@@ -233,7 +234,14 @@ namespace MFO::Iaus::SpellBook {
                 if (!base) continue;
                 bool payload = note(base->data.explosion, "effect");
                 if (const auto* proj = base->data.projectileBase) payload |= note(proj->data.explosionType, "projectile");
-                b.hostileArea |= Prune::HostileAreaEffect(base->IsHostile(), eff->effectItem.area > 0, false, payload);   // the impact hazard: SpellArchetype::hostileImpact
+                const bool hostileEffect = Prune::HostileAreaEffect(base->IsHostile(), eff->effectItem.area > 0, false, payload);   // the impact hazard: SpellArchetype::hostileImpact
+                b.hostileArea |= hostileEffect;
+                if (hostileEffect) {   // M4: the radius of the HOSTILE effect alone (a benign effect's larger area is not where the harm lands). EFIT area is in FEET.
+                    float r = Prune::AreaUnits(static_cast<float>(eff->effectItem.area));
+                    for (const auto* ex : { base->data.explosion, base->data.projectileBase ? base->data.projectileBase->data.explosionType : nullptr })
+                        if (ex && std::isfinite(ex->data.radius) && ex->data.radius > r && (eff->effectItem.area > 0 || ex->data.damage > 0.0f || ex->formEnchanting != nullptr)) r = ex->data.radius;
+                    if (std::isfinite(r) && r > b.hostileUnits) b.hostileUnits = r;
+                }
             }
             // With an EFIT area any explosion may enlarge it (the larger radius is the safe one for the never-splash
             // rule); without one only a payload explosion counts (MFO-B661).
@@ -294,9 +302,7 @@ namespace MFO::Iaus::SpellBook {
             pl.rune      = a_arch.shape == Actuation::SpellShape::Rune;
             pl.wall      = a_arch.shape == Actuation::SpellShape::Wall;
             pl.tlBurst   = a_arch.shape == Actuation::SpellShape::TLBurst;
-            pl.selfBlast = Prune::IsSelfBlastPlacement(selfDelivery, a_sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration,
-                                                       out.nature == Prune::Nature::Offense || out.nature == Prune::Nature::Control,
-                                                       BlastOf(a_sp, a_arch).hostileArea || a_arch.hostileImpact, a_arch.hazardHostile);   // interim, see Prune.h
+            pl.selfBlast = Prune::IsSelfHazardBlock(selfDelivery, a_sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration, a_arch.hazardHostile);   // M4: only the hazard arm stays out, see Prune.h
             pl.summon    = in.summon;
             st.targetLocation = Prune::IsPlacement(pl);
             st.selfBlast = pl.selfBlast;
@@ -357,6 +363,12 @@ namespace MFO::Iaus::SpellBook {
             e.meleeBuff = arch.row == Actuation::EngineRow::Armor || arch.row == Actuation::EngineRow::Cloak ||
                           arch.shape == Actuation::SpellShape::Cloak;
             e.areaUnits = blast.units;
+            // M4 (placed-spells-plan 3.3): a SELF blast is centred on him and hits where ITS HOSTILE EFFECT's area reaches, so that radius (not a benign effect's larger one) is
+            // the area the guard counts, the foes-in-area read and the "foe is inside" gate use. An impact hazard on the hostile effect widens it to its footprint.
+            if (e.selfDelivery && blast.hostileArea && blast.hostileUnits > 0.0f) {
+                e.areaUnits = blast.hostileUnits;
+                if (arch.hostileImpact && std::isfinite(arch.impactHazardUnits) && arch.impactHazardUnits > e.areaUnits) e.areaUnits = arch.impactHazardUnits;
+            }
             // M3 (placed-spells-plan 3.2): a WALL's area is the footprint of the hazard it drops where the stream lands (the larger of that and any blast), so the
             // ONE area guard and the foes-in-area count read it like any other area. Its EFIT area is 0 and its hazard is no explosion, so before this a wall had none.
             e.wall = arch.shape == Actuation::SpellShape::Wall;
