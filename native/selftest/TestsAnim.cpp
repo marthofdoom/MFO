@@ -49,8 +49,12 @@ namespace MFO::SelfTest {
         constexpr RE::FormID kFlameAtronach = 0x000204C3, kFamiliar = 0x000640B6, kOakflesh = 0x0005AD5C, kCandlelight = 0x00043324,
                              kWardLesser = 0x00013018, kAbMagicka = 0x00105F16;   // AbHighElfMagicka (constant ability)
         // A spell-casting foe for the ward (field 11-24c: a melee mudcrab is no threat, so the engine's own Ward item said NO and no ward ever fired).
-        // Skyrim.esm NPC_ EncBandit01MagicArgonianM (verified in the master 2026-11-24, tools/esp_inspect.py: a bandit mage whose spell list holds
-        // Healing, Lesser Ward, Oakflesh and two more); a plain base form of the master, load-order agnostic.
+        // Skyrim.esm NPC_ EncBandit01MagicArgonianM (verified in the master 2026-11-24, tools/esp_inspect.py). Its spell list is NOT on the record
+        // itself: ACBS template flags 0x0FBE, TPLT 00039D31, and the 0x08 bit takes the spells from that template; the list there is the same
+        // plus LSpellBandit01FireFrostShock, so the foe does cast. Not essential, unique or protected; respawns; level 1; no VMAD; BanditFaction;
+        // no crime faction, so no crime and no guards (inhabited places are refused anyway); not recruitable. Its loot goes with it when it is
+        // disabled and deleted (the player may loot it first, harmless). It hits the player by design. Whether the engine's Ward item then says YES
+        // is unproven. A plain base form of the master, load-order agnostic.
         constexpr RE::FormID kCasterFoe = 0x000C3C9F;
 
         double NowMs() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); }

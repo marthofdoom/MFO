@@ -30,9 +30,9 @@ namespace MFO::SelfTest {
     namespace {
 
         // Skyrim.esm local ids, verified against the master's own records with tools/esp_inspect.py (2026-11-10).
-        constexpr RE::FormID kHealing     = 0x00012FCC;   // SPEL Healing (self, fire-and-forget, Restoration)
+        constexpr RE::FormID kHealing     = 0x00012FCC;   // SPEL Healing (self, CONCENTRATION, cost 12, Restoration; SPIT castType 2, read 2026-11-24)
         constexpr RE::FormID kFlames      = 0x00012FCD;   // SPEL Flames (concentration, Destruction)
-        constexpr RE::FormID kFastHealing = 0x0002F3B8;   // SPEL FastHealing (concentration self heal, Restoration)
+        constexpr RE::FormID kFastHealing = 0x0002F3B8;   // SPEL FastHealing (self, FIRE AND FORGET, cost 73, Restoration; SPIT castType 1, read 2026-11-24)
         constexpr RE::FormID kOakflesh    = 0x0005AD5C;   // SPEL Oakflesh (self Armor)
         constexpr RE::FormID kWardLesser  = 0x00013018;   // SPEL WardLesser (self Ward)
         constexpr RE::FormID kCourage     = 0x0004DEE8;   // SPEL Courage (aimed influence)
@@ -118,17 +118,27 @@ namespace MFO::SelfTest {
             auto* pc = RE::PlayerCharacter::GetSingleton();
             return std::max(pc ? a_sp->CalculateMagickaCost(pc) : 0.0f, a_sp->CalculateMagickaCost(a_who));
         }
-        constexpr float kCostFFCasts = 3.0f, kCostConcSeconds = 8.0f;   // the pool the judging needs: two heals and a top-up, a channel of >= 3 s plus the settle
-        const char* CostPre(Ctx& c, RE::FormID a_local) {
+        constexpr float kPoolSettleSec = 2.0f;   // elapsed run seconds before the pool is judged (the lent ability's effect goes live)
+        constexpr float kCostFFCasts = 1.0f, kCostConcSeconds = 8.0f;   // the pool the judging needs: ONE heal (the row is limited to one cast), a channel of >= 3 s plus the settle
+        // The heal is chosen by its casting type AT RUN TIME (a load order may override either record), never by which constant is which.
+        const char* CostPre(Ctx& c, bool a_concentration) {
             if (!CostParity::Active()) return "bFollowerSpellCostParity on and the six cost GMSTs read ([costparity] ACTIVE at startup)";
-            RE::FormID sp = 0;
-            if (!V(a_local, sp)) return "the Skyrim.esm heal spell resolvable";
             if (c.inCombat) return "out of combat (the runner starts its own fight)";
-            c.s->set[0] = { sp };
-            return nullptr;
+            const auto want = a_concentration ? RE::MagicSystem::CastingType::kConcentration : RE::MagicSystem::CastingType::kFireAndForget;
+            // the cheapest qualifying vanilla self heal first: Healing (12), then Fast Healing (73)
+            for (const RE::FormID local : { kHealing, kFastHealing }) {
+                RE::FormID sp = 0;
+                if (!V(local, sp)) continue;
+                auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(sp);
+                if (!spell || spell->GetCastingType() != want) continue;
+                c.s->set[0] = { sp };
+                return nullptr;
+            }
+            return a_concentration ? "a Skyrim.esm self heal that is a concentration spell (Healing / Fast Healing as loaded)"
+                                   : "a Skyrim.esm self heal that is a fire-and-forget spell (Healing / Fast Healing as loaded)";
         }
-        const char* CostFFPre(Ctx& c) { return CostPre(c, kHealing); }
-        const char* CostConcPre(Ctx& c) { return CostPre(c, kFastHealing); }
+        const char* CostFFPre(Ctx& c) { return CostPre(c, false); }
+        const char* CostConcPre(Ctx& c) { return CostPre(c, true); }
         // The pool this test needs on this follower (0 = the spell is not resolvable). Worker read.
         float CostNeed(Ctx& c) {
             auto* sp = c.s->set[0].empty() ? nullptr : RE::TESForm::LookupByID<RE::SpellItem>(c.s->set[0][0]);
@@ -142,6 +152,9 @@ namespace MFO::SelfTest {
             if (CostNeed(c) > MaxMag(c.follower))
                 if (const auto ab = VanillaForm(kAbMagicka)) r.spells.push_back(ab);
             r.rows.push_back(Row(Vocab::kCondSelfHpBelow, Vocab::kActCastSelf, c.s->set[0][0], 0.95f));
+            // fire-and-forget: ONE bill is judged (kCostFFCasts), a second cast would clamp the pool; a 600 s row cooldown stops the row after one cast
+            if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(c.s->set[0][0]); sp && sp->GetCastingType() != RE::MagicSystem::CastingType::kConcentration)
+                r.rows.back().cooldownTenths = kMaxCooldownTenths;
             AddFightRows(r);
             r.spawn.on = true;
             r.spawn.hurtPct = 45.0f;
@@ -160,19 +173,22 @@ namespace MFO::SelfTest {
             return o.empty() ? "none" : o;
         }
         // n[0] last pre-event pool, n[1] max seq at start, n[2] pool just before the first event, n[3] its time (ms), n[4] sum P, n[5] sum E,
-        // n[6] events, n[7] last event ms. b[0] init, b[1] events seen, b[2] some event did not apply parity.
+        // n[6] events, n[7] last event ms. b[0] init, b[1] events seen, b[2] pool judged.
         Step CostFFStep(Ctx& c) {
             auto&            s  = *c.s;
             const RE::FormID sp = s.set[0][0];
             const double     pool = Mag(c.follower);
             const auto       ev = CostParity::DevEvents();
             if (!s.b[0]) {
-                if (const auto why = CostPoolShort(c); !why.empty()) return Step::Skip(why);
-                s.b[0] = true;
+                s.b[0] = true;   // the event baseline is taken at once: a cast inside the settle wait below is still counted
                 for (const auto& e : ev) s.n[1] = std::max<double>(s.n[1], e.seq);
                 s.n[0] = pool;
                 s.n[3] = NowMs();
                 return Step::Continue();
+            }
+            if (!s.b[2] && c.elapsed >= kPoolSettleSec) {   // G3: the lent ability's constant effect may not be live on the first step after the ack; judge the pool after ~2 s
+                if (const auto why = CostPoolShort(c); !why.empty()) return Step::Skip(why);   // (not a wait: a cast inside the 2 s is still sampled)
+                s.b[2] = true;
             }
             double sumP = 0, sumE = 0, last = 0, topDelta = 0, topSpent = 0;
             int    cnt = 0;
@@ -223,17 +239,20 @@ namespace MFO::SelfTest {
 
         std::vector<std::pair<double, double>> g_cs;   // concentration samples (ms, pool); WORKER-only, one run at a time per test
         // b[0] init, b[1] first event seen, n[1] max seq, n[2] index of the sample before the first event, n[4] last channel-open ms,
-        // n[5] pool then.
+        // n[5] pool then. b[2] pool judged.
         Step CostConcStep(Ctx& c) {
             auto&            s  = *c.s;
             const RE::FormID sp = s.set[0][0];
             const double     pool = Mag(c.follower);
             const auto       ev = CostParity::DevEvents();
             if (!s.b[0]) {
-                if (const auto why = CostPoolShort(c); !why.empty()) return Step::Skip(why);
                 s.b[0] = true;
                 g_cs.clear();
                 for (const auto& e : ev) s.n[1] = std::max<double>(s.n[1], e.seq);
+            }
+            if (!s.b[2] && c.elapsed >= kPoolSettleSec) {   // G3, as CostFFStep
+                if (const auto why = CostPoolShort(c); !why.empty()) return Step::Skip(why);
+                s.b[2] = true;
             }
             g_cs.emplace_back(NowMs(), pool);
             float parity = 0, engine = 0;

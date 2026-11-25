@@ -419,7 +419,7 @@ namespace MFO::SelfTest {
         // while it is absent the ids below are cleared once. To retest a test again after a later fix: add its id here and bump the tag.
         constexpr const char*      kRetestMarker = "_retest.1124c";
         constexpr std::string_view kRetestIds[]  = { "anim.summon_iaus", "anim.summon_gambit", "anim.fire_once", "anim.party_gap_conc", "buff.animated_claim_road",
-                                                     "bound_bow.fires", "costparity.fireforget", "costparity.concentration", "g0b.cover", "g0b.doorway" };
+                                                     "bound_bow.fires", "costparity.fireforget", "costparity.concentration", "g0b.cover" };
         void ApplyCodeRetest() {
             std::lock_guard lk(g_mx);
             if (g_results.contains(kRetestMarker)) return;

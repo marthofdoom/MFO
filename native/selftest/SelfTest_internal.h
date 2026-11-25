@@ -56,6 +56,7 @@ namespace MFO::SelfTest {
         float         condParam = 0.0f;
         RE::FormID    form = 0;            // the spell / item the action names
         std::uint8_t  subject = 0;         // Vocab::Subject ordinal
+        std::uint16_t cooldownTenths = 0;  // the row's own cooldown (Gambit::cooldownTenths); 0 = none
     };
     // TEMPORARY CLASS STATE: snapshot = copy the follower's whole MCLS state before the run and restore it exactly at the end.
     // A test applies a class itself with ApplyClass() (Setup.cpp) any time after the snapshot.

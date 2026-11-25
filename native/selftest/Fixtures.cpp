@@ -42,11 +42,14 @@ namespace MFO::SelfTest {
             return func(a_foe, a_target, nullptr);
         }
 
-        // MAIN THREAD. SpawnSpec::clearSpot: a standable point 500 to 700 units off that the follower sees, the front first.
-        bool ClearSpot(RE::Actor* a_follower, RE::NiPoint3& a_out) {
+        // MAIN THREAD. SpawnSpec::clearSpot: a standable point the follower sees, the front first. a_distance (the spec's) is tried FIRST
+        // (a test that wants the foe far away or near keeps it when the ground allows), then 900 (only when that was farther), 700, 500 ... as
+        // before, so a default 700 spec walks exactly the list it always did.
+        bool ClearSpot(RE::Actor* a_follower, RE::NiPoint3& a_out, float a_distance) {
             const float ang = a_follower->GetAngleZ();
-            for (const float d : { 700.0f, 500.0f, 350.0f, 250.0f })
+            for (const float d : { a_distance, a_distance > 900.0f ? 900.0f : 0.0f, 700.0f, 500.0f, 350.0f, 250.0f })
                 for (const float off : { 0.0f, 0.5f, -0.5f, 1.0f, -1.0f, 1.6f, -1.6f, 2.3f, -2.3f, 3.1f }) {
+                    if (d < 180.0f) continue;   // the 0 placeholder, or a distance under the wall clamp below
                     std::uint32_t st = 0;
                     if (!APMFBridge::FindStandPoint(a_follower->GetFormID(), ang + off, d, 40.0f, a_out, st)) continue;
                     if (a_follower->GetPosition().GetDistance(a_out) < 180.0f) continue;   // clamped to a wall
@@ -73,7 +76,7 @@ namespace MFO::SelfTest {
             const float ang = a_follower->GetAngleZ();
             pos.x += std::sin(ang) * a_spec.distance;
             pos.y += std::cos(ang) * a_spec.distance;
-            if (a_spec.clearSpot && !ClearSpot(a_follower, pos)) { a_note = "no standable ground around the follower"; return false; }
+            if (a_spec.clearSpot && !ClearSpot(a_follower, pos, a_spec.distance)) { a_note = "no standable ground around the follower"; return false; }
             auto ref = a_follower->PlaceObjectAtMe(base, false);
             auto* foe = ref ? ref->As<RE::Actor>() : nullptr;
             if (!foe) { a_note = "PlaceObjectAtMe returned no actor"; return false; }
@@ -124,7 +127,7 @@ namespace MFO::SelfTest {
                     return;
                 }
                 RE::NiPoint3 spot{};
-                if (req.spawn.clearSpot && !ClearSpot(actor, spot)) {
+                if (req.spawn.clearSpot && !ClearSpot(actor, spot, req.spawn.distance)) {
                     std::lock_guard lk(g_mx);
                     g_acks[a_token] = { false, "no standable ground for the foe around the follower", true, true };
                     return;

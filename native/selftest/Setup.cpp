@@ -131,6 +131,7 @@ namespace MFO::SelfTest {
             g.conditionParam  = r.condParam;
             g.actionParamForm = r.form;
             g.subjectSelector = r.subject;
+            g.cooldownTenths  = r.cooldownTenths;
             g.enabled         = true;
             auto& tbl         = a_st.tables[static_cast<std::size_t>(r.table)];
             {
