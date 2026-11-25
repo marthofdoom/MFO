@@ -14,11 +14,11 @@ marth's rulings this plan is bound by: T1 and T2 behaviour only. "Likely the las
 
 1. S5 is six packages, about 3,400 changed lines, not the 1,400 of the movement plan. The extra is what the review found: the oracle's subject holds no claim, Free against Hold is three hand rules, the acceptance was a tournament of constant rules, the scenario set fights 2.9 percent of its cells, and the driver has three holes that let a worse table through.
 2. The order is fixed by one fact: **the tune's cache dies with the sim binary.** So every row the executor may ever need (fear, strafe, 3D arrival, re-file, short stops) is coded BEFORE the freeze with a placeholder value, and field numbers enter afterwards only as `--residue` VALUES, which are in the cache key of road-on fights alone. Then the Deck can report whenever it reports and nothing already computed is lost.
-3. All search stages except `spots` run with the road OFF. That is the game as it ships while `bIausMovePass` is 0, it is 2.3 times cheaper for a blade and 1.6 times for a caster by the measurement of section 7, and it can start as soon as the S5 binary is frozen. It does not wait for the Deck.
+3. All search stages except `spots` run with the road OFF. That is the game as it ships while `bIausMovePass` is 0, an oracle fight there costs clearly less than one on the road (section 7.1: a blade's 125 CPU seconds on the strict road against something over 70 off it, the off arm was still running, and that is before any order is raced), and it can start as soon as the S5 binary is frozen. It does not wait for the Deck.
 4. The `spots` stage, the road-on joint check and the road-on gap wait for the field residues. The sensitivity arms of section 9 say WHICH rows they wait for. Rows that flip nothing do not hold the stage.
 5. The oracle races orders (mode x place) together with his three best actions, at the pass's own windows and no oftener, under the same caps and the same residue table as IAUS. Hold becomes a scored spot kind. `StayMode`'s three rules are removed.
 6. The scenario set is trusted only when the ORACLE, on seeds nothing was built on, needs each served mode in at least 10 percent of a class's resolved scenarios (lower 95 percent bound), with at least 40 resolved a class, fixtures and extracted places judged apart. A class that honestly has one answer passes by proof, not by exemption (section 5.4).
-7. Cost, 15 cells: the road-off part about 500 CPU hours (380 to 720, unchanged from 15.7). The road-on part is 350, 800 or 1,500 CPU hours by budget (section 8). The middle one is recommended: the round is then about 1,300 CPU hours, about 3.5 days on 16 cores at idle priority, of which 500 can run now.
+7. Cost, 15 cells: the road-off part about 500 CPU hours (380 to 720, unchanged from 15.7). The road-on part is about 670, 1,550 or 3,300 CPU hours by budget (section 8), on a per-fight figure that S5-F must replace before the round starts. The middle one is recommended: the round is then about 2,050 CPU hours, a little over 5 days on 16 cores at idle priority, of which 500 can run now. That agrees with the review's 1,800 to 2,500 for a round with the road off outside `spots`.
 
 ## 1. What is wrong today, in one table
 
@@ -182,7 +182,7 @@ For each (class, foe-kind group, count band, level) the difficulty scalar is fou
 - need(m, fight) = the sum, over the order decisions the mode m won, of its paired lead over the best option of any OTHER mode. That is what the oracle would have lost at those decisions without m.
 - A decision whose lead over every other mode is inside the equivalence margin is a TIE and belongs to no mode. Twins (the same utility on every stream) are ties by definition.
 - Scenario s NEEDS m when the mean of need(m) over its fights is above the scenario margin and its lower 95 percent bound over fights is above zero. A scenario may need two modes. A scenario that needs none is unresolved.
-- F starts at 4 and doubles to 16 while a scenario is neither resolved nor clearly tied (upper bound of every mode's need under the margin).
+- F starts at 2 and doubles to 16 while a scenario is neither resolved nor clearly tied (upper bound of every mode's need under the margin).
 
 **Margins.** Decision margin 0.10 U, scenario margin 0.25 U a fight. The review asked for 0.01 U. That cannot be measured: the pair rule retires options inside 0.10 U as indifferent by construction, and at 128 streams a difference of 0.01 U is far inside the standard error. 0.10 is the margin the oracle itself runs on. 0.25 U a fight is a quarter of the divergence floor of 15.7. Both are named constants of `mode_accept.py`.
 
@@ -220,9 +220,9 @@ What "pass" never means: an exemption because the numbers came out one-sided.
 | | Scenarios a class | Fights each | Oracle fights, 15 cells |
 |---|---|---|---|
 | Pilot (2 classes, to measure the resolved share r) | 40 | 4 to 8 | about 500 |
-| Generated set, held-out | 40 / r, capped at 160. At r 0.4: 100 | 4, growing to 16 where open. Mean about 6 | about 9,000 |
-| Extracted set, held-out | the same | the same | about 9,000 |
-| Leave-one-out check | a tenth | as above, three arms | about 5,000 |
+| Generated set, held-out | 40 / r, capped at 160. At r 0.5: 80 | 2, doubling to 16 where open. Mean about 4 | about 4,800 |
+| Extracted set, held-out | the same | the same | about 4,800 |
+| Leave-one-out check | a tenth | as above, three arms | about 2,900 |
 
 These same held-out oracle fights are the `spots` stage's held-out baseline (the oracle arm is paid once and cached, a candidate table is the IAUS arm of the same fights). They are not spent twice. Section 8 prices them.
 
@@ -258,7 +258,20 @@ These same held-out oracle fights are the `spots` stage's held-out baseline (the
 
 Binary `_tuning/sim-strict/sim` (main's sim). The tune's world: `--world v4 --env-set Tuxborn --env-hold train --books field`, the list's sim file, `--potion-worth legacy`, the tune's cuts (`--oracle-prune target --oracle-pair 0.10 --oracle-nmin 4`), subject only, 8 threads, user CPU. 12 fights of archer, knight, thief, warrior and 8 of healer, evoker per arm. **The subject holds no claim in this binary**, so the road arms price the pass inside the rollouts for everybody else and nothing of the order race. They are a floor.
 
-TIMING_TABLE
+| Arm | Fights | User CPU s | A fight | Note |
+|---|---|---|---|---|
+| strict (`--move-caps strict,kite`), archer, knight, thief, warrior | 12 | 1,506 | **125** | finished. 146,000 rollouts, 10.3 ms each. `MOVECOST`: 69.1 ms of pass in each of 6,896 fight copies, 476 s, **32 percent of the arm** |
+| strict, thief alone (the probe) | 2 | 55 | 27 | finished. Pass 30 of the 55 s |
+| off, the same 12 fights | 12 | over 840 | **over 70** | STILL RUNNING when this was written (the long fights last). So the road costs a blade's oracle fight LESS than 1.8 times |
+| point, the same 12 fights | 12 | over 1,040 | over 87 | still running |
+| strict, healer and evoker | 8 | over 1,150 | over 144 | still running |
+| off, healer and evoker | 8 | over 1,090 | over 136 | still running |
+
+The unfinished arms keep running detached and write a `TIME <arm> USER ...` line into `<arm>.err` in the timing folder. S5-F reads them and completes this table. They ran side by side on 8 cores, so their user CPU is a little inflated by contention. The strict blade arm ran alone.
+
+Per class on the strict road (`ORCSTOP`): knight 77 decisions and 675 rollouts a decision, 58 percent at the ceiling. Archer 186 and 395, 52 percent. Warrior 77 and 171. Thief 26 and 311. For scale, 15.7's road-off figures on other seeds: knight 72, archer 62, thief 3 CPU seconds a fight.
+
+Three things to take from it. (1) A blade's oracle fight on the road is about 125 CPU seconds, not the 40 that 15.7 pooled for "the others", and most of that is fight length and ceiling-bound decisions, not the pass. (2) The pass is a third of the rollout cost, which bounds what cut 6 can save. (3) Trap 2 in the open: in one archer fight of the strict arm the `GAPFIGHT` line reads 3.9 and 0.9, the oracle under IAUS if the columns are what the gap stage reads. An oracle whose subject holds no claim is not an upper bound on the road.
 
 ### 7.2 The cuts, biggest first
 
@@ -269,9 +282,9 @@ TIMING_TABLE
 | 3 | Orders raced only at windows where the pass would decide for him (uncommitted or marked) | most windows. With a commit per leg an order decision comes every few seconds, not twice a second | exact: it is the game's cadence | counted: order decisions a fight, printed |
 | 4 | Order options only from `AllowedKinds` and the caps, places clustered (one option per triangle cluster and per `arriveR`) before the race, the pair rule and twins after 4 streams | ESTIMATE 3 to 5 times fewer order rollouts | the cluster and pair rules change picks a little | replay table as 15.7 on at least 74 order decisions: same pick at least 95 percent, added loss at most 0.005 U a decision |
 | 5 | Static spots once per place and stamp, shared by every fight and rollout there. The (spot, actor) sight fact reused while neither end left its triangle | part of the 12 to 15 percent sight and path share, more on the road | exact (the game's own reuse) | byte-identical road-on baseline before and after |
-| 6 | The rollout's pass is frozen: no Phase 1 and no rays inside a rollout, the orders that stood are kept, Phase 3 refreshes on the frozen pool every 2 s | ESTIMATE up to the pass's share of a rollout, which 7.1 puts at ROLLPASS | NOT exact: the base policy places bodies worse late in a rollout | the same replay table, plus the oracle's U on 12 fights not lower beyond noise. If it fails the cut is dropped, it is not tuned until it passes |
+| 6 | The rollout's pass is frozen: no Phase 1 and no rays inside a rollout, the orders that stood are kept, Phase 3 refreshes on the frozen pool every 2 s | ESTIMATE up to the pass's share of a rollout, which 7.1 puts at 32 percent for the blades | NOT exact: the base policy places bodies worse late in a rollout | the same replay table, plus the oracle's U on 12 fights not lower beyond noise. If it fails the cut is dropped, it is not tuned until it passes |
 | 7 | Search on IAUS fights, the oracle only to accept and verify (the `follow` shape) | a candidate costs milliseconds | exact | planted tests |
-| 8 | Sequential growth: 4 fights a scenario, more only while unresolved. A class stops when its lines are decided | about half of the acceptance | exact | none |
+| 8 | Sequential growth: 2 fights a scenario, more only while unresolved. A class stops when its lines are decided | about half of the acceptance | exact | none |
 | 9 | Sensitivity arms on IAUS fights only | section 9 costs tens of CPU hours, not thousands | it measures IAUS's flips, not the oracle's | the rows it marks sensitive get one oracle arm in the full budget |
 | 10 | Cached search baselines reused (`table_slice`) | as built | exact | none |
 
@@ -283,7 +296,7 @@ S5-F measures 3, 4 and 6 on the real oracle, and repeats 7.1 with the subject's 
 
 Road-off part: `prep`, `rejudge`, `classes`, `edge`, `follow`, `spells`, `worth`, `joint`, `gap`, `globals`, `consts`, `floor`, `rating`, `recalib`, `logistics`, `loot`. 15.7 put 38 cells on four worlds at about 1,250 CPU hours and 15 cells at about 40 percent of that: **about 500 CPU hours, between 380 and 720.** Nothing in S5 changes it. The pretune smoke's `follow` (7,778 s for 2 cells on 2 worlds) is inside that range. The one-time measurements before it: 80 to 150 CPU hours more, as 15.7 says, plus the pathing bounds a second time with the road on.
 
-Road-on part, three budgets. ROADON_BASIS
+Road-on part, three budgets. The basis is **200 CPU seconds an oracle fight on the road, between 120 and 350** (ESTIMATE): the 125 measured for a blade without the order race, times 1.3 to 1.6 for the race after cuts 3 and 4 (the movement plan's figure, not measured), casters dearer on list worlds and cheaper in the built-in world where most generated scenarios are fought. Generated scenarios are shorter than natural fights, which this figure does not credit. S5-F's 12-fight end to end replaces it. If cut 6 passes its proof, take up to 30 percent off.
 
 | | Lean | Standard (recommended) | Full |
 |---|---|---|---|
@@ -295,13 +308,13 @@ Road-on part, three budgets. ROADON_BASIS
 | Worlds on the road | built-in and one list | built-in and two lists | all four |
 | Sensitivity arms | IAUS only | IAUS only, plus one oracle arm for each row marked sensitive | oracle arms for every row |
 | Extras | none | the assignment regret report | Disengage measured under `strict,kite,disengage` as a PRICE of H-M3 (no weight kept), exact assignment tried |
-| Oracle fights on the road, about | 12,000 | 30,000 | 60,000 |
-| CPU hours on the road, ESTIMATE | **350** (250 to 500) | **800** (550 to 1,200) | **1,500** (1,000 to 2,300) |
-| Round with the road-off part | about 850 | about 1,300 | about 2,000 |
-| Wall, 16 cores idle priority, machine quiet | 2.2 days | 3.4 days | 5.2 days |
+| Oracle fights on the road, about | 12,000 | 28,000 | 60,000 |
+| CPU hours on the road, ESTIMATE | **670** (400 to 1,170) | **1,550** (930 to 2,700) | **3,300** (2,000 to 5,800) |
+| Round with the road-off part | about 1,170 | about 2,050 | about 3,800 |
+| Wall, 16 cores idle priority, machine quiet | 3 days | 5.3 days | 10 days |
 | What it buys | the tune can run and Free against Hold is tuned for every class. Kind weights are shared inside a group, and a group's verdict may hide one class's one-mode habit | every class is judged and tuned on its own, on fixtures and real places apart. This is the smallest budget under which "T1 and T2 movement need not be redone" is a claim with evidence per class | the same claim with tighter bounds, and H-M3's worth known before it is built. It does not make the tune more right if the residues are wrong |
 
-The review's 3,000 to 3,800 CPU hours was the road in every stage. Cut 1 is what brings the standard round to about 1,300.
+The review's 3,000 to 3,800 CPU hours was the road in every stage, and its 1,800 to 2,500 was the road off outside `spots`. The standard round sits inside the second. The standard budget's 28,000 fights are: the acceptance on held-out seeds, 15 classes x 80 scenarios x 4 fights in each of the two sets (9,600) and its leave-one-out arms (2,900), and the stage, a first measure on train (1,350), the verify sets of about six shared values on the T1 rows and five more cells (9,000), and the class rows' sets (4,000). The sensitivity arms and the pilot are in the ranges.
 
 A residue that lands outside its placeholder after the stage ran costs the road-on part again and nothing else (section 6.2), which is the reason to wait for the sensitive rows and not for all of them.
 
@@ -400,11 +413,11 @@ The evidence goes to `_evidence/deck-strict-<date>/` with the deployed DLL hashe
 ## 13. Decisions for marth
 
 1. **When the `spots` stage runs.** A: once, with caps `strict,kite`, after both the stand session and the H-M2 session are read. B: after the stand session with caps `strict`, then a delta stage for Kite after H-M2 and one for Disengage after H-M3. Recommend A if H-M2 lands in the same field cycle as the stand tests, because Hold weights tuned without Kite are tuned for a shooter with no other answer and the delta cannot fully undo that. Recommend B if H-M2 is more than one field cycle away: the road-on part is then paid about 1.3 times, and Stand ships sooner. The sensitivity arms will say how much A and B differ before anything is spent.
-2. **Budget for the road-on part.** Lean 350, standard 800, full 1,500 CPU hours (section 8). Recommend standard. Lean cannot support "need not be redone" per class.
+2. **Budget for the road-on part.** Lean 670, standard 1,550, full 3,300 CPU hours (section 8), each to be re-priced by S5-F's measurement before the round starts. Recommend standard. Lean cannot support "need not be redone" per class.
 3. **A class with one answer.** A: it passes by the four proofs of 5.4 and its other kinds are not searched. B: it must show two modes or the set is extended until it does. Recommend A. B would bend the set until an archer kites, whether or not that is right.
 4. **The margin.** 0.10 U a decision and 0.25 U a fight, where the review said 0.01 U. Recommend the larger: 0.01 cannot be measured at the oracle's own ceiling. A note more than a decision, here so it is not a silent change.
 5. **The caster cells and driver P1 (B865).** A: rule B865 now and fix the lab's drop to native's predicate before the freeze. B: freeze without it and leave conjurer, warlock and Vanilla's caster cells out of this round. Recommend A, since the round is the one that should not be redone.
-6. **Two binaries.** Allow `--bin-spots` (section 6.2). Recommend yes. It is 30 lines against losing 500 CPU hours to one executor fix.
+6. **Two binaries.** Allow `--bin-spots` (section 6.2). Recommend yes. It is about 30 lines against losing the 500 road-off CPU hours to one executor fix.
 
 ## 14. Acceptance of S5 as a whole (what the reviewer of the last package signs)
 
