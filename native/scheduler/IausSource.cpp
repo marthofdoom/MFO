@@ -17,6 +17,7 @@
 #include "iaus/ClassCurves.h"   // per-class curve rows (Q-class-curves)
 #include "iaus/Reposition.h"   // batch I H4: the spell range
 #include "cast/Actuation.h"
+#include "iaus/AreaCensus.h"   // AreaOpenFor
 #include "iaus/SpellBook.h"
 #include "logistics/PotionFx.h"   // feat/consumables: ConfirmDrinks
 
@@ -307,6 +308,9 @@ namespace MFO::Scheduler {
         // member and is never moved while the candidates (string_views into its snapshot) are in use.
         Logistics::ConfirmDrinks(a_self);   // feat/consumables: prove (or warn about) the drink issued on an earlier pass
         m_built = Iaus::Candidates::Build(a_self, m_set, T);
+        // M4 F1: a self blast's claim stands only while its census is open THIS lap (somebody stepped in, or no candidate of it at all = released, never waited out).
+        if (const RE::FormID blast = Actuation::StandingSelfBlast(a_id))
+            Actuation::ServiceStandingBlast(a_self, blast, m_built && Iaus::AreaOpenFor(m_set.gen.actions, blast));
         if (!m_built) return;   // dead, disabled or unloaded: no candidates, Next reports "no more"
         // SIGHT WINS (marth 11-12: "for sure, and not having a bow doesn't matter if you don't have line of sight"): while EVERY listed foe
         // reads Occluded and the offense approach would file, it outranks the H4 spell-range close, for casters and archers alike. The close is
@@ -613,6 +617,7 @@ namespace MFO::Scheduler {
             if (r.idx >= m_set.gen.actions.size()) continue;
             if (!(Iaus::KeyOf(m_set.gen.actions[r.idx]) == m.running)) continue;
             if (m.running.family == Family::CastSummon && !Actuation::SummonHoldsCastChannel(RE::TESForm::LookupByID<RE::Actor>(m_id), RE::TESForm::LookupByID<RE::SpellItem>(m_set.gen.actions[r.idx].form))) break;
+            if (Actuation::BlastWithoutCastChannel(RE::TESForm::LookupByID<RE::Actor>(m_id), RE::TESForm::LookupByID<RE::SpellItem>(m_set.gen.actions[r.idx].form))) break;   // M4 F3
             const int rank = Iaus::RankOf(m.epoch);
             a_castSeen = true;
             // A RUNNING HEAL IS NOT "ASKED FOR" BY BEING RANKED (field 11-17f, review F4): the candidate appearing anywhere in the ranked list does not

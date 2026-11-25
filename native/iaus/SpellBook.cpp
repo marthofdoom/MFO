@@ -296,7 +296,8 @@ namespace MFO::Iaus::SpellBook {
             // The animation rule is about MFO's spell roads; a scroll is used through its own road (card S3).
             // A summon the claim road can never serve (review F1) is out for IAUS alone: its only road is the unanimated one-shot.
             st.roadUnsupported = a_source == Source::Spell &&
-                                 (Actuation::CastRoadUnsupported(a_sp) || (in.summon && Actuation::SummonClaimUnservedWhy(a_sp, a_arch)));
+                                 (Actuation::CastRoadUnsupported(a_sp) || (in.summon && Actuation::SummonClaimUnservedWhy(a_sp, a_arch)) ||
+                                  Actuation::BlastClaimUnservedWhy(a_sp, a_arch));   // M4 F4: a self blast no Harbinger row can serve is never castable: not offered, not taught
             Prune::PlacementIn pl;
             pl.targetLocationDelivery = delivery == RE::MagicSystem::Delivery::kTargetLocation;
             pl.rune      = a_arch.shape == Actuation::SpellShape::Rune;
@@ -363,12 +364,14 @@ namespace MFO::Iaus::SpellBook {
             e.meleeBuff = arch.row == Actuation::EngineRow::Armor || arch.row == Actuation::EngineRow::Cloak ||
                           arch.shape == Actuation::SpellShape::Cloak;
             e.areaUnits = blast.units;
-            // M4 (placed-spells-plan 3.3): a SELF blast is centred on him and hits where ITS HOSTILE EFFECT's area reaches, so that radius (not a benign effect's larger one) is
-            // the area the guard counts, the foes-in-area read and the "foe is inside" gate use. An impact hazard on the hostile effect widens it to its footprint.
+            // M4 (placed-spells-plan 3.3, review F2): a SELF blast's GUARD reads the widest area (areaUnits), its foe gate and foes-in-area the HOSTILE effect's own radius
+            // (blastFoeUnits): Prune::SelfBlastRadii, the one rule. An impact hazard on the hostile effect widens both and lives on (leavesHazard, F7).
             if (e.selfDelivery && blast.hostileArea && blast.hostileUnits > 0.0f) {
-                e.areaUnits = blast.hostileUnits;
-                if (arch.hostileImpact && std::isfinite(arch.impactHazardUnits) && arch.impactHazardUnits > e.areaUnits) e.areaUnits = arch.impactHazardUnits;
+                const Prune::BlastRadii r = Prune::SelfBlastRadii(blast.units, blast.hostileUnits, arch.hostileImpact ? arch.impactHazardUnits : 0.0f);
+                e.areaUnits = r.guard;
+                e.blastFoeUnits = r.foe;
             }
+            e.leavesHazard = e.selfDelivery && arch.hostileImpact;
             // M3 (placed-spells-plan 3.2): a WALL's area is the footprint of the hazard it drops where the stream lands (the larger of that and any blast), so the
             // ONE area guard and the foes-in-area count read it like any other area. Its EFIT area is 0 and its hazard is no explosion, so before this a wall had none.
             e.wall = arch.shape == Actuation::SpellShape::Wall;

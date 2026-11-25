@@ -316,6 +316,8 @@ namespace MFO::Scheduler {
                 const bool isCastOp = op == Vocab::kActCastSelf || op == Vocab::kActCastTarget || op == Vocab::kActCastPlayer;
                 const bool isCast  = isCastOp && [&] {
                     auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam);
+                    // M4 F3: the same for an IAUS pick of a SELF BLAST that is deferred or held off (no claim road, so no hand, claim or lock).
+                    if (choice.source == Eval::Source::Iaus && Actuation::BlastWithoutCastChannel(f, sp)) return false;
                     return !Actuation::IsSummonSpell(sp) || Actuation::SummonHoldsCastChannel(f, sp);
                 }();
                 const bool isSilver = op == Vocab::kActEquipSilver;   // a melee equip (category 1) everywhere below

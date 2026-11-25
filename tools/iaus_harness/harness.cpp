@@ -3015,12 +3015,96 @@ namespace {
             for (auto& e : s.book.entries) if (e.form == 0x1C789) e.areaUnits = 599.0f;
             Check(!has(s, 0x3B500), "M4: a foe one unit past the radius is not a target");
             for (auto& e : s.book.entries) if (e.form == 0x1C789) e.areaUnits = 700.0f;
-            // THE ALLIES IN THE BLAST (a friendly-fire gate: his own blast reaches the party members and the player, pad 0)
+            // THE ALLIES IN THE BLAST (a friendly-fire gate: his own blast reaches the party members and the player; review F1: radius + body + movement margin)
             Snapshot a = s; a.allies[1].x = -700.0f; a.allies[1].y = 0.0f;
+            const float allyEdge = 700.0f + Estimate::kFireBodyPad + kAreaGuard.selfBlastAllyMargin;
+            Check(kAreaGuard.selfBlastAllyMargin >= kAreaGuard.safetyMargin && kAreaGuard.safetyMargin > 0.0f, "M4 F1: the party's movement margin is at least the bystanders'");
             const Candidate friendHit = find(a);
             Check(!friendHit.f.splashSafe && score(friendHit) == 0.0f, "M4: a party member exactly at the radius is in the blast: the candidate stays, the situation scores 0");
             a.allies[1].x = -701.0f;
-            Check(find(a).f.splashSafe && score(find(a)) > 0.0f, "M4: one unit past the radius is clear");
+            Check(!find(a).f.splashSafe && score(find(a)) == 0.0f, "M4 F1: one unit past the radius is NOT clear: one step and he is in it");
+            a.allies[1].x = -(allyEdge - 1.0f);
+            Check(!find(a).f.splashSafe && score(find(a)) == 0.0f, "M4 F1: ... nor just inside radius + body + movement margin");
+            a.allies[1].x = -(allyEdge + 1.0f);
+            Check(find(a).f.splashSafe && score(find(a)) > 0.0f, "M4 F1: one unit past that is clear");
+            {   // the player alone, the same line
+                Snapshot p = s; p.allies[0].x = -(allyEdge - 1.0f); p.allies[0].y = 0.0f; p.allies[0].dist = allyEdge - 1.0f;
+                Check(score(find(p)) == 0.0f, "M4 F1: the player just inside the margin closes it");
+                p.allies[0].x = -(allyEdge + 1.0f);
+                Check(score(find(p)) > 0.0f, "M4 F1: ... and just past it does not");
+            }
+            {   // F1, WorthOf: the same pads (the reader counts the friend the gate counts)
+                Tuning tw = t; tw.spellWorth.live = 1.0f;
+                Snapshot w = s; w.allies[1].x = -(allyEdge - 1.0f); w.allies[1].y = 0.0f;
+                for (auto& e : w.book.entries) if (e.form == 0x1C789) { e.measured = true; e.damage = 50.0f; }
+                const auto rate = [&](const Snapshot& sn) { for (const auto& c : Generate(sn, g, tw).actions) if (c.form == 0x1C789 && c.target == 0x3B500) return c.f.expRate; return -2.0f; };
+                const float in = rate(w);
+                w.allies[1].x = -(allyEdge + 1.0f);
+                Check(in < rate(w), "M4 F1: the worth reader counts the same friend at the margin");
+            }
+            {   // F1: a standing claim is kept only while its candidate is open this lap
+                Snapshot c = s;
+                Check(AreaOpenFor(Generate(c, g, t).actions, 0x1C789), "M4 F1: an open census keeps the standing claim");
+                c.allies[1].x = -700.0f; c.allies[1].y = 0.0f;
+                Check(!AreaOpenFor(Generate(c, g, t).actions, 0x1C789), "M4 F1: a party member in it does not");
+                c = s; c.areaPicture = AreaPicture::NotReady;
+                Check(!AreaOpenFor(Generate(c, g, t).actions, 0x1C789), "M4 F1: nor an unreadable picture");
+                c = s; for (auto& e : c.book.entries) if (e.form == 0x1C789) e.areaUnits = 500.0f;
+                Check(!AreaOpenFor(Generate(c, g, t).actions, 0x1C789), "M4 F1: nor no candidate at all (no foe inside)");
+                using SB = Prune::StandingBlast;
+                Check(Prune::StandingBlastVerdict(true, false) == SB::Keep && Prune::StandingBlastVerdict(true, true) == SB::Keep, "M4 F1: open = keep");
+                Check(Prune::StandingBlastVerdict(false, false) == SB::Release, "M4 F1: closed = released that lap");
+                Check(Prune::StandingBlastVerdict(false, true) == SB::InFlight, "M4 F1: closed with a charge in flight: the charge is not cut");
+            }
+            {   // F2: the guard reads the wide radius, the foe gate the narrow one
+                const auto r = Prune::SelfBlastRadii(900.0f, 500.0f, 0.0f);
+                Check(r.guard == 900.0f && r.foe == 500.0f, "M4 F2: a detrimental or payload area wider than the hostile one widens the guard, never the pick");
+                const auto h = Prune::SelfBlastRadii(300.0f, 300.0f, 450.0f);
+                Check(h.guard == 450.0f && h.foe == 450.0f, "M4 F2: an impact hazard widens both");
+                const auto n = Prune::SelfBlastRadii(0.0f, 300.0f, std::numeric_limits<float>::quiet_NaN());
+                Check(n.guard == 300.0f && n.foe == 300.0f, "M4 F2: the guard is never under the hostile radius, an unreadable hazard changes nothing");
+                Snapshot w = s;
+                for (auto& e : w.book.entries) if (e.form == 0x1C789) { e.areaUnits = 900.0f; e.blastFoeUnits = 700.0f; }
+                Check(has(w, 0x3B500) && !has(w, 0x3B501), "M4 F2: the foe at 750 is inside the guard, not inside the blast: no target");
+                Check(find(w).f.foesInArea == 1.0f, "M4 F2: ... and not counted in it");
+                w.allies[1].x = -(allyEdge + 100.0f); w.allies[1].y = 0.0f;
+                Check(score(find(w)) == 0.0f, "M4 F2: an ally clear of the narrow radius but not of the wide one closes it");
+                const SpellEntry* be = nullptr; for (const auto& e : w.book.entries) if (e.form == 0x1C789) be = &e;
+                Check(be && Reposition::SpellRange(*be, 150.0f).desired == 0.8f * 700.0f, "M4 F2: he fights at the narrow radius");
+            }
+            {   // F6: a blast that is no candidate on a foe (or whose census is closed) is no yardstick of the other spells on it
+                const auto best = [&](const Snapshot& sn) { float b = -1.0f; for (const auto& c : Generate(sn, g, t).actions) if (c.family == Family::CastOffense && c.form != 0x1C789 && c.target == 0x3B500) b = (std::max)(b, c.f.bestDamage); return b; };
+                Snapshot y = s;
+                for (auto& e : y.book.entries) if (e.form == 0x1C789) { e.measured = true; e.damage = 5000.0f; }
+                const float with = best(y);
+                for (auto& e : y.book.entries) if (e.form == 0x1C789) e.areaUnits = 590.0f;   // the foe at 600 is in the old 15 % ring
+                const float ring = best(y);
+                for (auto& e : y.book.entries) if (e.form == 0x1C789) e.areaUnits = 700.0f;
+                y.allies[1].x = -300.0f; y.allies[1].y = 0.0f;
+                const float closed = best(y);
+                y = s; for (auto& e : y.book.entries) if (e.form == 0x1C789) e.drop = Prune::Drop::SelfBlast;
+                const float without = best(y);
+                Check(with > without && without >= 0.0f, "M4 F6: an open blast in reach is a yardstick (the rows below can fail)");
+                Check(ring == without, "M4 F6: a foe in the 15 percent ring past the radius is not");
+                Check(closed == without, "M4 F6: nor with its census closed");
+            }
+            {   // F7: a blast that leaves a hazard is guarded for bystanders with a walking distance
+                Snapshot z = s; z.areaPicture = AreaPicture::Ready;
+                z.areaActors = { person(-(700.0f + Estimate::kFireBodyPad + kAreaGuard.wallMargin - 1.0f), 0.0f) };
+                Check(score(find(z)) > 0.0f, "M4 F7: that far off is clear of a blast that leaves nothing");
+                for (auto& e : z.book.entries) if (e.form == 0x1C789) e.leavesHazard = true;
+                Check(score(find(z)) == 0.0f, "M4 F7: ... and not of one that leaves a hazard");
+            }
+            // F3, F4, F5: the pure halves of the road
+            Check(Prune::BlastGoes(true, true) && !Prune::BlastGoes(false, true), "M4 F5: a picked blast goes out on the claim road only");
+            Check(!Prune::BlastGoes(true, false), "M4 F5: ... and only with bCastSelf on");
+            Check(Prune::BlastHoldsCastChannel(true, true, false) && !Prune::BlastHoldsCastChannel(false, true, false) && !Prune::BlastHoldsCastChannel(true, false, false) &&
+                      !Prune::BlastHoldsCastChannel(true, true, true), "M4 F3: a deferred, switched-off or never-fired blast holds no cast channel");
+            Check(Prune::BlastServed(true, true) && !Prune::BlastServed(false, true) && !Prune::BlastServed(true, false), "M4 F4: a blast no Harbinger row can serve is not offered");
+            // a self area that harms nobody (Harmony: control, no hostile effect) keeps no pad
+            { SpellEntry h; h.selfDelivery = true; h.nature = Prune::Nature::Control; h.areaUnits = 700.0f; Check(AreaAllyPad(h) == 0.0f, "M4 F1: Harmony has no ally pad");
+              h.hostileArea = true; Check(AreaAllyPad(h) > kAreaGuard.safetyMargin, "M4 F1: Mass Paralysis has");
+              h.selfDelivery = false; Check(AreaAllyPad(h) == Estimate::kFireBodyPad, "M4 F1: an aimed area's pad is unchanged"); }
             Snapshot pl = s; pl.allies[0].x = -300.0f; pl.allies[0].y = 0.0f; pl.allies[0].dist = 300.0f;   // the player stands beside him
             Check(!find(pl).f.splashSafe && score(find(pl)) == 0.0f, "M4: the player in the blast closes it too");
             // THE BYSTANDERS (townsfolk, guards ...): radius + body + margin, centred on HIM, not on the foe

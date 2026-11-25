@@ -81,6 +81,31 @@ namespace MFO::Iaus::Prune {
         return a_selfDelivery && !a_concentration && a_hostileHazard;
     }
 
+    // THE TWO RADII OF A SELF BLAST (M4 F2; units). `guard` is what the census reads for allies and bystanders: the WIDEST area the record states anywhere (a
+    // detrimental effect's, a payload explosion's), because a guard errs wide. `foe` is where the harm lands: the hostile effect's own radius (the foe-inside gate,
+    // foes in area), because a pick errs narrow. Both widen to the hostile effect's impact hazard. An unreadable number never narrows the guard.
+    struct BlastRadii { float guard = 0.0f, foe = 0.0f; };
+    [[nodiscard]] inline BlastRadii SelfBlastRadii(float a_widest, float a_hostile, float a_impactHazard) {
+        const auto pos = [](float v) { return std::isfinite(v) && v > 0.0f ? v : 0.0f; };
+        BlastRadii r;
+        r.foe   = (std::max)(pos(a_hostile), pos(a_impactHazard));
+        r.guard = (std::max)(pos(a_widest), r.foe);
+        return r;
+    }
+
+    // A PICKED SELF BLAST (M4 F3, F5): it goes out (and its rule is a cast channel of the scan) only on the animated claim road AND with bCastSelf on; a
+    // never-fired hold-off (a_transparent) holds no hand either. Everything else is deferred: no cast, no castSeen.
+    [[nodiscard]] inline bool BlastGoes(bool a_claim, bool a_selfCasts) { return a_claim && a_selfCasts; }
+    [[nodiscard]] inline bool BlastHoldsCastChannel(bool a_claim, bool a_selfCasts, bool a_transparent) { return BlastGoes(a_claim, a_selfCasts) && !a_transparent; }
+    // THE RECORD + SEAT HALF of "can a blast ever be claimed" (M4 F4): false = it is not offered (book, Teach page).
+    [[nodiscard]] inline bool BlastServed(bool a_fireOnceServed, bool a_rowServed) { return a_fireOnceServed && a_rowServed; }
+    // A STANDING BLAST CLAIM, each lap (M4 F1). Its candidate is open this lap = keep. Closed, or no candidate at all = release. A charge in flight is NEVER cut by this:
+    // the engine fires it or an existing road ends it.
+    enum class StandingBlast : std::uint8_t { Keep, Release, InFlight };
+    [[nodiscard]] inline StandingBlast StandingBlastVerdict(bool a_open, bool a_inFlight) {
+        return a_open ? StandingBlast::Keep : a_inFlight ? StandingBlast::InFlight : StandingBlast::Release;
+    }
+
     // THE ROAD OF A PICKED SUMMON (placed-spells review F1; cast/Fire.cpp). An IAUS pick is never cast unanimated: no claim = transparent, asked again every
     // lap. Only Harbinger absent / too old (the documented degrade) keeps the one-shot. A gambit rule is unchanged: the claim, else the one-shot.
     enum class SummonGo : std::uint8_t { Claim, OneShot, Defer };

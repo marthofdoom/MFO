@@ -301,6 +301,13 @@ namespace MFO::Actuation {
     // and bCastSelf is on)? Then the summon holds a hand, a claim and a lock like any cast, so the combat scan counts it as a cast rule and the IAUS
     // cast family keeps it (field 11-24c: it was released the same millisecond it was filed). False for a non-summon, the one-shot road and a deferred pick.
     bool SummonHoldsCastChannel(RE::Actor* a_follower, RE::SpellItem* a_spell);
+    // WORKER. M4 F3, the SELF BLAST twin: true = an IAUS pick of a_spell is a self blast that holds NO cast channel this lap (deferred, bCastSelf off, a never-fired
+    // hold-off): the scan must not count it as a cast. False for every other spell (null included). IAUS picks only: a gambit's blast keeps its stream road.
+    bool BlastWithoutCastChannel(RE::Actor* a_follower, RE::SpellItem* a_spell);
+    // WORKER. M4 F1: the self blast whose claim stands on his LEFT hand (0 = none), and what to do with it when its candidate is not open this lap
+    // (Iaus::Prune::StandingBlastVerdict): released at once, or, with the charge in flight, left to the engine (MFO never cuts a charge here) and named on a line.
+    RE::FormID StandingSelfBlast(RE::FormID a_follower);
+    void       ServiceStandingBlast(RE::Actor* a_follower, RE::FormID a_spell, bool a_open);
     // WORKER (cast/HealRoad.cpp, 1dfcuabd309). The heal twin: would a Self-delivery HEAL of a_spell cast at a_recipient (any
     // actor other than a_follower) be served by a proxy road? True when the heal claim road is open
     // (ComposedCast::HealClaimRoadOpen: Harbinger's delivery-flip proxy), or for a CONCENTRATION heal where MFO's ConcProxy can
@@ -952,6 +959,8 @@ namespace MFO::Actuation {
     // Why ChooseBuffRoad can NEVER answer Claim for this summon, by its record alone (nullptr = it can). Its own tests. IAUS drops such a summon
     // (iaus/SpellBook.cpp, the animation rule); the gambit picker does not read it. a_arch = ClassifyArchetype(a_spell). Pure form data, any thread.
     const char* SummonClaimUnservedWhy(RE::SpellItem* a_spell, const SpellArchetype& a_arch);
+    // M4 F4, its self-blast twin (nullptr also for a spell that is no self blast). Reads the resolved Harbinger's seat coverage (atomics), so no Harbinger = unserved.
+    const char* BlastClaimUnservedWhy(RE::SpellItem* a_spell, const SpellArchetype& a_arch);
     const char* BuffAimedLightWhy(RE::SpellItem* a_spell, const SpellArchetype& a_arch);
     const char* BuffSelfRuneWhy(RE::SpellItem* a_spell, bool a_explicitSelf);
     const char* ShapeName(SpellShape a_shape);

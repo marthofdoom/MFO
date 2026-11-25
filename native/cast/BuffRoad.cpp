@@ -463,6 +463,12 @@ namespace MFO::Actuation {
         return BuffRowOk(a_arch, nullptr) ? nullptr : kBuffRowElsewhere;
     }
 
+    const char* BlastClaimUnservedWhy(RE::SpellItem* a_spell, const SpellArchetype& a_arch) {
+        if (!SelfBlastClaimSpell(a_spell)) return nullptr;
+        return Iaus::Prune::BlastServed(FireOnceServes(a_arch), BuffRowOk(a_arch, nullptr)) ? nullptr
+                   : "a self blast no Harbinger row serves fire-once: no claim road";
+    }
+
     const char* BuffAimedLightWhy(RE::SpellItem* a_spell, const SpellArchetype& a_arch) {
         bool anyLight = false;
         for (auto* eff : a_spell->effects)
@@ -521,6 +527,41 @@ namespace MFO::Actuation {
         // and a never-fired hold-off are all BuffUpTransparent, where the claim road makes no cast and no hand is held.
         return Iaus::Prune::SummonHoldsCastChannel(ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false) == BuffRoad::Claim, Config::g_castSelf.load()) &&
                !BuffUpTransparent(a_follower, a_spell);
+    }
+
+    bool BlastWithoutCastChannel(RE::Actor* a_follower, RE::SpellItem* a_spell) {
+        if (!a_follower || !SelfBlastClaimSpell(a_spell)) return false;
+        // No controller, no claim road (and ChooseBuffRoad would erase the per-fight g_neverFired latch on this read-only ask).
+        if (!a_follower->GetActorRuntimeData().combatController) return true;
+        // The chooser judges a blast as an IAUS pick only while g_firingIaus is set (worker-serial; restored on every exit).
+        struct AsIaus { bool was = g_firingIaus; AsIaus() { g_firingIaus = true; } ~AsIaus() { g_firingIaus = was; } } asIaus;
+        return !Iaus::Prune::BlastHoldsCastChannel(ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false) == BuffRoad::Claim, Config::g_castSelf.load(),
+                                                   BuffUpTransparent(a_follower, a_spell));
+    }
+
+    RE::FormID StandingSelfBlast(RE::FormID a_follower) {
+        const auto it = g_castLock.find(a_follower);
+        const RE::FormID spell = it == g_castLock.end() ? 0 : it->second.hand[kHandLeft].spell;
+        if (spell == 0 || CastLockClaimStamp(a_follower, kHandLeft, spell) == std::chrono::steady_clock::time_point{}) return 0;
+        return SelfBlastClaimSpell(RE::TESForm::LookupByID<RE::SpellItem>(spell)) ? spell : 0;
+    }
+
+    void ServiceStandingBlast(RE::Actor* a_follower, RE::FormID a_spell, bool a_open) {
+        auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_spell);
+        if (!a_follower || !sp) return;
+        const auto id = a_follower->GetFormID();
+        switch (Iaus::Prune::StandingBlastVerdict(a_open, CastInFlightOnHand(a_follower, kHandLeft, a_spell, CastProxyOnHand(id, kHandLeft)))) {
+        case Iaus::Prune::StandingBlast::Keep:
+            return;
+        case Iaus::Prune::StandingBlast::InFlight:
+            spdlog::info("[buff] {:08X} self blast {} ({:08X}): its area closed while the charge is in flight -- not cut by MFO", id, sp->GetName() ? sp->GetName() : "?", a_spell);
+            return;
+        case Iaus::Prune::StandingBlast::Release:
+            spdlog::info("[buff] {:08X} self blast {} ({:08X}): its area is not open this lap (somebody in or near it, or no foe in it) -- the standing claim is released",
+                         id, sp->GetName() ? sp->GetName() : "?", a_spell);
+            EndBuffClaim(a_follower, sp, /*a_takeBack=*/true);
+            return;
+        }
     }
 
     bool BuffServedAtAlly(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient) {

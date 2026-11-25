@@ -419,8 +419,9 @@ namespace MFO::Actuation {
             if (g_firingIaus) {
                 if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_choice.actionParam); sp && SelfBlastClaimSpell(sp)) {
                     const char* why = nullptr;
-                    if (ChooseBuffRoad(a_follower, sp, /*a_log=*/false, nullptr, &why) != BuffRoad::Claim) {
-                        NoteSelfBlastDeferred(a_follower, sp, why);
+                    const bool selfCasts = Config::g_castSelf.load();   // F5: bCastSelf = 0 skips CastOn's self fork, so the pick would run on to an unanimated road
+                    if (!Iaus::Prune::BlastGoes(ChooseBuffRoad(a_follower, sp, /*a_log=*/false, nullptr, &why) == BuffRoad::Claim, selfCasts)) {
+                        NoteSelfBlastDeferred(a_follower, sp, selfCasts ? why : "bCastSelf is off");
                         return { Result::NoOp, "self blast deferred: no animated claim road this lap", true };
                     }
                 }
