@@ -848,6 +848,7 @@ namespace MFO::Iaus::MovePass {
             const Triple* best = nullptr;
             for (const Triple& x : table) {
                 if (x.dead || !open[x.member]) continue;
+                if (x.kinds == KindBit(SpotKind::Hold) && inc[x.member] >= 0.0f) continue;   // his committed place never loses to the hold's own factors, which it has none of (review R2-1)
                 if (x.spot >= 0 && !x.incumbent) {
                     const float bar = inc[x.member] >= 0.0f ? inc[x.member] : stay[x.member];
                     if (!(x.score > 0.0f) || x.q <= Quant(bar * (1.0f + t.spotPreempt))) continue;

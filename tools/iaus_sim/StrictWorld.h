@@ -55,7 +55,7 @@ namespace Sim {
             q.notCarried = StrictHash(F, x, 0xCA44ull ^ (static_cast<std::uint64_t>(o.gen) << 20)) < g_residue.notCarriedShare;
             q.notBefore = std::max(q.carriedAt, F.now + static_cast<double>(moving ? g_residue.repointStall : 0.0f)); }
         x.nav.n = x.nav.i = 0;
-        if (StrictDist(x, q) > o.arriveR && StrictHash(F, x, 0xB10CCull ^ (static_cast<std::uint64_t>(o.gen) << 20)) < g_residue.blockedShare) q.dueBlock = F.now + static_cast<double>(g_moveT.blockAfterSec);
+        if (StrictDist(x, q) > o.arriveR && StrictHash(F, x, 0xB10CCull ^ (static_cast<std::uint64_t>(o.gen) << 20)) < g_residue.blockedShare) q.dueBlock = std::max(F.now, q.carriedAt) + static_cast<double>(g_moveT.blockAfterSec);   // of walking, not of waiting to be carried (R2-2)
     }
     // A leg of an order ended without ground, or the residue says so. true = the order is over.
     inline bool StrictBlock(Fight& F, Body& x, MoveClaim& q) {
