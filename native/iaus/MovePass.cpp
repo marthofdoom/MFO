@@ -1,5 +1,6 @@
 // iaus/MovePass.cpp -- the movement pass (S1): freeze, the sliced phase 1, the answers, the assignment. PURE (iaus/MovePass.h).
 #include "iaus/MovePass.h"
+#include "iaus/MoveOrder.h"
 #include "iaus/Estimate.h"
 
 #include <algorithm>
@@ -830,6 +831,45 @@ namespace MFO::Iaus::MovePass {
                 m->commit = Commit{ true, a.key, a.p, a.tri, a.kinds, a.act, m->top[0], at };
             }
             m->seen = 0;
+        }
+    }
+}
+
+namespace MFO::Iaus::Move {
+
+    MoveMode StayMode(const PartyPicture& pic, const Member& m, const RankedAction& act, const Tuning& t) {
+        if (!(t.orderHoldStay >= 1.0f) || act.Kind() >= Family::kCount || IsMove(act.family) || act.moveOnly || act.target == 0 || act.target == m.id) return MoveMode::Free;
+        const Env::Vec3* at = nullptr;
+        for (const Foe& f : pic.foes) if (f.id == act.target) at = &f.p;
+        if (!at) for (const Member& o : pic.party) if (o.id == act.target) at = &o.p;
+        if (!at || (act.reach > 0.0f && Dist(m.p, *at) > act.reach)) return MoveMode::Free;   // it does not work from here
+        int onHim = 0; float nearest = kInf;
+        for (const Foe& f : pic.foes) if (f.target == m.id) { const float d = Dist(f.p, m.p); nearest = (std::min)(nearest, d); if (d <= t.orderNearU) ++onHim; }
+        if (act.melee) return static_cast<float>(onHim) >= t.orderHoldFoes ? MoveMode::Stand : MoveMode::Free;
+        return act.sight == Sight::Visible && nearest >= t.orderStandMinU ? MoveMode::Stand : MoveMode::Free;
+    }
+
+    MoveOrder OrderOf(const PartyPicture& pic, const Member& m, const Assignment& a, const Tuning& t) {
+        MoveOrder o;
+        if (!pic.caps.strict || !m.decides) return o;
+        const OrderRow& r = OrderRowOf(a.spot >= 0 ? a.kinds : KindBit(SpotKind::Stay));
+        o.mode = a.spot >= 0 ? r.mode : StayMode(pic, m, a.act, t);
+        if (o.mode == MoveMode::Free) return o;
+        o.p = a.p; o.tri = a.tri; o.target = a.act.target;
+        o.leashR = r.pin ? t.orderLeashPin : t.orderLeash; o.arriveR = (std::min)(t.orderArrive, o.leashR);
+        // holding where he is: the point he was already standing on, so a hold does not creep with every push
+        if (a.spot < 0 && m.order.mode != MoveMode::Free && Dist(m.order.p, m.p) <= 2.0f * m.order.leashR) { const FormID tg = o.target; const float lr = m.order.leashR, ar = m.order.arriveR; o = MoveOrder{ MoveMode::Stand, m.order.p, m.order.tri, lr, ar, 0, tg, 0 }; }
+        return o;
+    }
+}
+
+namespace MFO::Iaus::MovePass {
+    void Orders(PartyPicture& pic, std::span<const Assignment> as, const Tuning& t) {
+        for (Member& m : pic.party) {
+            MoveOrder o;
+            for (const Assignment& a : as) if (a.who == m.id) o = OrderOf(pic, m, a, t);
+            o.gen = m.order.gen + (o.Same(m.order) ? 0u : 1u);
+            m.order = o;
         }
     }
 }

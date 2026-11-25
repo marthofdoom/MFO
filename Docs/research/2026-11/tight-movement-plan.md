@@ -333,6 +333,8 @@ The old `g0b.*` rows stay as the area-road reference.
 
 ## 11. What the sim must change
 
+**Built on `feat/sim-strict`: `iaus-sim-v4.md` section 21, differences in 21.8.**
+
 The rule from the movement plan stands: decisions are pure code in `native/iaus`, the sim compiles the same files, the game side only executes. What changes is the executor model in `tools/iaus_sim` (`Move.h`, `MoveWorld.h`, the S2 pass world, S5 oracle) and the vocabulary S1 emits.
 
 1. **Orders, not claims.** S1's output per follower per window is an order: mode, point, `leashR`, `arriveR`. The same enum as `APMF_MoveOrder`. Golden vectors (G3) carry the order.

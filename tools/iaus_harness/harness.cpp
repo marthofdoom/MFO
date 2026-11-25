@@ -2540,7 +2540,14 @@ namespace {
         { Generated gen = Generate(corner, g, t); gen.actions.clear(); const Decision d = dec(corner, gen); Exp e; e.n = TopRanked(d, gen.actions, e.top, MoveAsk{ gen.moveOnly, gen.moveOnlySight, none, p, t }); Check(d.verdict == Verdict::Idle && e.n == 1 && e.Heal(kPc), "it is exported when he has nothing else to do at all"); }
         {   // nobody walks for a patient he reaches
             Snapshot s = near; s.book.entries.push_back(Spell("Touch Heal", kTouch, Prune::Nature::Heal, 10, 150)); s.book.entries.back().heal = 200.0f; s.book.entries.back().measured = true; s.book.entries.back().touch = true;
-            const Generated gen = Generate(s, g, t); Check(healOf(gen, kPc) && gen.moveOnly.empty(), "a patient he reaches with one heal gets no walk for another");
+            const auto walks = [&](Generated gen) { const Decision d = dec(s, gen); Exp e; e.n = TopRanked(d, gen.actions, e.top, MoveAsk{ gen.moveOnly, gen.moveOnlySight, none, p, t }); bool any = false; for (std::size_t i = 0; i < e.n; ++i) any |= e.top[i].moveOnly; return any; };
+            s.allies[0].sight = Sight::Visible; s.book.entries[0].reach = 600.0f;   // he stands at 900: the first heal is too short, the second (below) reaches
+            s.book.entries[1].drop = Prune::Drop::Unanimated; s.book.entries.back().reach = 2000.0f; s.book.entries.back().touch = false; Generated gen = Generate(s, g, t);
+            Check(healOf(gen, kPc) && gen.moveOnly.size() == 1 && !walks(gen), "a patient he reaches with one heal gets no walk for another");
+            // review F5: that heal is on its hard cooldown, so from here it reaches nobody
+            for (auto& c : gen.actions) if (c.family == Family::CastHeal && c.target == kPc) c.f.hardCooldownSec = c.f.hardCooldownLeft = 5.0f;
+            Check(walks(gen), "... unless that one is on its cooldown");
+            s.book.entries[0].reach = 2000.0f; s.book.entries.back().reach = 150.0f; s.book.entries.back().touch = true; s.book.entries[1].drop = Prune::Drop::Keep;
             s.allies[0].dist = 2600.0f; const Generated q = Generate(s, g, t); const Exp e = exp(s, t); int rows = 0; for (std::size_t i = 0; i < e.n; ++i) rows += e.top[i].target == kPc && e.top[i].Kind() == Family::CastHeal; Check(q.moveOnly.size() == 2 && rows == 1, "... two far heals for one patient: one row");
         }
         {   // ... nor leaves one
@@ -2565,6 +2572,32 @@ namespace {
             s = corner; s.book.entries[0].nature = Prune::Nature::Buff; Check(Generate(s, g, t).moveOnly.empty(), "a buff: none");
             s = corner; Generated gen = Generate(s, g, t); gen.moveOnly[0].f.hardCooldownSec = gen.moveOnly[0].f.hardCooldownLeft = 5.0f; std::array<RankedAction, 3> top; const Decision d = dec(s, gen); const auto n = TopRanked(d, gen.actions, top, MoveAsk{ gen.moveOnly, gen.moveOnlySight, none, p, t }); bool any = false; for (std::size_t i = 0; i < n; ++i) any |= top[i].moveOnly; Check(!any, "one on cooldown is not exported");
         }
+        {   // review F1: an export keeps Decide's own order of the rest (nothing is sorted again), and what does not make the rows moves nothing
+            Snapshot s = corner; s.allies[1].hp = 0.97f * s.allies[1].hpMax; Generated gen = Generate(s, g, t); const Decision d0 = dec(s, gen); Decision d = d0; bool inOrder = true, none3 = true, heldFirst = true; int boards = 0;
+            if (d.ranked.size() >= 3) {
+                // a tie Decide broke by its own rules: row 1 under row 2 by a hair
+                d.ranked[0].score = 0.700f; d.ranked[1].score = 0.5000f; d.ranked[2].score = 0.5001f; for (auto& x : d.ranked) x.running = false;
+                for (std::size_t i = 3; i < d.ranked.size(); ++i) d.ranked[i].score = 0.2f;
+                std::array<RankedAction, 3> plain, with; const auto n0 = TopRanked(d, gen.actions, plain); const auto mov = [&](float far, const Decision& q) { Tuning u = t; u.actFloor = 0.0f; u.moveHealYield = 0.0f; Generated x = gen; (void)far; return TopRanked(q, x.actions, with, MoveAsk{ x.moveOnly, x.moveOnlySight, none, p, u }); };
+                const auto n1 = mov(0.0f, d); std::vector<std::uint32_t> a, b; for (std::size_t i = 0; i < n0; ++i) a.push_back(plain[i].form ^ plain[i].target); for (std::size_t i = 0; i < n1; ++i) if (!with[i].moveOnly) b.push_back(with[i].form ^ with[i].target);
+                inOrder = !b.empty() && b.size() <= a.size() && std::equal(b.begin(), b.end(), a.begin()); ++boards;
+                // everything above the far heal: the three rows are exactly the plain ones
+                Decision hi = d; for (std::size_t i = 0; i < 3; ++i) hi.ranked[i].score += 100.0f; const auto n2 = TopRanked(hi, gen.actions, plain); const auto n3 = mov(0.0f, hi); none3 = n2 == 3 && n3 == 3; for (std::size_t i = 0; none3 && i < 3; ++i) none3 = plain[i].form == with[i].form && plain[i].target == with[i].target && !with[i].moveOnly; ++boards;
+                // review F2 (1): the held action is first although it scores least, the far heal behind it
+                Decision hold = d; hold.ranked[2].running = true; hold.ranked[2].score = 0.001f; const auto n4 = mov(0.0f, hold); heldFirst = n4 >= 2 && !with[0].moveOnly && with[0].form == gen.actions[hold.ranked[2].idx].form && with[0].target == gen.actions[hold.ranked[2].idx].target; ++boards; }
+            Check(boards == 3 && inOrder, "the export keeps Decide's order of the others, also inside a tie"); Check(none3, "... a far heal that does not make the rows moves none of them"); Check(heldFirst, "... the held action stays first, whatever it scores"); }
+        {   // review F2 (2) (4) (5): the act floor, the BEST heal of a patient, and the ray that belongs to it
+            Generated gen = Generate(corner, g, t); std::array<RankedAction, 3> top; const Decision d = dec(corner, gen); Tuning u = t; u.actFloor = 1.0e6f; auto n = TopRanked(d, gen.actions, top, MoveAsk{ gen.moveOnly, gen.moveOnlySight, none, p, u }); bool any = false; for (std::size_t i = 0; i < n; ++i) any |= top[i].moveOnly; Check(!any, "a far heal under the act floor is not exported");
+            Snapshot s = hurt(corner, 1, 0.4f, 2600.0f, Sight::Visible); gen = Generate(s, g, t); const Decision d2 = dec(s, gen); n = TopRanked(d2, gen.actions, top, MoveAsk{ gen.moveOnly, gen.moveOnlySight, none, p, t }); int right = 0; for (std::size_t i = 0; i < n; ++i) if (top[i].moveOnly) right += top[i].sight == (top[i].target == kPc ? Sight::Occluded : Sight::Visible); Check(gen.moveOnly.size() == 2 && right == 2, "two far patients, each with his own ray");
+            Snapshot w = corner; w.book.entries.push_back(Spell("Weak", kTouch, Prune::Nature::Heal, 10, 2000)); w.book.entries.back().heal = 1.0f; w.book.entries.back().measured = true; gen = Generate(w, g, t); const Decision d3 = dec(w, gen);
+            for (int rev = 0; rev < 2; ++rev) { std::vector<Candidate> c = gen.moveOnly; std::vector<Sight> si = gen.moveOnlySight; if (rev) { std::reverse(c.begin(), c.end()); std::reverse(si.begin(), si.end()); }
+                // each alone, then both: both gives the better of the two
+                float best = 0.0f; std::uint32_t form = 0; for (std::size_t i = 0; i < c.size(); ++i) { std::array<RankedAction, 3> one; const auto k = TopRanked(d3, gen.actions, one, MoveAsk{ std::span<const Candidate>(c).subspan(i, 1), std::span<const Sight>(si).subspan(i, 1), none, p, t }); for (std::size_t q = 0; q < k; ++q) if (one[q].moveOnly && one[q].score > best) { best = one[q].score; form = one[q].form; } }
+                n = TopRanked(d3, gen.actions, top, MoveAsk{ c, si, none, p, t }); std::uint32_t got = 0; for (std::size_t i = 0; i < n; ++i) if (top[i].moveOnly) got = top[i].form; Check(c.size() == 2 && form != 0 && got == form, "the best heal of a patient is the one exported"); } }
+        {   // review F2 (3): a light he holds does not stay first over it
+            Snapshot s = corner; s.self.light = 10.0f; for (auto& a : s.allies) { a.light = 10.0f; a.inPlayerView = Tri::Yes; } SpellEntry e = Spell("Candlelight", 0x43324, Prune::Nature::Buff, 20, 0); e.selfDelivery = true; e.light = true; s.book.entries.push_back(e);
+            Tuning b = t; b.actionWeight[static_cast<std::size_t>(Family::CastBuff)] = 30.0f; const Generated gen = Generate(s, g, b); TickIn in; in.now = 10.0; in.rapportRank = 3; Decision d = Decide(none, gen.actions, p, b, in); bool light = false; for (auto& x : d.ranked) { x.running = false; if (gen.actions[x.idx].f.lightBuff && !light) x.running = light = true; }
+            std::array<RankedAction, 3> top; const auto n = TopRanked(d, gen.actions, top, MoveAsk{ gen.moveOnly, gen.moveOnlySight, none, p, b }); Check(light && n > 0 && top[0].family != Family::CastBuff, "a held light does not stay first over a far heal"); }
         {   // a light is never above it
             Snapshot s = corner; s.self.hp = s.self.hpMax; s.self.light = 10.0f; for (auto& a : s.allies) { a.light = 10.0f; a.inPlayerView = Tri::Yes; } SpellEntry e = Spell("Candlelight", 0x43324, Prune::Nature::Buff, 20, 0); e.selfDelivery = true; e.light = true; s.book.entries.push_back(e); s.foes.resize(1);
             Tuning b = t; b.actionWeight[static_cast<std::size_t>(Family::CastBuff)] = 30.0f; for (auto& e2 : s.book.entries) if (e2.nature == Prune::Nature::Offense) e2.drop = Prune::Drop::Unanimated; const Exp x = exp(s, b); const RankedAction* l = nullptr; for (std::size_t i = 0; i < x.n; ++i) if (x.top[i].family == Family::CastBuff) l = &x.top[i]; Check(x.Heal(kPc) && l && l->score < x.Heal(kPc)->score && x.top[0].Kind() == Family::CastHeal, "a light ranks under a move-only heal in the export");

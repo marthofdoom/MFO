@@ -51,6 +51,7 @@ namespace Sim {
         // S2 (movement-plan.md): the movement pass's own rows. Flat while --position-road is off. The stage that searches them is S5's.
         { "t.moveDecisionSec", &Tuning::moveDecisionSec }, { "t.spotPinKinds", &Tuning::spotPinKinds }, { "t.spotMomentum", &Tuning::spotMomentum }, { "t.spotPreempt", &Tuning::spotPreempt },
         { "t.spotRadius", &Tuning::spotRadius }, { "t.spotSplitArea", &Tuning::spotSplitArea }, { "t.spotHighU", &Tuning::spotHighU }, { "t.spotExitU", &Tuning::spotExitU }, { "t.spotPeelU", &Tuning::spotPeelU },
+        { "t.orderLeash", &Tuning::orderLeash }, { "t.orderLeashPin", &Tuning::orderLeashPin }, { "t.orderArrive", &Tuning::orderArrive }, { "t.orderHoldStay", &Tuning::orderHoldStay }, { "t.orderHoldFoes", &Tuning::orderHoldFoes }, { "t.orderNearU", &Tuning::orderNearU }, { "t.orderStandMinU", &Tuning::orderStandMinU },
         { "t.spotArriveU", &Tuning::spotArriveU }, { "t.spotFactMoveU", &Tuning::spotFactMoveU }, { "t.spotFactMaxAgeSec", &Tuning::spotFactMaxAgeSec }, { "t.spotKeptAgeSec", &Tuning::spotKeptAgeSec }, { "t.spotUnknownExposure", &Tuning::spotUnknownExposure },
         // S4 (iaus/Light.h): flat while --v4 light is off
         { "t.moveHealYield", &Tuning::moveHealYield }, { "t.spotActionMomentum", &Tuning::spotActionMomentum },

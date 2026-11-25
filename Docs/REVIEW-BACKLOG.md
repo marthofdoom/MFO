@@ -3968,6 +3968,15 @@ F8 SEV-5 CheckExit floods 256 triangles; on dense meshes f.cut makes `far` small
 S1 BACKLOG: R3 flood alloc FIXED. R1 (21.8 ms slices) OPEN, measured 4.5 to 8.4 ms worst window here with small parties, still over one 3 ms slice. R2 re-ask stamp OPEN in native (sim always sends t); must be closed before G2.
 HEAL FINDING (8) **CLOSED on `feat/heal-move` (iaus-sim-v4.md 20)**: real in game. Generate.cpp:969 drops any heal whose recipient is past e.reach or Sight::Occluded (Actuation::HealInReach, same in the cast roads), and the ch.24 held-heal approach (CombatApproach.cpp) is built for a heal already held, so a patient who STARTS out of reach or round a corner gets no approach. heal_reach gets no ranked heal, so its weight can not be tuned: the tune would learn nothing. Do: a small native brief (own review) before S5: emit such a heal as a MOVE-ONLY candidate (scored as if in reach, never a Decide winner, never cast, exported only through TopRanked / MoveNoteRanked), gated so that shipped decisions stay byte identical when no pass asks. Safety: HealRefused must still apply. Then the healer scenario runs unscripted.
 
+### `feat/sim-strict` (author notes, Opus 5.5, 2026-11-24; no review yet)
+- CLOSED here: HEAL-MOVE F1 (the export keeps Decide's order), F2 (five rows, each mutation fails one), F3 (doc), F5 (a patient whose in-reach heal is on its hard cooldown). F4 and F6 stay open (SEV-5).
+- OPEN (S5): the acceptance of the mode set is a tournament of constant rules under IAUS's own actions. The oracle's subject still holds no claim (S2 F3).
+- OPEN (S5, SEV-4): `StayMode`'s three lines (`t.orderHoldFoes`, `t.orderNearU`, `t.orderStandMinU`) are rules, not scores: Free against a hold on his own place is not weighed by the considerations. If the oracle over spots shows gaps there it wants a spot kind of its own.
+- OPEN (SEV-4): Free is the only order without a leash here. H-M1's Free keeps the claim's R as a bound (hm1 7.2): the MFO client has to end the claim for a Free, or the lab must bound it.
+- OPEN (SEV-5): `blockedShare` blocks an order at 0.5 s and again each 2 s until it ends. The field may show single blocks that pass.
+- OPEN (SEV-5): the lab's summoner (what he calls joins as a late foe) and flyer (the dragon) are models. 1 foe kind x count cell is not applicable (a boss with adds is no single foe).
+- OPEN (G2): hide run, back-off, retreat, regroup still take the body from an order, in the lab as in the game today.
+
 ### `feat/heal-move` (author notes, Opus 5.5, 2026-11-24; no review yet)
 - OPEN (design, marth or S5): the in-reach rule is literal. A patient in reach who is scratched but ranked over the act floor holds the healer from one who is dying round a corner, as long as his heal loses to other actions. `t.moveHealYield` (0 = literal) is the knob, not searched.
 - OPEN: a patient whose nearest healing place is past `t.spotRadius` (1500 walked) is still not approached: no place is found.
@@ -4066,3 +4075,51 @@ F4 SEV-5 spotAction at momentum 1 is not strictly flat: it switches off pruning 
 F5 SEV-5 "no heal candidate above" counts a heal in `actions` even when Decide vetoes it (cooldown, floor): a patient whose only in-reach heal is on a hard cooldown is not walked to for another. Intended reading of 'reaches', note only.
 F6 SEV-5 parallel vectors moveOnly/moveOnlySight invite F2(5): one struct.
 Off sim seed 991 fights 2 threads 8 beta1 + nightblade,healer,thief,wizard, v3 v4: byte identical (17408/20301/4682/5445 lines). fuzz.cpp kept: _localbuild/hmrev/fuzz.cpp
+
+### SIM-STRICT: review findings on d252f39d (Opus, nothing above SEV-3). F1 to F3 and T1 to T3 are in S5 (plan: Fable), the rest is this entry
+
+
+## Proof run by the reviewer
+- Built -O2 on own tree. Spot tests at fresh seeds 5151, 88321, 60606: 82/82 each. Strict baseline threads 1 vs 8, seed 913: same (6534 lines). Road off and point vs main's sim0, seed 913: byte same (6221 / 6224).
+- Golden: 30 old cases, every non-"o" line is the old line with fields appended (only case/pic/x lines differ), plus 6 new cases.
+- Native: movement pass has no caller outside native/iaus; StayMode/Orders/OrderOf inert in the DLL. MoveMode 0..5 = kMove_* at d01c2e3 (row checks the five numbers as literals: no compile-time tie to APMF_API.h, because MFO's copy has no v48 yet).
+- HEAL-MOVE F1 (insertion, no re-sort), F2 (rows), F5 (moved to TopRanked; no other reader of Generated::moveOnly lost a filter): fixed, read in code + rows. Generate now returns moveOnly un-deduped; only TopRanked reads it.
+- Mutations (mine): CAUGHT 1 (pin leash -> orderLeash, golden). SURVIVED 6: hold keeps point only of a Stand; hold takes t.orderLeash instead of the standing radii; t.orderNearU ignored in StayMode; StrictLeashed (ch.23 wins) removed; GoTo/Disengage run speed without the disengage cap; blockBackoff ignored. -> F4.
+- Mode test fresh seed 4242, 60 scenarios, 32 fights, caps strict,kite: resolved 7.3%, highest mean "PASS", resolved NOT MET. Forced arms still issue Disengage with the cap off. mode-cover seed 31337: 99.5%.
+
+## Findings
+F1 SEV-3 (lab kinder than Harbinger). Main d01c2e3 and feat/hm1-pa2 serve ONLY the implicit Stand. SetMoveOrder answers ModeNotServed to every mode; Caps() = kMoveCaps_Strict alone; no code sets Blocked or Unreachable. Lab default caps = strict+kite+disengage. Kite has no MoveCaps bit, so RoadCaps.kite has no API source yet. Smallest fix: --move-caps default strict,kite; docs "what is served today".
+F2 SEV-3 fear. Lab: a fear effect under an order does nothing at all (he keeps attacking and travelling). Game: while the area is off during a flee the pick is kDenyOnly (Flee/Hide no, rest engine's, NOT stand or travel) with a 1.5 s latch, area re-evaluated each 1.0 s. No field row measures whether he attacks. The oracle will learn "Stand as an answer to fear". Fix: residue rows fearUncarried (seconds free + no order) and fearActs; placeholder 1.5 / unknown; row strict.fear.
+F3 SEV-3 speed. kiteSpeed applies only when dot(dir, foe) < 0. Strafing across a foe is at full run, travel with no target or toward a foe too. Harbinger: travel while a foe is his target keeps the aim; 60..193 was measured for travel, no strafe figure. Add strafeSpeed row, measured by strict.goto.
+F4 SEV-4 the six surviving mutants above: each needs a row (hold from a Kite order, hold keeps pin radii, NearU, strict-leashed, caps without disengage, backoff timing).
+F5 SEV-4 residue table is not the only place: 0.5 s and 1.0 s block timing, min stop 6, sneak 0.55, drift speed 0.3 and 3 s, dot<0, lunge standoff 60, deny on MFO's own runs. Single for the numbers of the plan, not for the executor.
+F6 SEV-4 OrderOf maps a.kinds unmasked. A kept commit survives on `kinds & allowed != 0` (MovePass 637) and keeps a RetreatExit/Kite bit whose cap went off. Mask with KindsOf in OrderOf. Reachable only if caps change mid fight.
+F7 SEV-4 StayMode has no hysteresis (NearU, StandMinU, reach flip Free<->Stand each window; game: each flip is a claim file/release) and no comparison with Free. Also melee `onHim` counts foes within 400 whether he reaches them or not; doc 21.1 says "that he reaches".
+F8 SEV-4 coverage number is a BUILD CHECK, not independence. speed, count, kind are read back from the spec fields the builder set; "leaving" = the flag set by ModePlayer; terrain lines were written for those fixtures; "door" = any leaf in the fight (comment: between them). One random build per cell at t=0, five-way "filled" if any of 3 player placements is right. 99.6% is honest for that, must not be cited as variety. Only 360 of 12,600 cells (2.9%) are ever FOUGHT; 6+ is always exactly 6; level 25, rank 3 fixed; one fixture a terrain.
+F9 SEV-4 forced arms ignore g_moveCaps; Kite/Disengage re-Same after Ended can leave the order dead for the fight (Same -> no gen).
+F10 SEV-5 doc 21.1 text (F7), mode-enum row should become static_assert when MFO's APMF_API.h reaches v48.
+
+## Lab assumptions kinder than the game (full list)
+1 caps (F1). 2 Fear (F2). 3 strafe speed (F3). 4 startDelay 0: a claim filed while the area is off or standard is NotCarried up to 1.0 s [FIELD strict.goto]. 5 Every new point is an in-place order with 0.25 s stall; P-A needs Release + Request and a sweep (about 0.1 s plus area carry), P-C not built [FIELD after P-C]. 6 Blocked -> Unreachable ends and MFO is told; today he loops 1 s holds for ever and nobody is told [P-B]. 7 2D distance inside a storey; Harbinger is 3D: a point whose z is 24 off never arrives (slope, stairs) [FIELD stopError]. 8 Travelling stops the instant he is inside stopAt, no pick delay, no overshoot; short stops (accepted up to leashR, 2 ends) not modelled: arriveError should reach leashR [U5]. 9 stagger, knockdown, ragdoll displacement 0 [strict.stand_*]. 10 lunge 60/110/0.5 guesses, never past the target [strict.stand_melee]. 11 casts and draws cost no travel speed [strict.kite]. 12 Yielded/NotCarried by package area, Exit Water, flight, mount: none. 13 Free unbounded (game: R) . 14 MFO order seen at a pass window with no bridge latency. Harsher than the game: blockedShare (a 5% order blocks again every 2 s until ended).
+FIELD numbers needed first: kiteSpeed and strafe, lungeOut/share, startDelay/re-file, stopError incl. z, displaceU, fear, blockedShare, shots while travelling.
+
+## Author's uncertain spots
+1 StayMode by rules: a real defect FOR THE TUNE (Free vs Stand is marth's ruling and the biggest choice: it depends on foe kind and terrain, the rules see neither). Not a merge blocker. Give S5 a Hold kind (scored, own considerations: foes on him, gap, foe kind/speed, sight, cover) with StayMode as its gate. At minimum the three lines are searched per class.
+2 Free without leash: bound it by the claim R or end the claim; the client contract (end the claim on Free) is simplest and equals the lab; then file latency applies (4).
+3 Caps: tune with strict,kite only until H-M2/H-M3 ship and are measured. Disengage and run-speed GoTo go into a later delta stage.
+4 Fear: F2.
+5 blockedShare/lunge/travel: run a residue sensitivity arm (each row at low/high) over the same scenarios. Rows that flip a tuned choice wait for the field.
+
+## Acceptance
+Race statistics sound (paired, p 0.001, null resolves 0 of 360). It is not the plan's acceptance: forced constant arms, IAUS actions, no oracle. Highest mean is dominated by arm count (null 9/41/20/29) and must never be quoted as PASS: drop it from the verdict. Null 0 of 360 proves the false rate is low, not that power is adequate. 15% resolved selects large effects, not a random share. Kite rests on 7 of 68 archer scenarios (95% interval about 5 to 20%): not distinguishable from failing. Archer Stand 85% of the resolved: allowed by the plan's "over all" wording, but for that class the set teaches one habit. Extracted: 4.2%, NOT MET. H-M1 caps reseed: NOT MET.
+
+## What S5 and the tune must change
+T1 (SEV-2 tune) default caps strict,kite; forced arms and oracle obey caps.
+T2 (SEV-2 tune) oracle subject gets a claim and races orders (mode x place) with its actions; Hold as a scored kind; acceptance = oracle best mode, with equivalence margin (a mode within 0.01 U counts as tied), 10% with lower 95% bound, 60% also per class, at least 40 resolved a class, on held-out seeds and extracted places apart.
+T3 (SEV-2 tune) no spots stage before the field residues; fear, strafe, 3D and re-file rows added.
+Variety: foe speed continuous 0.2 to 1.5 of run with a third under kiteSpeed (slowed, frosted, giants, draugr walkers); kiting needs open ground of 1500+ u plus one foe; melee-only foes; foe count 4 to 10 and mixed groups (shield + archers + mage); level 10/25/45 and ratios tuned so base win rate is 30 to 70%; several fixtures a terrain, mirrored and random start distance 300 to 2500; chain two fights; more than one follower decided; draw new cells every seed (not the same 360); extracted: stratify by narrowness/height/doors, 14 -> 60 places, 128 fights, choose ratio by a pilot so that the win rate is 30 to 70%.
+
+## Cost
+The measured factor off->strict is 2.7x on fixtures (movement-plan 6 assumed 1.2 to 1.5 a rollout). 1,250 x 1.2-1.5 cannot hold where the road runs in every rollout. If the road runs in all stages expect 3,000 to 3,800 CPU h; 1,800 to 2,500 is credible only if follow/spells/loot/potions run road OFF (plan 11 allows exactly that). No oracle fight was measured on the strict road: measure 20 before starting. Cuts, biggest first: road off outside spots; in rollouts freeze the pass (no Phase1/2, keep order, refresh 2 s); race orders only at window boundaries and only arms from the class's AllowedKinds; 15 cells first; 3 worlds; residue sensitivity on IAUS fights only; reuse cached search baselines.
+
+## Verdict: MERGE. F4, F6-F10 to the backlog; F1-F3 before any tune on strict.

@@ -1706,7 +1706,7 @@ CPU (user seconds, 1 thread, main then this branch): evoker, knight, archer, mag
 - **F1, F2, F3: a light's tier is no score.** `Light::CastTier`: the player whose light is known, members whose light is known, the player and then members whose light nobody knows. `Decide` (1) holds an unknown one at the least wanted known one, (2) lifts the player's best light to the best member's, so a player who needs it less is first and the light still goes out, (3) caps every light under every ranked heal, ward and scroll of one, (4) puts the lights of the board in tier order, (5) takes a light out of the rapport pool and out of the commitment window while a heal or ward is ranked or a lower tier is on the board. It stays the order's fall-back when the others' roads decline. Lights are never pruned. Rows: every rank, 2000 seeds, the window, with and without weights that would break it.
 - **F5** `Light::InParty`. **F7** a mark is compared with the first mark of an event only. **F10** the lit walk by length over what is known.
 - **F6** ruled (marth 11-24): the radius is ignored.
-- **What G6 must fill natively:** `Combatant::sneakClass` for every ally (the class of THAT member, `ClassGate::darkClass`, crouched or not), the player's `sneaking` and everybody's `lights` with the true caster (an ability or an enchantment as `fromItem`), and the call that ends a spell of ours on the player as well as on a member. `Candidates.cpp` `allyRoad` reads become `AllyRoadTo`.
+- **What G6 must fill natively:** `Combatant::sneakClass` for every ally from `ClassGate::darkClass` (never `ClassGate::sneakClass`: the Nightblade has only the first) (the class of THAT member, crouched or not), the player's `sneaking` and everybody's `lights` with the true caster (an ability or an enchantment as `fromItem`), and the call that ends a spell of ours on the player as well as on a member. `Candidates.cpp` `allyRoad` reads become `AllyRoadTo`.
 
 ## 20. The move-only heal and the S4 leftovers (branch `feat/heal-move`, 2026-11-24)
 
@@ -1733,3 +1733,136 @@ Three scenarios replace the scripted one, each 48 fights an arm: `healer-round-c
 1. The golden file is rewritten once: its action lines gained `moveOnly` (version 4) and one scene. Every old expected line is the same.
 2. A heal says its reach (`Facts::reach`) while asked, in reach or not: without it `heal_reach` had no band and never offered a place. Road-on results of healers move.
 3. Limits: past `t.spotRadius` no place is found. The in-reach rule is literal (backlog).
+
+## 21. Strict orders (tight-movement-plan.md 11, package S-M, branch `feat/sim-strict`, 2026-11-24)
+
+Road off and the point and pinned roads are main's. The native half has no caller in the DLL. Every executor number is a placeholder until the dev gambit rows are read (21.3), so nothing here may be tuned on yet.
+
+### 21.1 Orders
+
+`iaus/MoveOrder.h`. The pass still says who stands where. `MovePass::Orders` turns each assignment into mode, point, `leashR`, `arriveR` (Harbinger's own mode numbers). `kOrderRows`: retreat exit = Disengage, kite = Kite, regroup and flank = GoTo, every other place = Stand, a place of several kinds the first row. "Stay" is Free, or a Stand on his own place by three rules (`StayMode`): a blade with `t.orderHoldFoes` (2) foes on him that he reaches, a shooter with sight and reach and no foe on him inside `t.orderStandMinU` (300), a cast on an ally that works from here. A hold keeps its point until he is carried past twice its leash. Same order, same `gen`.
+
+Caps: `RoadCaps::strict` offers the pin kinds whatever `t.spotPinKinds` says (cover, chokepoint and flank stay on) and refuses the kite kind without `kite` and the retreat kind without `disengage`. Golden format 5: the caps, the order that stood, the order made. All 30 old cases: every line is the old line with fields appended. Six new cases.
+
+### 21.2 The executor (`--position-road strict`, `StrictWorld.h`)
+
+A pick every 0.25 s at each body's own phase. Travelling, Standing, Returning, Blocked (1 s), Ended after three blocks in 10 s. Standing he makes no movement of his own. He fights on the way, except in a Disengage (no attack begun). Backing away from the foe he faces he has `kiteSpeed`. With the disengage cap (H-M3) GoTo and Disengage have his run. A started blow carries him `lungeOut` toward its target in `lungeShare` of cases, whatever the leash says, and the picks walk him back. A dodge is cut at the leash. The engine's flee is never picked (a fear spell too). Retreat, hide run, back-off and regroup keep the body as today until G2's one owner. The ch.23 leash wins over a point. Free is the engine's model, unchanged.
+
+`--move-caps strict,kite` is H-M1 alone. The default adds H-M3's disengage.
+
+### 21.3 The residue table (`Move.h Residue`, `--residue <row>=<v>`)
+
+| Row | Value | Where from |
+|---|---|---|
+| selectorLag, repointStall | 0.25 s | DISASM |
+| blockBackoff, blockWindow | 1 s, 10 s | hm1 7.2 |
+| dodgeInLeash | 1 | DISASM (the clamp) |
+| kiteSpeed | 150 u/s | RUN 60 to 193, placeholder |
+| startDelay 0, arriveError 1 (x arriveR), standDrift 0, lungeOut 60, lungeOutPower 110, lungeShare 0.5, attackInPlaceRate 0.6 (not used: lunges are the default), blockedShare 0.05, displaceU 0 | | PLACEHOLDERS |
+
+Anything but a default is in the world tag, so a compare across tables is refused.
+
+### 21.4 The strict scenarios (`--spot-test`, 48 fights an arm, each with its off arm)
+
+`strict-stand-bow`, `-stand-far`, `-lunge-return`, `-goto`, `-kite` (speed and shots on the way), `-disengage` (his run, no attack begun), `-flee-denied`, `-dodge`, `-blocked`, `-pass-holds` (unscripted: the pass's own orders).
+
+### 21.5 The mode set (`ModeSet.h`)
+
+12 foe kinds x 3 speeds (0.38 or 0.8, 1, 1.35 of his run) x 3 counts x 10 terrains x 4 parties x 3 player places = 12,960 cells, 360 of them not applicable (a boss with adds is no single foe). Five new hand-made fixtures (open, bridge, slope, shore, gallery with stairs), scenario only. `--mode-cover` builds every cell and reads back from bodies and mesh what it is (the kind from what the foes carry, the speed ratio, the count, the party, the player's distance, and for the terrain the narrowest passage of the walked way, the height between the groups, water, doors). Numbers are cells measured as asked (each entry of the first table out of 108, 72 for boss-adds):
+
+```
+MODE-COVER cells 12960 (kind 12 x speed 3 x count 3 x terrain 10 x party 4 x player 3), not applicable 360, built 12600, measured as asked 12548 (99.6%)
+kind\terrain      open  corridor   doorway   pillars    stairs    bridge  dead-end     slope     water      door
+heavy              108       108       108       108       108       108       106       108       108       108
+pack               108       108       108       108       108       108       106       107       107       108
+duellist           108       108       108       108       108       107       104       106       108       108
+shield             107       108       108       107       108       108       106       106       107       108
+archers            108       108       108       108       108       107       106       106       108       108
+bolt-mage          108       108       108       108       108       108       107       105       108       108
+area-mage          108       108       108       108       108       108       105       106       108       108
+stream-mage        108       108       108       108       108       108       103       108       108       108
+summoner           108       108       108       108       108       106       106       108       108       108
+charger            108       108       108       108       108       107       106       107       108       108
+boss-adds           71        72        72        72        72        72        71        72        72        72
+flyer              108       108       108       108       108       108       107       106       108       108
+kind\sp,cnt      slow 1   slow 2-3    slow 6+     equa 1   equa 2-3    equa 6+     fast 1   fast 2-3    fast 6+
+heavy               120        120        119        120        120        120        120        119        120
+pack                119        118        120        120        120        120        119        120        120
+duellist            119        119        120        119        118        118        120        120        120
+shield              118        119        120        118        120        120        118        120        120
+archers             120        120        119        120        120        119        119        119        119
+bolt-mage           119        120        120        119        119        120        120        120        119
+area-mage           120        120        119        120        118        119        120        120        119
+stream-mage         119        119        120        118        120        120        120        120        119
+summoner            120        119        119        120        120        119        120        120        119
+charger             119        120        119        119        120        120        120        119        120
+boss-adds             0        120        119          0        120        119          0        120        120
+flyer               120        120        120        120        120        119        120        118        120
+party\player      near  at-leash   leaving
+alone             1050      1045      1049
+tank              1050      1037      1046
+healer            1048      1040      1048
+two-ranged        1047      1043      1045
+FIVE-WAY (kind x speed x count x terrain x party): 4200 cells, filled 4200, holes 0
+TERRAIN open      narrowest   1755  height    0  water  0.0%  doors 0.0   is what it says in 1260 of 1260
+TERRAIN corridor  narrowest     63  height    0  water  0.0%  doors 0.0   is what it says in 1260 of 1260
+TERRAIN doorway   narrowest    124  height    0  water  0.0%  doors 0.0   is what it says in 1260 of 1260
+TERRAIN pillars   narrowest    132  height    0  water  0.0%  doors 0.0   is what it says in 1259 of 1260
+TERRAIN stairs    narrowest    110  height  256  water  0.0%  doors 0.0   is what it says in 1260 of 1260
+TERRAIN bridge    narrowest    255  height    0  water  0.0%  doors 0.0   is what it says in 1260 of 1260
+TERRAIN dead-end  narrowest    370  height    0  water  0.0%  doors 0.0   is what it says in 1233 of 1260
+TERRAIN slope     narrowest   1273  height  471  water  0.0%  doors 0.0   is what it says in 1260 of 1260
+TERRAIN water     narrowest    979  height    0  water 44.5%  doors 0.0   is what it says in 1260 of 1260
+TERRAIN door      narrowest     24  height    0  water  0.0%  doors 2.0   is what it says in 1260 of 1260
+  measured otherwise terrain      3: 1
+  measured otherwise terrain      6: 27
+  measured otherwise player    1000: 2
+  measured otherwise player    1005: 5
+  measured otherwise player    1007: 15
+  measured otherwise player    1008: 2
+```
+
+HOLES: none of the 4,200 five-way cells is empty. What the set lacks: real water fighting (the shore is walkable), a moving bridge or platform, a foe that can swim or climb, light as an axis (S4's own rows have it), more than one other follower. Extracted places are extra terrain (`--env-set Tuxborn`, not in git), measured the same way, averages of 24 layouts:
+
+```
+PLACE i_EasierRidersDungeonPackS-01FE96 int narrowest 251 height 7 water 0.0% doors 0.0
+PLACE x_Skyrim-00003C_19_-2 ext narrowest 461 height 105 water 5.1% doors 2.0
+PLACE x_Darkend-000D62_-2_-10 ext narrowest 197 height 82 water 0.0% doors 23.0
+PLACE i_SkyrimSewers-0480FF int narrowest 171 height 159 water 5.6% doors 2.0
+PLACE i_Clockwork-52F496 int narrowest 253 height 6 water 0.0% doors 68.0
+PLACE x_Vigilant-06D275_-2_-2 ext narrowest 334 height 58 water 0.0% doors 12.0
+PLACE x_Skyrim-00003C_46_-28 ext narrowest 241 height 201 water 0.0% doors 0.0
+PLACE i_EasierRidersDungeonPackS-069826 int narrowest 145 height 91 water 7.8% doors 0.0
+PLACE i_MidwoodIsle-11CE63 int narrowest 146 height 132 water 0.0% doors 2.0
+PLACE i_Skyrim-0213A0 int narrowest 119 height 21 water 0.0% doors 13.0
+PLACE x_GrayFoxCowl-200000_18_8 ext narrowest 662 height 146 water 0.0% doors 0.0
+PLACE i_Skyrim-0152C1 int narrowest 152 height 183 water 0.0% doors 0.0
+PLACE x_Darkend-000D62_3_5 ext narrowest 249 height 187 water 0.0% doors 11.0
+PLACE i_arnima-014B76 int narrowest 95 height 110 water 0.0% doors 0.0
+```
+
+### 21.6 Acceptance (`--mode-test`)
+
+The oracle cannot be asked: its subject has no ranking in the picture, so he holds no claim (S2 F3). THE PLAN'S ACCEPTANCE IN ITS OWN WORDS NEEDS S5. What was run is a tournament of ten constant rules in the four modes (`kModeArms`), his own IAUS choosing the actions, on one fixed fight a scenario under many lucks. The race is the oracle's (paired, p 0.001, from 16 to 64 fights). Resolved = every arm still standing is of one mode. An arm whose orders held him under 10 percent of the time is Free over again and stands for nothing. 360 scenarios x 8 classes, 1.22 million fights, 16.6 ms each.
+
+| | Free | Stand | Kite | Disengage |
+|---|---|---|---|---|
+| highest mean, over all | 31.9 % | 42.7 % | 9.0 % | 16.4 % |
+| highest mean, best class | 48.6 warrior | 63.6 archer | 17.5 healer | 34.2 warrior |
+| of the resolved (430 of 2,880), over all | 38.6 % | 43.2 % | 2.3 % | 15.9 % |
+| of the resolved, best class | 57.6 warrior | 85.3 archer | 10.3 archer | 26.3 evoker |
+| still in the running somewhere, over all | 84.9 % | 81.2 % | 48.0 % | 39.7 % |
+
+How to read it. **The highest mean proves nothing alone:** with every arm Free (`--mode-null`) it gives 9 / 41 / 20 / 29 percent by arm count and luck. The race resolves 0 of 360 there, so what it resolves is real. By the resolved count the lines are met (10 percent for some class, none over 60 over all), **Kite only just** (7 of the archer's 68), because a kite holds off only foes slower than a backpedal (150 u/s). Only 15 percent of scenarios are resolved at 64 fights: modes that differ by less than luck stay open. An archer's own highest-mean share of Stand is 63.6 percent, of the resolved 85: over 60 inside that class. On the 168 extracted scenarios (32 fights) 4.2 percent resolve: too few to rule on, and by the race NOT MET there.
+
+### 21.7 Cost
+
+User CPU, 1 thread, evoker, knight, archer, mage, 480 fights: fixtures off 1.99 (main) and 1.87, point 4.31 and 4.32, strict 5.13 (2.7x off, 1.19x point). `i_Skyrim-0213A0` point 4.68 and 4.57, strict 5.93 (1.30x point: the body lives longer and more orders are walked). The 15-cell tune, ESTIMATE: the parts of movement-plan section 6 that run the road cost 1.2 to 1.3 times what it says, so the `spots` stage 300 to 520 CPU hours (was 250 to 400) and the round about 1,800 to 2,500 (was 1,700 to 2,300). S5's measured factor replaces this.
+
+### 21.8 Differences from the plan
+
+1. The residue table is in `Move.h` beside the mover's other numbers, not in `EnvTuning` (one reader, one table all the same). `areaLag` is `startDelay`, `displaceReturn` is `displaceU` plus the walk back.
+2. Cover and the other pin kinds are on by the strict cap, `t.spotPinKinds` stays 0 for the pinned road.
+3. Path is in the vocabulary and nothing emits it: the pass files single points and the mover finds its way.
+4. The mode set is not in `Scenarios.h`: a new scenario there moves the v4 baseline. The `spots` stage reads `ModeSpec`.
+5. HEAL-MOVE F1, F2, F3 and F5 are in this branch. F5 moved the "he reaches that patient" test from `Generate` to `TopRanked`, where the cooldowns are known.

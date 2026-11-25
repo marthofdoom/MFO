@@ -17,7 +17,7 @@
 
 namespace MFO::Iaus::MoveDump {
 
-    inline constexpr int kVersion = 4;
+    inline constexpr int kVersion = 5;
 
     struct Mesh {   // a View that owns its arrays
         std::vector<Env::Vec3> verts; std::vector<Env::Tri> tris; std::vector<Env::Door> doors; std::vector<Env::Wall> walls; std::vector<std::uint32_t> walk, weak; Env::Grid grid;
@@ -28,7 +28,7 @@ namespace MFO::Iaus::MoveDump {
         }
         [[nodiscard]] Env::View Get() const { return { verts, tris, doors, walls, weak, walk, &grid, interior, portalsOpen, stamp }; }
     };
-    struct Expect { Move::FormID who = 0; Move::SpotKey key = 0; int family = 0; std::uint32_t form = 0, target = 0; float score = 0.0f; };
+    struct Expect { Move::FormID who = 0; Move::SpotKey key = 0; int family = 0; std::uint32_t form = 0, target = 0; float score = 0.0f; Move::MoveOrder order; };
     struct Case { std::string name; Mesh mesh; Move::PartyPicture pic; std::vector<Move::RayAnswer> answers; std::vector<Expect> expect; std::vector<std::pair<std::string, float>> tuning; };
 
     namespace detail {
@@ -48,11 +48,13 @@ namespace MFO::Iaus::MoveDump {
             template <class I> requires(std::is_integral_v<I> || std::is_enum_v<I>) In& operator>>(I& v) { v = static_cast<I>(std::strtoll(Tok().c_str(), nullptr, 10)); return *this; }
         };
         inline void Act(Out& o, const RankedAction& a) { o << a.family << a.scrollOf << a.form << a.target << a.score << a.reach << a.melee << a.sight << a.moveOnly; }
+        inline void Order(Out& o, const Move::MoveOrder& r) { o << r.mode << r.p << r.tri << r.leashR << r.arriveR << r.flags << r.target << r.gen; }
+        inline void Order(In& i, Move::MoveOrder& r) { i >> r.mode >> r.p >> r.tri >> r.leashR >> r.arriveR >> r.flags >> r.target >> r.gen; }
         inline void Act(In& i, RankedAction& a) { i >> a.family >> a.scrollOf >> a.form >> a.target >> a.score >> a.reach >> a.melee >> a.sight >> a.moveOnly; }
     }
 
-    // a_pic as it stood BEFORE Freeze. a_answers: what Answer was given. a_as: what Phase3 returned.
-    inline void Write(std::ostream& f, const std::string& a_name, const Mesh& a_m, const Move::PartyPicture& a_pic, const std::vector<Move::RayAnswer>& a_answers, const std::vector<Move::Assignment>& a_as, bool a_sameMesh = false,
+    // a_pic as it stood BEFORE Freeze. a_answers: what Answer was given. a_as: what Phase3 returned. a_after: the picture AFTER Orders (who was ordered what).
+    inline void Write(std::ostream& f, const std::string& a_name, const Mesh& a_m, const Move::PartyPicture& a_pic, const std::vector<Move::RayAnswer>& a_answers, const std::vector<Move::Assignment>& a_as, const Move::PartyPicture& a_after, bool a_sameMesh = false,
         const std::vector<std::pair<std::string, float>>& a_tuning = {}) {
         detail::Out o{ f };
         const auto line = [&](const char* k) { f << '\n' << k; };
@@ -65,12 +67,13 @@ namespace MFO::Iaus::MoveDump {
         for (const auto& d : a_m.doors) { line("d"); o << d.tri << d.state << d.key << d.id << d.leaf << d.ax << d.ay << d.bx << d.by << d.z0 << d.z1; }
         }
         for (const auto& [n, x] : a_tuning) { line("u"); f << ' ' << n; o << x; }
-        line("pic"); o << a_pic.envStamp << a_pic.t << a_pic.caps.point << a_pic.caps.hold << a_pic.caps.pin << a_pic.caps.facing << a_pic.caps.gait << a_pic.exterior;
+        line("pic"); o << a_pic.envStamp << a_pic.t << a_pic.caps.point << a_pic.caps.hold << a_pic.caps.pin << a_pic.caps.facing << a_pic.caps.gait << a_pic.exterior << a_pic.caps.strict << a_pic.caps.kite << a_pic.caps.disengage;
         for (const auto& m : a_pic.party) {
             line("m"); o << m.id << m.p << m.ageSec << m.decides << m.classId << m.kinds << m.speed << m.anchor << m.leash << m.wantsDark << (m.marks | m.seen)
                          << m.who.radius << m.who.opensDoors << m.who.unlocks << m.who.large << m.who.drops << m.who.maxDrop << m.sneakSkill << m.invisible;
             for (std::size_t k = 0; k < m.nTop; ++k) { line("a"); detail::Act(o, m.top[k]); }
             if (m.commit.on) { line("c"); o << m.commit.key << m.commit.p << m.commit.tri << m.commit.kinds << m.commit.at; detail::Act(o, m.commit.act); detail::Act(o, m.commit.held); }
+            if (m.order.gen) { line("o"); detail::Order(o, m.order); }   // the order that stood
         }
         for (const auto& e : a_pic.foes) { line("f"); o << e.id << e.p << e.ageSec << e.target << e.faceX << e.faceY << e.skill; }
         for (const auto& r : a_pic.areas) { line("r"); o << r.p << r.r; }
@@ -84,7 +87,7 @@ namespace MFO::Iaus::MoveDump {
         for (const auto& r : a_pic.trust.refused) { line("z"); o << r.who << r.spot << r.t; }
         for (const auto& q : a_pic.trust.trail) { line("y"); o << q.p << q.t; }
         for (const auto& a : a_answers) { line("n"); o << a.spot << a.viewer << a.sees << a.t << a.viewerAt; }
-        for (const auto& a : a_as) { line("x"); o << a.who << a.key << a.action << a.form << a.target << a.score; }
+        for (const auto& a : a_as) { line("x"); o << a.who << a.key << a.action << a.form << a.target << a.score; for (const auto& r : a_after.party) if (r.id == a.who) detail::Order(o, r.order); }
         f << "\nend\n";
     }
 
@@ -103,11 +106,12 @@ namespace MFO::Iaus::MoveDump {
             else if (k == "v") { Env::Vec3 p; i >> p; c->mesh.verts.push_back(p); }
             else if (k == "t") { Env::Tri t; for (auto& x : t.v) i >> x; for (auto& x : t.nb) i >> x; for (auto& x : t.kind) i >> x; i >> t.flags >> t.door; c->mesh.tris.push_back(t); }
             else if (k == "d") { Env::Door d; i >> d.tri >> d.state >> d.key >> d.id >> d.leaf >> d.ax >> d.ay >> d.bx >> d.by >> d.z0 >> d.z1; c->mesh.doors.push_back(d); }
-            else if (k == "pic") i >> P.envStamp >> P.t >> P.caps.point >> P.caps.hold >> P.caps.pin >> P.caps.facing >> P.caps.gait >> P.exterior;
+            else if (k == "pic") i >> P.envStamp >> P.t >> P.caps.point >> P.caps.hold >> P.caps.pin >> P.caps.facing >> P.caps.gait >> P.exterior >> P.caps.strict >> P.caps.kite >> P.caps.disengage;
             else if (k == "m") { Move::Member m; i >> m.id >> m.p >> m.ageSec >> m.decides >> m.classId >> m.kinds >> m.speed >> m.anchor >> m.leash >> m.wantsDark >> m.marks
                                                    >> m.who.radius >> m.who.opensDoors >> m.who.unlocks >> m.who.large >> m.who.drops >> m.who.maxDrop >> m.sneakSkill >> m.invisible; P.party.push_back(m); }
             else if (k == "a" && !P.party.empty() && P.party.back().nTop < 3) { auto& m = P.party.back(); detail::Act(i, m.top[m.nTop++]); }
             else if (k == "c" && !P.party.empty()) { auto& x = P.party.back().commit; x.on = true; i >> x.key >> x.p >> x.tri >> x.kinds >> x.at; detail::Act(i, x.act); detail::Act(i, x.held); }
+            else if (k == "o" && !P.party.empty()) detail::Order(i, P.party.back().order);
             else if (k == "f") { Move::Foe e; i >> e.id >> e.p >> e.ageSec >> e.target >> e.faceX >> e.faceY >> e.skill; P.foes.push_back(e); }
             else if (k == "r") { Move::Area r; i >> r.p >> r.r; P.areas.push_back(r); }
             else if (k == "l") { Move::LightAt l; i >> l.key >> l.level; P.light.push_back(l); }
@@ -121,7 +125,7 @@ namespace MFO::Iaus::MoveDump {
             else if (k == "y") { Trust::Trail q; i >> q.p >> q.t; P.trust.trail.push_back(q); }
             else if (k == "u") { const std::string n = i.Tok(); float x = 0.0f; i >> x; c->tuning.push_back({ n, x }); }
             else if (k == "n") { Move::RayAnswer a; i >> a.spot >> a.viewer >> a.sees >> a.t >> a.viewerAt; c->answers.push_back(a); }
-            else if (k == "x") { Expect e; i >> e.who >> e.key >> e.family >> e.form >> e.target >> e.score; c->expect.push_back(e); }
+            else if (k == "x") { Expect e; i >> e.who >> e.key >> e.family >> e.form >> e.target >> e.score; detail::Order(i, e.order); c->expect.push_back(e); }
             else { a_err = "unknown line: " + row; return nullptr; }
             if (!i.ok) { a_err = "short line: " + row; return nullptr; }
         }

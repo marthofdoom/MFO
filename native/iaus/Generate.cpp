@@ -1056,12 +1056,6 @@ namespace MFO::Iaus {
                 case Prune::Nature::Unknown: break;
                 }
             }
-            // He reaches that patient with a heal of some kind from here: nobody walks for another one.
-            for (std::size_t i = x.out.moveOnly.size(); i-- > 0;)
-                if (std::any_of(x.out.actions.begin(), x.out.actions.end(), [&](const Candidate& a) { return detail::IsHeal(a) && a.target == x.out.moveOnly[i].target; })) {
-                    x.out.moveOnly.erase(x.out.moveOnly.begin() + static_cast<std::ptrdiff_t>(i));
-                    x.out.moveOnlySight.erase(x.out.moveOnlySight.begin() + static_cast<std::ptrdiff_t>(i));
-                }
         }
 
     }

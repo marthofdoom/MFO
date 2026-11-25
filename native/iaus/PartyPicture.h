@@ -34,8 +34,11 @@ namespace MFO::Iaus::Move {
     [[nodiscard]] inline constexpr SpotKey KeyOfStay(FormID a_who) { return kStayBit | a_who; }
     [[nodiscard]] inline constexpr std::uint32_t KindBit(SpotKind a_k) { return 1u << static_cast<unsigned>(a_k); }
 
-    enum Need : std::uint32_t { kNeedPin = 1, kNeedFacing = 2, kNeedGait = 4 };   // what a kind needs of the mover
-    struct RoadCaps { bool point = true, hold = true, pin = false, facing = false, gait = false; };   // what the mover can do NOW (the ABI today: point and hold)
+    enum Need : std::uint32_t { kNeedPin = 1, kNeedFacing = 2, kNeedGait = 4, kNeedKite = 8, kNeedDisengage = 16 };   // what a kind needs of the mover
+    struct RoadCaps { bool point = true, hold = true, pin = false, facing = false, gait = false;   // what the mover can do NOW (the ABI today: point and hold)
+        // STRICT MOVEMENT (ABI 48, kMoveCaps_*): an order is a point that is kept. A strict road IS a pin, whatever t.spotPinKinds says (marth: cover, chokepoint
+        // and flank stay on), and it refuses the kite and the disengage kind unless their cap is on. Without strict the two are read by nobody.
+        bool strict = false, kite = false, disengage = false; };
 
     struct Spot {
         SpotKey key = 0; Env::Vec3 p; std::int32_t tri = -1;
@@ -53,6 +56,18 @@ namespace MFO::Iaus::Move {
                        bool operator==(const RayAsk& o) const { return spot == o.spot && viewer == o.viewer; } };
     // t >= 0: when the ray was cast and where the viewer stood (a road that answers later than its window says so). t < 0: as the question was FIRST filed.
     struct RayAnswer { SpotKey spot = 0; FormID viewer = 0; Iaus::Tri sees = Iaus::Tri::Unknown; double t = -1.0; Env::Vec3 viewerAt{}; };
+
+    // ── orders (MoveOrder.h) ──
+    enum class MoveMode : std::uint8_t { Free = 0, Stand, GoTo, Kite, Disengage, Path, kCount };   // = Harbinger's MoveMode, never renumbered
+    struct MoveOrder {
+        MoveMode mode = MoveMode::Free;
+        Env::Vec3 p; std::int32_t tri = -1;
+        float leashR = 0.0f, arriveR = 0.0f;
+        std::uint32_t flags = 0;                       // MoveFlags. 0: lunges allowed, dodge allowed (marth)
+        FormID target = 0;                             // what the action he goes there for is aimed at (diagnostics, never an input of the mover)
+        std::uint32_t gen = 0;                         // goes up with every order that is another one
+        [[nodiscard]] bool Same(const MoveOrder& o) const { return mode == o.mode && (mode == MoveMode::Free || (p.x == o.p.x && p.y == o.p.y && p.z == o.p.z && tri == o.tri && leashR == o.leashR && arriveR == o.arriveR && flags == o.flags)); }
+    };
 
     // ── members and foes ──
     enum Mark : std::uint32_t {   // a REAL event since the last pass: it frees a committed member for the next pass, it never runs one
@@ -77,6 +92,7 @@ namespace MFO::Iaus::Move {
         float sneakSkill = -1.0f;                      // S4: his Sneak, perks included (DetectIn::skillT). < 0 = not read: spot_detected does not apply
         bool  invisible = false;
         Commit commit;
+        MoveOrder order;                               // the order that stands (MovePass::Orders writes it, the holder may reset it)
         std::uint32_t marks = 0;                       // the holder's INBOX: set at any time, also between Freeze and Adopt. Freeze takes it, Adopt never touches it
         // frozen by MovePass::Freeze
         std::uint32_t seen = 0;                        // the marks this window decides on (the inbox it took + what Freeze found). Adopt clears it
