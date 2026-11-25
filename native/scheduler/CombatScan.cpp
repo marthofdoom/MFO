@@ -1078,7 +1078,8 @@ namespace MFO::Scheduler {
                         }
                     }
                 }
-                APMFBridge::ServiceCastGuard(id, hookOn && Config::g_friendlyFireHold.load(), channel);
+                APMFBridge::ServiceCastGuard(id, hookOn && Config::g_friendlyFireHold.load(), channel,
+                                             Actuation::SelfBlastGuardStands(id));
             }
             CasterConsent::NoteGambits(id, std::move(gambits));
         }

@@ -51,6 +51,7 @@
 #include <unordered_set>
 #include "Runtime.h"
 #include "apmf/APMFBridge.h"
+#include "apmf/CastGuardBits.h"   // MFO-B872 11: BlastStands
 #include "SeatRows.h"   // ABI v47 FireOnceServed
 #include "iaus/Prune.h"   // SummonHoldsCastChannel
 
@@ -229,6 +230,7 @@ namespace MFO::Actuation {
                 ComposedCast::ClearWatchHand(id, APMFBridge::kApmfHandLeft);
             }
             ClearLeftCastLockIf(id, a_spell->GetFormID());
+            if (SelfBlastClaimSpell(a_spell)) APMFBridge::SetSelfBlastGuard(id, false);   // MFO-B872 11: the hold ends with the claim
             if (const auto fs = g_fireSeen.find(id); fs != g_fireSeen.end())
                 for (auto it = fs->second.begin(); it != fs->second.end();)
                     it = (static_cast<RE::FormID>(it->first & 0xFFFFFFFFu) == a_spell->GetFormID()) ? fs->second.erase(it) : std::next(it);
@@ -546,6 +548,12 @@ namespace MFO::Actuation {
         return SelfBlastClaimSpell(RE::TESForm::LookupByID<RE::SpellItem>(spell)) ? spell : 0;
     }
 
+    bool SelfBlastGuardStands(RE::FormID a_follower) {
+        const bool lock = StandingSelfBlast(a_follower) != 0;
+        return CastGuardBits::BlastStands(lock, lock ? g_castLock.find(a_follower)->second.hand[kHandLeft].owningRule : kNoRule,
+                                          lock && APMFBridge::IsOwnedCastActiveOnHand(a_follower, APMFBridge::kApmfHandLeft));
+    }
+
     void ServiceStandingBlast(RE::Actor* a_follower, RE::FormID a_spell, bool a_open) {
         auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_spell);
         if (!a_follower || !sp) return;
@@ -731,7 +739,11 @@ namespace MFO::Actuation {
         const RE::FormID target = corpseTarget ? corpseTarget : (other || explicitSelf) ? rid : 0;
         // ABI v47: an ambiguous-row buff the bounded set refused is filed fire-once (the claim's own bound), decided by BuffFireOnce.
         const bool fireOnce = BuffClaimFireOnce(a_spell, other);
+        // MFO-B872 11: the party hold is asked BEFORE the blast claim, so the two reach Harbinger's same drain. Only an IAUS pick comes here with a blast.
+        const bool blast = g_firingIaus && !other && SelfBlastClaimSpell(a_spell);
+        if (blast) APMFBridge::SetSelfBlastGuard(id, true);
         if (!APMFBridge::ClaimOffenseCast(id, spellID, target, APMFBridge::kApmfHandLeft, conc, /*stopPct=*/0, fireOnce)) {
+            if (blast) APMFBridge::SetSelfBlastGuard(id, false);
             // Present and capable means APMF REFUSED: fail closed, loudly, never the direct road.
             LogApmfRefusal(id, "buff cast", spellID, target, "left");
             return SelfCast::Declined;

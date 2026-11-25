@@ -6,6 +6,10 @@
 #include "APMFBridge.h"
 #include "APMFBridge_internal.h"
 #include "APMF_API.h"
+#include "CastGuardBits.h"
+#include "Config.h"
+
+#include <atomic>
 
 #include <chrono>
 #include <mutex>
@@ -23,7 +27,10 @@ namespace MFO::APMFBridge {
         // weapon attack or a Self area spell that would hit a bystander (not the player, not the party).
         // It rides bFriendlyFireHold with LineOfFire. An APMF below ABI 32 REFUSES the whole claim for an
         // unknown bit, so the bit is asked only from ABI 32 up (older: LineOfFire alone, as before).
-        constexpr std::uint32_t kBystandersMinAbi = 32;
+        // Both gates and the self blast bits live in CastGuardBits.h (pure, harness rows); its literals are the header's:
+        static_assert(CastGuardBits::kLineOfFire == APMF_API::kCastGuard_LineOfFire && CastGuardBits::kBystanders == APMF_API::kCastGuard_Bystanders);
+        static_assert(CastGuardBits::kChannel == (APMF_API::kCastGuard_ChannelRight | APMF_API::kCastGuard_ChannelLeft));
+        static_assert(CastGuardBits::kSelfBlastParty == APMF_API::kCastGuard_SelfBlastParty && CastGuardBits::kSelfBlastSummons == APMF_API::kCastGuard_SelfBlastSummons);
 
         // The claim's window. Harbinger bounds it like a cast claim and every Repoint
         // renews it; the service lap repoints far more often than this (one combat
@@ -40,6 +47,7 @@ namespace MFO::APMFBridge {
         struct Guard {
             APMF_API::Handle handle   = APMF_API::kInvalidHandle;
             std::uint32_t    bits     = 0;   // what the handle carries now
+            CastGuardBits::In in;            // what the last service (and SetSelfBlastGuard) asked for
             bool             announced = false;   // CLAIMED logged (once per stretch of wanting a guard)
             std::chrono::steady_clock::time_point mintedAt{};
         };
@@ -59,93 +67,167 @@ namespace MFO::APMFBridge {
             if (a_bits & APMF_API::kCastGuard_Bystanders) s += s.empty() ? "Bystanders" : "+Bystanders";
             if (a_bits & (APMF_API::kCastGuard_ChannelRight | APMF_API::kCastGuard_ChannelLeft))
                 s += s.empty() ? "Channel(R+L)" : "+Channel(R+L)";
+            if (a_bits & CastGuardBits::kSelfBlastParty) s += s.empty() ? "SelfBlastParty" : "+SelfBlastParty";
+            if (a_bits & CastGuardBits::kSelfBlastSummons) s += s.empty() ? "SelfBlastSummons" : "+SelfBlastSummons";
             return s.empty() ? "none" : s;
         }
     }
 
     bool CastGuardSupported() { return GuardApi() != nullptr; }
 
-    void ServiceCastGuard(RE::FormID a_follower, bool a_lineOfFire, bool a_channelBound) {
-        const auto* api = GuardApi();
-        if (!api || a_follower == 0 || a_follower == 0x14) return;   // Harbinger refuses the player
-        constexpr std::uint32_t kChannel = APMF_API::kCastGuard_ChannelRight | APMF_API::kCastGuard_ChannelLeft;
-        std::uint32_t want = 0;
-        APMF_API::Handle h = APMF_API::kInvalidHandle;
-        std::uint32_t have = 0;
-        bool stale = false;
-        {
-            std::scoped_lock lock(g_guardMx);
-            auto& g = g_guards[a_follower];
-            if (a_lineOfFire) {
-                want |= APMF_API::kCastGuard_LineOfFire;
-                if (api->abiVersion >= kBystandersMinAbi) want |= APMF_API::kCastGuard_Bystanders;
+    namespace {
+        // THE DRY RUN (Harbinger ABI v35), ONCE PER SESSION: are the self blast bits served? They came without an ABI bump, and a Repoint that carries an
+        // unknown bit is DROPPED, so nothing is repointed with them before this answered. Asked with the two bits ALONE: the answer is about them. What it
+        // reads (the header's bits, the measurement armed at kDataLoaded) does not change in a session. 0 = not asked, 1 = served, 2 = not served.
+        std::atomic<int> g_selfBlastServed{ 0 };
+
+        bool SelfBlastServed(const APMF_API::APMF_API_v6* a_api, RE::FormID a_follower) {
+            if (const int s = g_selfBlastServed.load(std::memory_order_acquire); s != 0) return s == 1;
+            std::uint32_t v = APMF_API::kServe_Failed;
+            APMF_API::APMF_ServeInfo info{};
+            info.size = sizeof(info);
+            if (a_api->abiVersion >= CastGuardBits::kServeMinAbi) {
+                APMF_API::APMF_Param p{};
+                p.ival = static_cast<std::int32_t>(CastGuardBits::kSelfBlast);
+                p.fval = kGuardWindowSecs;
+                APMF_API::APMF_ServeQuery q{};
+                q.size   = sizeof(q);
+                q.call   = APMF_API::kServeCall_RequestEx;
+                q.actor  = a_follower;
+                q.intent = APMF_API::kIntent_CastGuard;
+                q.basis  = kOwnBasis;
+                q.param  = &p;
+                v = reinterpret_cast<const APMF_API::APMF_API_v35*>(a_api)->CanServe(&q, &info);
             }
-            if (a_channelBound) want |= kChannel;
-            want &= ~g_refusedBits;   // a guard Harbinger refused this session is not asked again
-            h    = g.handle;
-            have = g.bits;
-            if (want == 0) {
-                // No guard applies this lap: no claim (a Repoint with no bit is refused
-                // by Harbinger, so the handle is released instead).
+            const bool served = v == APMF_API::kServe_Accepted;
+            int expected = 0;
+            if (g_selfBlastServed.compare_exchange_strong(expected, served ? 1 : 2, std::memory_order_acq_rel)) {
+                info.why[sizeof(info.why) - 1] = '\0';
+                if (served)
+                    spdlog::info("[cast-guard] Harbinger serves the self blast party hold (kCastGuard_SelfBlastParty / Summons; asked once per session): it stands "
+                                 "with every IAUS self blast claim.");
+                else
+                    spdlog::warn("[cast-guard] Harbinger does NOT serve the self blast party hold (ABI {}, verdict {}: {}) -- a self blast is guarded by MFO's own "
+                                 "census and margin alone, as before. Said once per session.",
+                                 a_api->abiVersion, v, a_api->abiVersion < CastGuardBits::kServeMinAbi ? "no CanServe" : info.why);
+            }
+            return served;
+        }
+
+        // The claim of the follower whose inputs are stored in g_guards: file, repoint or release. Worker.
+        void Apply(const APMF_API::APMF_API_v6* api, RE::FormID a_follower) {
+            CastGuardBits::In in;
+            {
+                std::scoped_lock lock(g_guardMx);
+                const auto it = g_guards.find(a_follower);
+                if (it == g_guards.end()) return;
+                in = it->second.in;
+            }
+            in.abi = api->abiVersion;
+            if (in.selfBlast && in.lineOfFire) in.selfBlastServed = SelfBlastServed(api, a_follower);   // before any Repoint with the bits
+            in.summonsBlock = Config::g_areaSummonsBlock.load();
+
+            for (;;) {   // a second pass only after the self blast bits were struck
+                std::uint32_t    want = 0, have = 0;
+                APMF_API::Handle h = APMF_API::kInvalidHandle;
+                bool stale = false;
+                {
+                    std::scoped_lock lock(g_guardMx);
+                    const auto it = g_guards.find(a_follower);
+                    if (it == g_guards.end()) return;
+                    auto& g = it->second;
+                    in.refused = g_refusedBits;   // a guard Harbinger refused this session is not asked again
+                    want = CastGuardBits::Want(in);
+                    h    = g.handle;
+                    have = g.bits;
+                    if (want == 0) {
+                        // No guard applies this lap: no claim (a Repoint with no bit is refused
+                        // by Harbinger, so the handle is released instead).
+                        g_guards.erase(it);
+                    } else if (h != APMF_API::kInvalidHandle) {
+                        // A handle Harbinger no longer knows (its window lapsed, a release-all
+                        // hotkey) would make Repoint a silent no-op: re-request.
+                        stale = std::chrono::steady_clock::now() - g.mintedAt >= kEquipAuthValidateAfter &&
+                                !api->IsClaimLive(h);
+                    }
+                }
+                if (want == 0) {
+                    if (h != APMF_API::kInvalidHandle) api->Release(h);
+                    return;
+                }
+                if ((want ^ have) & CastGuardBits::kSelfBlast)
+                    spdlog::info("[cast-guard] {:08X}: self blast party hold {} (the guard now asks {})", a_follower,
+                                 (want & CastGuardBits::kSelfBlast) ? "ON" : "off", BitsName(want));
+                APMF_API::APMF_Param p{};
+                p.ival = static_cast<std::int32_t>(want);
+                p.fval = kGuardWindowSecs;
+                if (h != APMF_API::kInvalidHandle && !stale) {
+                    // Heartbeat: Repoint renews the window and re-reads ival (an MCM change
+                    // rides it).
+                    api->Repoint(h, &p);
+                    if (have != want) {
+                        std::scoped_lock lock(g_guardMx);
+                        if (auto it = g_guards.find(a_follower); it != g_guards.end() && it->second.handle == h)
+                            it->second.bits = want;
+                    }
+                    return;
+                }
+                if (stale) api->Release(h);   // harmless on a handle Harbinger already dropped
+                const APMF_API::Handle nh = api->RequestEx(a_follower, APMF_API::kIntent_CastGuard, kOwnBasis, &p);
+                std::scoped_lock lock(g_guardMx);
+                auto& g = g_guards[a_follower];
+                if (nh != APMF_API::kInvalidHandle) {
+                    g.handle = nh;
+                    g.bits = want;
+                    g.mintedAt = std::chrono::steady_clock::now();
+                    if (std::exchange(g.announced, true)) return;
+                    spdlog::info("[cast-guard] {:08X}: ch.25 guard CLAIMED {} (h={}, window {:.0f} s)", a_follower,
+                                 BitsName(want), nh, kGuardWindowSecs);
+                    return;
+                }
                 g.handle = APMF_API::kInvalidHandle;
                 g.bits = 0;
-                g_guards.erase(a_follower);
-            } else if (h != APMF_API::kInvalidHandle) {
-                // A handle Harbinger no longer knows (its window lapsed, a release-all
-                // hotkey) would make Repoint a silent no-op: re-request.
-                stale = std::chrono::steady_clock::now() - g.mintedAt >= kEquipAuthValidateAfter &&
-                        !api->IsClaimLive(h);
+                // NEVER MASKED, NEVER WORKED AROUND: no MFO hook stands in (client mode).
+                // Harbinger refuses on configuration (CheckCast gate not installed, the
+                // line-of-fire measurement not armed), which a load does not change, so
+                // the refused guard is struck for the session and said once. The self blast
+                // bits are struck first and ALONE (the rest is asked again at once); else LineOfFire
+                // (with Bystanders, which shares its arming rule) is struck first when the
+                // channel bound was asked too, so the channel bound is asked again alone
+                // next lap.
+                const std::uint32_t strike = CastGuardBits::Strike(want);
+                g_refusedBits |= strike;
+                spdlog::error("[cast-guard] Harbinger REFUSED the ch.25 cast guard {} (asked {} for {:08X}) -- {} is "
+                              "INACTIVE for this session (APMF's log names why). No MFO hook stands in.",
+                              BitsName(strike), BitsName(want), a_follower, BitsName(strike));
+                if ((strike & CastGuardBits::kSelfBlast) == 0) return;
             }
         }
-        if (want == 0) {
-            if (h != APMF_API::kInvalidHandle) api->Release(h);
-            return;
+    }
+
+    void ServiceCastGuard(RE::FormID a_follower, bool a_lineOfFire, bool a_channelBound, bool a_selfBlast) {
+        const auto* api = GuardApi();
+        if (!api || a_follower == 0 || a_follower == 0x14) return;   // Harbinger refuses the player
+        {
+            std::scoped_lock lock(g_guardMx);
+            auto& in = g_guards[a_follower].in;
+            in.lineOfFire   = a_lineOfFire;
+            in.channelBound = a_channelBound;
+            in.selfBlast    = a_selfBlast;
         }
-        if (h != APMF_API::kInvalidHandle && !stale) {
-            // Heartbeat: Repoint renews the window and re-reads ival (an MCM change
-            // rides it).
-            APMF_API::APMF_Param p{};
-            p.ival = static_cast<std::int32_t>(want);
-            p.fval = kGuardWindowSecs;
-            api->Repoint(h, &p);
-            if (have != want) {
-                std::scoped_lock lock(g_guardMx);
-                if (auto it = g_guards.find(a_follower); it != g_guards.end() && it->second.handle == h)
-                    it->second.bits = want;
-            }
-            return;
+        Apply(api, a_follower);
+    }
+
+    void SetSelfBlastGuard(RE::FormID a_follower, bool a_on) {
+        const auto* api = GuardApi();
+        if (!api) return;
+        {
+            std::scoped_lock lock(g_guardMx);
+            const auto it = g_guards.find(a_follower);
+            if (it == g_guards.end() || it->second.in.selfBlast == a_on) return;   // no guard serviced yet: the next lap's service carries it
+            it->second.in.selfBlast = a_on;
         }
-        if (stale) api->Release(h);   // harmless on a handle Harbinger already dropped
-        APMF_API::APMF_Param p{};
-        p.ival = static_cast<std::int32_t>(want);
-        p.fval = kGuardWindowSecs;
-        const APMF_API::Handle nh = api->RequestEx(a_follower, APMF_API::kIntent_CastGuard, kOwnBasis, &p);
-        std::scoped_lock lock(g_guardMx);
-        auto& g = g_guards[a_follower];
-        if (nh == APMF_API::kInvalidHandle) {
-            g.handle = APMF_API::kInvalidHandle;
-            g.bits = 0;
-            // NEVER MASKED, NEVER WORKED AROUND: no MFO hook stands in (client mode).
-            // Harbinger refuses on configuration (CheckCast gate not installed, the
-            // line-of-fire measurement not armed), which a load does not change, so
-            // the refused guard is struck for the session and said once. LineOfFire
-            // (with Bystanders, which shares its arming rule) is struck first when the
-            // channel bound was asked too, so the channel bound is asked again alone
-            // next lap.
-            constexpr std::uint32_t kArmed = APMF_API::kCastGuard_LineOfFire | APMF_API::kCastGuard_Bystanders;
-            const std::uint32_t strike = (want & kArmed) ? (want & kArmed) : want;
-            g_refusedBits |= strike;
-            spdlog::error("[cast-guard] Harbinger REFUSED the ch.25 cast guard {} (asked {} for {:08X}) -- {} is "
-                          "INACTIVE for this session (APMF's log names why). No MFO hook stands in.",
-                          BitsName(strike), BitsName(want), a_follower, BitsName(strike));
-            return;
-        }
-        g.handle = nh;
-        g.bits = want;
-        g.mintedAt = std::chrono::steady_clock::now();
-        if (std::exchange(g.announced, true)) return;
-        spdlog::info("[cast-guard] {:08X}: ch.25 guard CLAIMED {} (h={}, window {:.0f} s)", a_follower,
-                     BitsName(want), nh, kGuardWindowSecs);
+        Apply(api, a_follower);
     }
 
     void ReleaseCastGuard(RE::FormID a_follower) {

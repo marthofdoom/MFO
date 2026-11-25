@@ -307,6 +307,8 @@ namespace MFO::Actuation {
     // WORKER. M4 F1: the self blast whose claim stands on his LEFT hand (0 = none), and what to do with it when its candidate is not open this lap
     // (Iaus::Prune::StandingBlastVerdict): released at once, or, with the charge in flight, left to the engine (MFO never cuts a charge here) and named on a line.
     RE::FormID StandingSelfBlast(RE::FormID a_follower);
+    // WORKER. MFO-B872 11: the same claim, filed by an IAUS pick and live (apmf/CastGuardBits.h BlastStands): while true his ch.25 guard also asks the self blast bits.
+    bool       SelfBlastGuardStands(RE::FormID a_follower);
     void       ServiceStandingBlast(RE::Actor* a_follower, RE::FormID a_spell, bool a_open);
     // WORKER (cast/HealRoad.cpp, 1dfcuabd309). The heal twin: would a Self-delivery HEAL of a_spell cast at a_recipient (any
     // actor other than a_follower) be served by a proxy road? True when the heal claim road is open

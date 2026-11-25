@@ -17,6 +17,7 @@
 #include "iaus/Reposition.h" // batch I: spell range, back-off, hidden step
 #include "iaus/ClassCurves.h" // per-class curve rows (ruling Q-class-curves)
 #include "cast/PartyGap.h"   // anim-residue A1: the party-fight hold rule
+#include "apmf/CastGuardBits.h"   // MFO-B872 11: the ch.25 guard bits
 #include "cast/SeatRows.h"   // ABI v46 adoption: the seated-row rule, the need of a target, the zero-effect reading rules
 #include "iaus/LootNeed.h"    // IAUS looting: category + consumable scores (ClickUp 1dfcuabd18f)
 
@@ -3101,6 +3102,35 @@ namespace {
             Check(Prune::BlastHoldsCastChannel(true, true, false) && !Prune::BlastHoldsCastChannel(false, true, false) && !Prune::BlastHoldsCastChannel(true, false, false) &&
                       !Prune::BlastHoldsCastChannel(true, true, true), "M4 F3: a deferred, switched-off or never-fired blast holds no cast channel");
             Check(Prune::BlastServed(true, true) && !Prune::BlastServed(false, true) && !Prune::BlastServed(true, false), "M4 F4: a blast no Harbinger row can serve is not offered");
+            {   // MFO-B872 11: the ch.25 guard claim's bits (apmf/CastGuardBits.h)
+                namespace G = MFO::CastGuardBits;
+                G::In in; in.abi = 48; in.lineOfFire = true; in.selfBlastServed = true;
+                constexpr std::uint32_t kBase = G::kLineOfFire | G::kBystanders;
+                Check(G::Want(in) == kBase, "B872 11: no blast claim stands: today's bits");
+                in.selfBlast = true;
+                Check(G::Want(in) == (kBase | G::kSelfBlastParty), "B872 11: a standing IAUS blast asks the party hold");
+                in.summonsBlock = true;
+                Check(G::Want(in) == (kBase | G::kSelfBlast), "B872 11: bAreaSummonsBlock adds the summons bit");
+                in.channelBound = true;
+                Check(G::Want(in) == (kBase | G::kSelfBlast | G::kChannel), "B872 11: one claim carries every bit");
+                G::In off = in; off.lineOfFire = false;
+                Check(G::Want(off) == G::kChannel && !G::AsksServe(off), "B872 11: bFriendlyFireHold off: no hold, no dry run");
+                G::In uns = in; uns.selfBlastServed = false;
+                Check(G::Want(uns) == (kBase | G::kChannel), "B872 11: not served (an older Harbinger at the same ABI): today's bits, nothing repointed with them");
+                G::In old = in; old.abi = 34;
+                Check(G::Want(old) == (kBase | G::kChannel) && !G::AsksServe(old), "B872 11: no CanServe (ABI < 35): today's bits");
+                old.abi = 31;
+                Check(G::Want(old) == (G::kLineOfFire | G::kChannel), "B872 11: ABI < 32: LineOfFire alone, as before");
+                G::In ref = in; ref.refused = G::Strike(G::Want(in));
+                Check(ref.refused == G::kSelfBlast && G::Want(ref) == (kBase | G::kChannel), "B872 11: a refusal strikes the self blast bits alone, never LineOfFire");
+                Check(G::Strike(kBase | G::kChannel) == kBase && G::Strike(G::kChannel) == G::kChannel, "B872 11: the old strikes are unchanged");
+                ref.refused = G::kSelfBlastParty;
+                Check((G::Want(ref) & G::kSelfBlast) == 0, "B872 11: never the summons bit alone");
+                Check(G::BlastStands(true, RankOf(1), true) && G::BlastStands(true, RankOf(4000000), true), "B872 11: an IAUS lock with a live claim stands");
+                Check(!G::BlastStands(true, 0, true) && !G::BlastStands(true, 254, true), "B872 11: a gambit drives the hand: no hold");
+                Check(!G::BlastStands(true, std::numeric_limits<int>::max(), true) && !G::BlastStands(true, -1, true), "B872 11: an unranked lock is no IAUS pick");
+                Check(!G::BlastStands(true, RankOf(1), false) && !G::BlastStands(false, RankOf(1), true), "B872 11: the claim ended, or another spell: no hold");
+            }
             // a self area that harms nobody (Harmony: control, no hostile effect) keeps no pad
             { SpellEntry h; h.selfDelivery = true; h.nature = Prune::Nature::Control; h.areaUnits = 700.0f; Check(AreaAllyPad(h) == 0.0f, "M4 F1: Harmony has no ally pad");
               h.hostileArea = true; Check(AreaAllyPad(h) > kAreaGuard.safetyMargin, "M4 F1: Mass Paralysis has");
