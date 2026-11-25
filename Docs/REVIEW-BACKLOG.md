@@ -3979,3 +3979,10 @@ R6 SEV-4 vacuous scenario half: mutation "Walked clears nothing" PASSES spot-tes
 R7 SEV-4 trust scenarios are one fight repeated: worst == mean on all seeds (2.6 s), so 48 fights / 16 seeds add no evidence there. Variant starts 8,1->18,5 and 9,1->13,6: distrusted + recovered, but "used again after repair" 0 of 12 (may be the route not crossing the gap; not traced).
 Q2 clipped corner: backlogged as SEV-4, agree. avoid ×6 softens it. Deviations 1 to 5: acceptable; 1 (0.02) makes R5 costlier.
 NOT DONE: cost sample (running bf849bgi1 output), cli/off4 read, R7 trace.
+
+### MFO-B869 (OPEN, author's own list for `feat/placed-m2`, 2026-11-24; `iaus/AreaCensus.h`, `iaus/AreaActors.*`)
+1. (SEV-4) `kAreaGuard.safetyMargin` 128 is a PLACEHOLDER sized from the cadence, no field number.
+2. (SEV-4) The build cost (actors x asking followers `IsHostileToActor` calls each 133 ms in a fight) is unmeasured in a crowded town: the `[area-guard] since start` line carries it.
+3. (SEV-4) An area cast picked while clear has no MFO re-check between the claim and the release; Harbinger ch.25 is the only guard there.
+4. (SEV-5) The lab leaves `SpellEntry::hostileArea` false and has no bystanders: a follower's hostile control area beside an ally scores in the lab and not in the game. Fill it from the extracted `placed` bits when the sim is next opened.
+5. (SEV-5) A summon that is not hostile to the caster closes every area beside it, his own included (the plan's definition). The field decides whether that is too strict for a conjurer.
