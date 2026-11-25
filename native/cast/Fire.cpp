@@ -591,6 +591,13 @@ namespace MFO::Actuation {
                 return { Result::Fired, std::format("closing to melee on {}", foeName), false, /*approach=*/true };
             }
 
+            // 11-25 deck-strict: no swing while a strict order of ours walks him (Harbinger refuses it, and road=graph would carry
+            // him off the point). TRANSPARENT: nothing asked, nothing mutated. A refused power attack also backs off (5 s).
+            if (APMFBridge::StrictOrderMoving(a_follower->GetFormID()))
+                return { Result::FailedOther, "power attack: a strict movement order is travelling him", true };
+            if (APMFBridge::PowerAttackBackedOff(a_follower->GetFormID()))
+                return { Result::FailedOther, "power attack: backing off after a refusal", true };
+
             // IN melee reach -- SWING. Try the anim FIRST and commit the target
             // latch ONLY if it accepted. Latch-then-reject (Opus review) was a
             // two-mutation tick: Command wrote the latch, then the transparent
@@ -666,6 +673,8 @@ namespace MFO::Actuation {
             const float dist = a_follower->GetPosition().GetDistance(foe->GetPosition());
             if (dist > Iaus::ReachBook::SwingLimit(a_follower->GetFormID(), CombatSense::BodyRadius(foe), Config::g_meleeReach.load()))   // the swing gate's limit (review F4)
                 return { Result::FailedSkill, "bash: the foe is out of melee reach", true };
+            if (APMFBridge::StrictOrderMoving(a_follower->GetFormID()))   // 11-25 deck-strict: Harbinger refuses it, so MFO does not ask
+                return { Result::FailedOther, "bash: a strict movement order is travelling him", true };
             const std::uint32_t h = APMFBridge::RequestBash(a_follower->GetFormID(), foe->GetFormID(), /*a_power=*/false);
             if (h == 0) return { Result::FailedOther, "bash refused by Harbinger at the call", true };
             return { Result::Fired, std::format("bash requested -> {} (h={})", foe->GetName() ? foe->GetName() : "?", h) };

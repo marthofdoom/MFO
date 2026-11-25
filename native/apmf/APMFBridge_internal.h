@@ -106,6 +106,9 @@ namespace MFO::APMFBridge {
             // identity like denyOnly: the flags are fixed at RequestCast and Repoint cannot add or clear the bit, so a change
             // is a release and a new claim, never an in-place update. False for every claim that predates the adoption.
             bool             fireOnce = false;
+            // Who filed it (set where the handle is assigned): ReleaseClaimLocked has no follower, and a fire-once claim's Fired end
+            // is read there before the release (deck-strict 11-25: the fire was never seen once the claim was gone).
+            RE::FormID       owner = 0;
             std::chrono::steady_clock::time_point refreshed{};
             // WHEN THIS HANDLE WAS REQUESTED -- the claim's own AGE clock, set
             // ONCE where `handle` is assigned below and never moved again while
@@ -351,6 +354,13 @@ namespace MFO::APMFBridge {
         // *** ALL of them are guarded by g_mx. ***
         extern std::mutex                             g_mx;
         extern std::unordered_map<RE::FormID, Owned>  g_owned;
+        // ABI v47 fire-once claims whose Fired end was read just before their release or supersede: (owner << 32 | spell) -> {claim target, when}.
+        // Guarded by g_mx. Taken (consumed) by TakeFireOnceSpent; cleared at the load boundary.
+        struct FireOnceSpent { RE::FormID target = 0; std::chrono::steady_clock::time_point when{}; };
+        extern std::unordered_map<std::uint64_t, FireOnceSpent> g_fireOnceSpent;
+        // Reads GetClaimEndReason on a live fire-once claim and latches a Fired one into g_fireOnceSpent. Caller holds g_mx, calls it
+        // BEFORE api->Release(c.handle). True = the claim had fired (latched).
+        bool NoteFireOnceEnd(const CastClaim& a_c);
         extern std::unordered_set<RE::FormID>         g_equipAuthRefused;
         extern std::unordered_set<RE::FormID>         g_selectOverflow;
         extern std::unordered_set<RE::FormID>         g_selectRefused;
