@@ -56,7 +56,7 @@ namespace MFO::SelfTest {
             float bodyHeight   = 128.0f;
             float startOutside = 60.0f;   // a leg starts at least this far outside its own radius, else "arrived" proves nothing
             float playerReach  = 1200.0f; // points and starts stay this near the player: past his pursuit leash Harbinger refuses the point
-            float roleWait     = 12.0f;   // how long a leg waits for the role's weapon to be in hand
+            float roleWait     = 25.0f;   // how long a leg waits for the role's weapon to be in hand
             float roleLost     = 2.0f;    // other things in the right hand this long in a leg = not a valid leg
             float leashedMax   = 1.0f;
         };
@@ -370,9 +370,12 @@ namespace MFO::SelfTest {
             return Role::None;
         }
         const char* RoleName(Role r) { return r == Role::Melee ? "melee" : r == Role::Bow ? "bow" : r == Role::Spell ? "spell" : "none"; }
-        bool RoleFits(Who a_who, Role a_r) {
-            if (a_r == Role::None) return false;
-            return a_who == Who::Any || (a_who == Who::Fighter) == (a_r == Role::Melee);
+        // ANY follower takes any test (marth 2026-11-24: "requiring specific followers violates the spirit of the testing gambit"): the role the TEST
+        // wants is given to him (lent weapon + temp class). What he holds is kept only where it already fits the test.
+        Role AssignRole(Who a_who, Role a_now) {
+            if (a_who == Who::Fighter) return Role::Melee;
+            if (a_who == Who::Shooter) return a_now == Role::Spell ? Role::Spell : Role::Bow;
+            return a_now == Role::None ? Role::Melee : a_now;
         }
         // The plain vanilla weapon of the role (Skyrim.esm: IronSword / HuntingBow + IronArrow), so the temp class has one to wield.
         constexpr RE::FormID kIronSword = 0x00012EB7, kHuntingBow = 0x00013985, kIronArrow = 0x0001397D;
@@ -710,9 +713,6 @@ namespace MFO::SelfTest {
             if (c.inCombat) return "out of combat";
             if (auto* pc = RE::PlayerCharacter::GetSingleton(); !pc || pc->IsInCombat()) return "the player out of combat";
             if (c.follower->IsOnMount()) return "the follower on foot";
-            if (t.foe && !RoleFits(t.who, RoleOf(c.follower)))
-                return t.who == Who::Shooter ? "a bow, crossbow or hostile spell in the right hand"
-                     : t.who == Who::Fighter ? "a melee weapon (or fists) in the right hand" : "a weapon or hostile spell in the right hand";
             if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc->GetPosition().GetDistance(c.follower->GetPosition()) > kT.playerReach * 0.6f) return "the player near the follower";
             if (t.scan != Where::Near && !PlaceNear(c.id, t.scan)) return t.scan == Where::Doorway ? "a doorway within 1200 units" : "geometry that hides a point nearby";
             return nullptr;
@@ -720,7 +720,7 @@ namespace MFO::SelfTest {
         void FixHold(Ctx& c, FixtureRequest& q, int a_test) {
             const auto& t = Tests()[a_test];
             if (!t.foe) return;
-            const Role role = RoleOf(c.follower);
+            const Role role = AssignRole(t.who, RoleOf(c.follower));
             c.s->n[0] = static_cast<double>(static_cast<int>(role));
             if (role == Role::Melee) q.items.push_back({ VanillaForm(kIronSword), 1 });
             if (role == Role::Bow) {
