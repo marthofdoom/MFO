@@ -222,15 +222,16 @@ namespace MFO::APMFBridge {
     }
 
     // See APMFBridge.h. A fire-once claim that was released or replaced after Harbinger said Fired: said once, then forgotten.
-    bool TakeFireOnceSpent(RE::FormID a_follower, RE::FormID a_spell) {
-        // A latch older than this is a previous fight's: dropped, never counted (the old behaviour, a fresh claim, follows).
-        constexpr auto kSpentFresh = std::chrono::seconds(15);
+    std::optional<std::chrono::steady_clock::time_point> TakeFireOnceSpent(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target) {
+        // A latch older than the never-landed window is dropped, never counted (the old behaviour, a fresh claim, follows).
+        constexpr auto kSpentFresh = std::chrono::milliseconds(kHoldLastSeenCapMs);
         std::scoped_lock lock(g_mx);
         const auto it = g_fireOnceSpent.find((static_cast<std::uint64_t>(a_follower) << 32) | a_spell);
-        if (it == g_fireOnceSpent.end()) return false;
-        const bool fresh = std::chrono::steady_clock::now() - it->second <= kSpentFresh;
+        if (it == g_fireOnceSpent.end() || it->second.target != a_target) return std::nullopt;
+        const auto when = it->second.when;
         g_fireOnceSpent.erase(it);
-        return fresh;
+        if (std::chrono::steady_clock::now() - when > kSpentFresh) return std::nullopt;
+        return when;
     }
 
     // ── REFRESH A STANDING CAST CLAIM IN PLACE (F9, 2026-09-08) ─────────────────

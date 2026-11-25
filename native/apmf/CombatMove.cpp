@@ -221,7 +221,7 @@ namespace MFO::APMFBridge {
             else if (st == APMF_API::kCombatMoveState_Refused)
                 spdlog::info("[combat-move] {:08X}: {} h={} REFUSED: {}{}", a_follower, kind, l.handle, WhyName(info.why),
                              (info.why == APMF_API::kCombatMoveWhy_OffenseDenied && info.blocker)
-                                 ? std::format(" (blocker h={}: a strict order of ours denies attacks while he travels)", info.blocker)
+                                 ? std::format(" (blocker h={}: a strict order, or a ch.7 deny)", info.blocker)
                                  : std::string{});
             else if (st == APMF_API::kCombatMoveState_Failed)
                 spdlog::warn("[combat-move] {:08X}: {} h={} FAILED: {}", a_follower, kind, l.handle, WhyName(info.why));

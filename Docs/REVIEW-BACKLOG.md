@@ -4208,3 +4208,7 @@ S5-C: options bounded by time or refusal; hold options evaluated at the order's 
 
 strict-mfo (fix/strict-mfo, 11-25) SEV-4: the IAUS power-attack candidate is not vetoed in `iaus/Generate.cpp` (it would add a Snapshot field = a sim change, frozen this round); the veto is at the actuation seat, so a vetoed pick is a transparent lap. Move it into the candidate generator with the next sim round.
 strict-mfo SEV-5: the archer lane rule (no strict point with his line to the foe blocked, re-point when it stays blocked) exists only in the dev client (feat/anim-test, selftest/TestsStrict.cpp); production hook for M-1 = the `SpotFireLine` consideration in `iaus/Spots.cpp`.
+
+Review of fix/strict-mfo @ 84b7616b (11-25, `_agentlogs/mfo/review-strict-mfo.md`), deferred, verbatim:
+A5 SEV-5: StrictOrderMoving stays true in Harbinger's 4 s rest after a stall / 15 s leg (attacks allowed again) and for any client's order ("ours" is not checked). MFO just asks later. Backlog.
+A6 SEV-5: g_powerBackoff not cleared at load (5 s steady clock, harmless).
