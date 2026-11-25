@@ -17,7 +17,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <format>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 
 #include <spdlog/spdlog.h>
@@ -27,6 +29,10 @@ namespace MFO::APMFBridge {
     namespace {
         constexpr std::uint32_t kCombatMoveMinAbi = 38;   // the ABI that first serves intent 31 and carries GetCombatMoveState
         constexpr std::uint32_t kPowerAttackMinAbi = 44;  // the ABI that builds kCombatMove_PowerAttack
+        constexpr std::uint32_t kStrictMinAbi = 48;       // the ABI that serves strict orders (GetMoveOrderState)
+        // 11-25 deck-strict: a power attack Harbinger refused or failed is not asked again at once. The back-off is one tunable.
+        constexpr std::chrono::milliseconds kPowerBackoff{5000};
+        constexpr std::chrono::milliseconds kBackoffLogEvery{5000};   // the back-off line, once per this per follower
 
         struct Last {
             std::uint32_t handle = 0;
@@ -39,6 +45,11 @@ namespace MFO::APMFBridge {
         };
         std::mutex g_moveMx;
         std::unordered_map<RE::FormID, Last> g_last;   // follower -> his last requested move
+        struct Backoff {
+            std::chrono::steady_clock::time_point until{};
+            std::chrono::steady_clock::time_point loggedAt{};
+        };
+        std::unordered_map<RE::FormID, Backoff> g_powerBackoff;   // follower -> no new power attack before `until` (under g_moveMx)
 
         const char* WhyName(std::uint32_t a_why) {
             switch (a_why) {
@@ -166,6 +177,26 @@ namespace MFO::APMFBridge {
         return RequestMove(api, a_follower, a_foe, APMF_API::kCombatMove_PowerAttack);
     }
 
+    bool PowerAttackBackedOff(RE::FormID a_follower) {
+        const auto now = std::chrono::steady_clock::now();
+        std::scoped_lock lk(g_moveMx);
+        const auto it = g_powerBackoff.find(a_follower);
+        if (it == g_powerBackoff.end() || now >= it->second.until) return false;
+        if (now - it->second.loggedAt >= kBackoffLogEvery) {
+            it->second.loggedAt = now;
+            spdlog::info("[combat-move] {:08X}: power attack held back after a refusal ({:.1f} s left)", a_follower,
+                         std::chrono::duration<float>(it->second.until - now).count());
+        }
+        return true;
+    }
+
+    bool StrictOrderMoving(RE::FormID a_follower) {
+        const auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || api->abiVersion < kStrictMinAbi) return false;
+        const std::uint32_t phase = reinterpret_cast<const APMF_API::APMF_API_v48*>(api)->GetMoveOrderState(a_follower, nullptr);
+        return phase == APMF_API::kMovePhase_Travelling || phase == APMF_API::kMovePhase_Returning;
+    }
+
     void PollCombatMove(RE::FormID a_follower) {
         const auto* api = g_apmf.load(std::memory_order_relaxed);
         if (!api || api->abiVersion < kCombatMoveMinAbi) return;
@@ -188,7 +219,10 @@ namespace MFO::APMFBridge {
                 spdlog::info("[combat-move] {:08X}: {} h={} STARTED on {:08X} ({:.0f}u, {:.0f} deg off his heading, stamina spent {:.0f})",
                              a_follower, kind, l.handle, l.foe, info.distance, info.bearingDeg, info.staminaSpent);
             else if (st == APMF_API::kCombatMoveState_Refused)
-                spdlog::info("[combat-move] {:08X}: {} h={} REFUSED: {}", a_follower, kind, l.handle, WhyName(info.why));
+                spdlog::info("[combat-move] {:08X}: {} h={} REFUSED: {}{}", a_follower, kind, l.handle, WhyName(info.why),
+                             (info.why == APMF_API::kCombatMoveWhy_OffenseDenied && info.blocker)
+                                 ? std::format(" (blocker h={}: a strict order of ours denies attacks while he travels)", info.blocker)
+                                 : std::string{});
             else if (st == APMF_API::kCombatMoveState_Failed)
                 spdlog::warn("[combat-move] {:08X}: {} h={} FAILED: {}", a_follower, kind, l.handle, WhyName(info.why));
             else
@@ -200,6 +234,10 @@ namespace MFO::APMFBridge {
             if (l.move == APMF_API::kCombatMove_PowerAttack &&
                 (st == APMF_API::kCombatMoveState_Refused || st == APMF_API::kCombatMoveState_Failed)) {
                 Cooldowns::Forget(a_follower, Cooldowns::Kind::Follower, Cooldowns::kFollowerPowerAttack);
+                {   // the cooldown is back, the ask is not: no new power attack for kPowerBackoff (the 11-25 retry storm, 5 asks in 1 s)
+                    std::scoped_lock lk(g_moveMx);
+                    g_powerBackoff[a_follower].until = std::chrono::steady_clock::now() + kPowerBackoff;
+                }
                 spdlog::info("[combat-move] {:08X}: power attack h={} did not happen: its cooldown is given back", a_follower, l.handle);
             }
         }
