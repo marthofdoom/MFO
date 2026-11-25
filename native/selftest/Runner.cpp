@@ -95,8 +95,8 @@ namespace MFO::SelfTest {
         constexpr float kStuckSec = 30.0f, kStuckOrphanSec = 100.0f;   // an orphan's second pass comes kOrphanRetrySec (30 s) after its first
         constexpr float kFoeHealth[kMaxTries] = { 1500.0f, 6000.0f, 20000.0f };   // the spawned foe's least health on try 1 / 2 / 3 (a mudcrab dies in one blow)
         std::map<std::string, int>               g_tries;
-        std::map<std::string, Clock::time_point> g_refusedSince;   // first safety refusal of a test this load; 3 minutes of them end it as SKIP
-        constexpr std::chrono::minutes           kRefusedMax{ 3 };
+        std::map<std::string, Clock::time_point> g_refusedSince;   // first safety refusal of a test this load; 10 minutes of them end it as SKIP
+        constexpr std::chrono::minutes           kRefusedMax{ 10 };
         std::unordered_map<std::uint32_t, float> g_stuck;   // run token -> seconds its hostile has been waiting to be deleted
         bool                                     g_stopped = false;
         bool                                     g_doneToast = false;
