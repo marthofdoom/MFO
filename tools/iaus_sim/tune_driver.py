@@ -3,7 +3,7 @@
 case numbers"; "If fable thinks it can save tokens by building a script that can tune, it should"). HOST-ONLY, standard library only.
 
     tools/iaus_sim/tune_driver.py --bin <sim binary> --out <dir> [--smoke] [--classes a,b] [--worlds builtin,LoreRim,Tuxborn,Vanilla]
-                                  [--stages prep,rejudge,classes,edge,joint,gap,globals,consts,floor,rating,recalib,logistics,summary] [--jobs 12]
+                                  [--stages prep,rejudge,classes,edge,follow,spells,worth,joint,gap,globals,consts,floor,rating,recalib,logistics,loot,summary] [--jobs 12]
                                   [--decisions auto|ask] [--replay <summary.json>]
 
 Runbook, verdicts and the decisions this script may NOT take: Docs/research/2026-11/iaus-sim-v2.md section 33.
@@ -30,7 +30,8 @@ STAGES    prep      the world inputs exist, each list's potion-worth table is me
           spells    the shared spell-worth numbers (t.unmeasuredDamage, the cast families' weights, the damage / exploit / overkill / variety /
                     control_worth curves, the SpellWorth rows of SW_KNOBS) against the SPELL REGRET on field-size books, pooled over
                     the cells that cast. One oracle fight prices every candidate (--regret-alt). Its RULE is its docstring.
-          joint     the whole final table against the shipped one on every cell (128 seeds, three configs), and each T1 value
+          worth     the shared worth-the-gold table (needs --sim-flags "--consumables on"), before joint: joint grades it too.
+          joint     the whole final table (class rows AND the shared spells / worth values) against the shipped one on every cell (128 seeds, three configs), and each T1 value
                     left out in turn. A failure is an open decision: no value is written.
           edge      marth "Widen to x4 / x0.25": only knobs whose accepted value sits at the edge of the range tried are searched
                     again past it, same RULE; a wider value that passes is an open decision (never shipped).
@@ -92,7 +93,7 @@ import time
 
 INF = float("inf")
 # G2 (review of 7e883a9a): gap runs before the stages that describe the final table, because its (a) search can move the table
-DEFAULT_STAGES = "prep,rejudge,classes,edge,follow,spells,joint,gap,globals,consts,worth,floor,rating,recalib,logistics,loot,summary"
+DEFAULT_STAGES = "prep,rejudge,classes,edge,follow,spells,worth,joint,gap,globals,consts,floor,rating,recalib,logistics,loot,summary"
 FOR_CLASS_STAGES = "prep,classes,edge,follow,joint,gap,floor,summary"
 CONFIGS = {"g3": [], "off": ["--stealth", "off"], "shipped": ["--stealth", "off", "--no-fill-swing", "--no-estimates"]}
 BETA1_TREE = "melee,ranged,mage,knight,warrior,mercenary,archer,thief,evoker,conjurer,healer,warlock".split(",")
@@ -155,12 +156,14 @@ def sha(path):
     return _HASH[k]
 
 
-def ident(world, binary=None):
+def ident(world, binary=None, loot=False):
     """EVERYTHING a result of this world depends on besides its arguments: the simulator binary (PotionWorth.h and every curve are
     compiled into it), the world's .sim.json and .combatmods.json, and its potion-worth table. Part of every cache key, so a result
-    measured on another binary, another list extract or another potion table is never replayed as this one's."""
+    measured on another binary, another list extract or another potion table is never replayed as this one's. loot: a run of the loot
+    world (`epi:` / `lootrep:`): with --loot-places it also depends on <set>.loot.json and, in every --world, on the library of places."""
     out = ["bin:" + sha(binary or A.bin)]
-    if getattr(A, "world", "") == "v4":   # the library of places is test input like a list: another library is another world
+    places = (getattr(A, "loot_places", "") or "") if loot else ""
+    if getattr(A, "world", "") == "v4" or places:   # the library of places is test input like a list: another library is another world
         out.append("env:" + env_ident())
     if world == "builtin":
         if A.builtin_worth:
@@ -168,7 +171,17 @@ def ident(world, binary=None):
     elif world is not None:
         check_world(world)
         out += ["sim:" + sha(CACHE_DIR + world + ".sim.json"), "mods:" + sha(CACHE_DIR + world + ".combatmods.json"), "worth:" + sha(os.path.join(A.out, "potworth-%s.txt" % world))]
+    if places:
+        out.append("loot:" + sha(loot_table(places)))
     return "|".join(out)
+
+
+def loot_table(places):
+    """The compiled loot table of an extracted set. A missing file stops the run, it is never an empty hash."""
+    p = CACHE_DIR + places + ".loot.json"
+    if not os.path.exists(p):
+        raise SystemExit("missing %s (tools/list_balance/extract_loot.py): --loot-places %s is never run without its loot table" % (p, places))
+    return p
 
 
 _SPAWNS = {}
@@ -229,7 +242,7 @@ def key_of(world, classes, cfg, curves, sets, binary):
     extra = ["uses:" + sha(uses_path())] if classes.startswith("logi:") else []   # a loot run also depends on the combat world's use counts
     if classes.startswith("epi:"):
         extra = ["loot-places:" + (getattr(A, "loot_places", "") or "fixtures"), "eps:%d" % CFG["loot_eps"]]   # sim v4 batch L: an episode run depends on where it is played
-    return json.dumps([world, classes, cfg, sorted(curves), sets or "", ident(world, binary)] + extra, separators=(",", ":"))
+    return json.dumps([world, classes, cfg, sorted(curves), sets or "", ident(world, binary, loot=classes.startswith("epi:"))] + extra, separators=(",", ":"))
 
 
 V4_TRAIN = ["--env-set", "all", "--env-hold", "train", "--books", "field"]   # the tune's world since sim v4 batch C: the library's train places, field-size books
@@ -285,7 +298,7 @@ def loot_world_args(heldout=False):
     s = getattr(A, "loot_places", "") or ""
     if not s:
         return []
-    return ["--env-set", s + ("/heldout" if heldout else ""), "--loot-list", CACHE_DIR + s + ".loot.json"]
+    return ["--env-set", s + ("/heldout" if heldout else ""), "--loot-list", loot_table(s)]
 
 
 def sim_cmd(world, classes, cfg, curves, sets, binary):
@@ -385,7 +398,7 @@ def req(world, classes, cfg, curves, seeds, sets=None, binary=None):
 def text_run(key, cmd, world=None, check=None):
     """A cached text run. The key carries the identity of the binary and the world (ident). A run that fails is NEVER cached and
     never read as an empty result: it stops the driver with the command and the simulator's own message."""
-    key = key + "#" + ident(world, cmd[0])   # cmd[0] is always the simulator binary that runs
+    key = key + "#" + ident(world, cmd[0], loot=key.startswith("lootrep:"))   # cmd[0] is always the simulator binary that runs
     if key not in TEXT:
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0:
@@ -499,7 +512,7 @@ RULES = {   # kind -> the rule that replaces asking marth (the text is also in D
     "joint": "the final table must pass the joint gate and the card + potion gates against the shipped table; a failing table is withheld (summary.json ship)",
     "withheld": "a value that loses on re-measure is withheld from the table (summary.json ship.withheld)",
     "held-out set": "an accepted set (a class's follow values, the spells stage's values, the whole table at the joint gate) is played start against final on the held-out places and books, on seeds nothing else read; a set worse beyond HOLD_SET_SE se, or with one cell worse beyond the many-comparisons bar, is dropped whole",
-    "loot gate": "a kept loot table is rejected whole when it commits one more crime or guard-seen take than the shipped table, or when leftRR, goldLeftRR, roadLeft% or dibsNear is worse beyond noise, paired per seed (LOOT_ROW_SE)",
+    "loot gate": "a loot candidate is refused, and a kept loot table rejected whole, when it commits one more crime or guard-seen take than the shipped table, or when leftRR, goldLeftRR, roadLeft% or dibsNear is worse beyond noise, paired per seed (LOOT_ROW_SE); a kept table that loses value on the held-out places beyond HOLD_SET_SE se, paired per seed, is rejected whole; without held-out places (no --loot-places, or the stops lab) no table is kept",
     "note": "report-only: nothing is written from it; never a blocker",
 }
 CARDS = {}
@@ -1193,18 +1206,20 @@ def final_curves(with_withheld=False):
 
 
 def ship_state():
-    """summary.json ship: the table ships only when the joint gate PASSED on exactly the final table (final_curves(): the accepted values
-    less the withheld ones). A joint that did not run, failed, or graded another table (the gap search's whole-set drop; a value recalib
+    """summary.json ship: the table and the shared values (sets) ship only when the joint gate PASSED on exactly the final table (final_curves():
+    the accepted values less the withheld ones) WITH exactly the accepted shared values (final_sets(): driver P4). Both or neither: the joint gate
+    graded them together. A joint that did not run, failed, or graded another table (the gap search's whole-set drop; a value recalib
     withheld AFTER the joint graded the larger table) leaves ship.table empty and needs_joint_rerun says why. A passing joint on the
     reduced table clears it (backlog 2026-11-19: the flag stayed set because the withheld list alone kept it)."""
     j = SUMMARY["stages"].get("joint", {}).get("verdict", "")
-    fin, wh, jt = final_curves(), SUMMARY.get("withheld", []), SUMMARY["stages"].get("joint", {})
-    need = "" if j == "PASS" and jt.get("table") == fin else (
+    fin, wh, jt, fs = final_curves(), SUMMARY.get("withheld", []), SUMMARY["stages"].get("joint", {}), final_sets()
+    need = "" if j == "PASS" and jt.get("table") == fin and jt.get("sets") == fs else (
         "joint gate: %s" % (j or "not run") if j != "PASS" else
         "recalib withheld %d value(s) after the joint gate graded the larger table: re-run the joint stage on the table without them" % len(wh) if wh and set(jt.get("table", [])) == set(fin) | set(wh) else
-        "the joint gate graded a different table than the final one (%d vs %d values): re-run the joint stage" % (len(jt.get("table", [])), len(fin)))
-    return {"table": fin if not need else [], "withheld": wh, "joint": j or "not run", "needs_joint_rerun": need,
-            "note": "ship.table is non-empty only when the joint gate PASSED on exactly this table (the accepted values less the withheld ones); otherwise it is empty and needs_joint_rerun says why"}
+        "the joint gate graded a different table than the final one (%d vs %d values): re-run the joint stage" % (len(jt.get("table", [])), len(fin)) if jt.get("table") != fin else
+        "the joint gate graded other shared values (%s) than the accepted ones (%s): re-run the joint stage" % (jt.get("sets") or "none", fs or "none"))
+    return {"table": fin if not need else [], "withheld": wh, "joint": j or "not run", "needs_joint_rerun": need, "sets": (fs or "").split(",") if fs and not need else [],
+            "note": "ship.table and ship.sets (the shared spells / worth values) are non-empty only when the joint gate PASSED on exactly this table (the accepted values less the withheld ones) with exactly these shared values; otherwise both are empty and needs_joint_rerun says why"}
 
 
 def stage_joint():
@@ -1751,24 +1766,30 @@ def held_out_check(a, b, who, a_sets=None, b_sets=None):
     """THE HONEST FINAL CHECK (choice review R3). Table b against table a (each: class rows + a shared --set table) on the HELD-OUT places and
     books, on seeds no acceptance read, IAUS arm only (milliseconds a fight), the cells of `who`, every world of the run. Paired per fight,
     the worlds of a cell pooled, the cells weighted equally. WORSE = the pooled mean is lower by more than HOLD_SET_SE se, or one cell is
-    lower beyond the many-comparisons bar (`worse(.., many=True)`). Returns {"ok", "why", "pooled": [d, se], "cells": {cell: [d, se]}, "seeds"}."""
+    lower beyond the many-comparisons bar (`worse(.., many=True)`). It FAILS CLOSED: a cell and world with no paired fight, or a fight only one of
+    the two tables played, or nothing to check at all, is not a pass. Returns {"ok", "why", "pooled": [d, se], "cells": {cell: [d, se]}, "seeds"}."""
     seeds = list(range(HOLD_FINAL0, HOLD_FINAL0 + max(CFG["follow_seeds"], CFG["spell_seeds"])))
     res = gapi_runs([(w, c, t, s, ts, True) for c in who for w in A.worlds for t, ts in ((a, a_sets), (b, b_sets)) for s in seeds])
-    n, per, i = len(seeds), {}, 0
+    n, per, i, holes = len(seeds), {}, 0, []
     for c in who:
         per[c] = []
-        for _ in A.worlds:
+        for w in A.worlds:
             ua, ub = {}, {}
             for r in res[i:i + n]:
                 ua.update(r)
             for r in res[i + n:i + 2 * n]:
                 ub.update(r)
-            per[c] += [ub[k] - ua[k] for k in ua if k in ub]
+            both = [k for k in ua if k in ub]
+            if not both or len(both) != len(ua) or len(both) != len(ub):
+                holes.append("%s/%s (%d of %d and %d fights pair)" % (c, w, len(both), len(ua), len(ub)))
+            per[c] += [ub[k] - ua[k] for k in both]
             i += 2 * n
     d, se = cells_mean(per)
     cellv = {c: mse(v) for c, v in per.items() if v}
     bad = sorted(c for c, (cd, cse) in cellv.items() if worse(cd, cse, True))
     why = []
+    if holes or not cellv:
+        why.append("no complete pairing: " + (", ".join(holes) or "no cell or no world to check"))
     if d < -HOLD_SET_SE * se and d < 0:
         why.append("the %d-cell mean is %+.2f U (se %.2f)" % (len(cellv), d, se))
     if bad:
@@ -2348,7 +2369,7 @@ def shared_search(stage, knobs, pooled, train, judge_one, base_sets=None):
                 done.add(n)
                 moved = True
             rows.append(row)
-            log("%s pass %d  %-26s %-8g -> %-8g train %s  %s" % (stage, ps + 1, n, sh, v, row["train"], row["why"][:150]))
+            log("%s pass %d  %-26s %-8g -> %-8g train %s  %s" % (stage, ps + 1, n, sh, v, row["train"], row["why"]))   # the whole reason: a refused value says why
             SUMMARY["stages"][stage] = {"kept": kept, "rows": rows, "live": [[n2, round(x, 3)] for x, n2, _, _ in live], "dead": [n2 for _, n2, _, _ in dead], "complete": False}
             save_summary()
         if not moved:
@@ -2381,7 +2402,9 @@ def loot_judge(bs, ns, forced):
     """The loot table's RULE (the combat RULE carried over, 33.3, with what the logistics world can and cannot measure): holdout on seeds
     8001.. (d > 1.5 se, pooled cells); gates on the 128 train + holdout seeds per cell (no cell worse at the all-cells-at-once bar, none out of
     band); confirmatory on FRESH seeds 9001.. pooled (d > 2 se): the cross-WORLD step cannot run, the simulator refuses a list logistics
-    world (34.6: the extracts hold no containers); no Knight floor (a loot value does not change a fight in the lab)."""
+    world (34.6: the extracts hold no containers); no Knight floor (a loot value does not change a fight in the lab). In the loot world (episodes) THE GATE ROWS of the candidate's whole table
+    against the shipped one on the train places (loot_gate_check, driver P2): a step that commits more crimes or leaves more of what is wanted
+    beyond noise is refused here, so the search goes on from a table the final check can keep."""
     row = {"steps": {}, "accepted": False}
     fails = []
     pooled = LOOT_PREFIX + ",".join(CELLS)
@@ -2391,6 +2414,11 @@ def loot_judge(bs, ns, forced):
     row["steps"]["holdout"] = [round(hd, 3), round(hse, 3)]
     if not hd > 1.5 * hse:
         fails.append("holdout: not confirmed")
+    if LOOT_PREFIX == "epi:" and (not fails or forced):
+        why, rows = loot_gate_check("train", loot_report(None, False), loot_report(ns, False), note=False)
+        row["steps"]["gate_rows"] = {k: v for k, v in rows.items() if v[4] != "ok"}
+        if why:
+            fails.append("loot gate: " + why)
     if not fails or forced:
         seeds = list(range(7001, 7001 + CFG["train"])) + list(hold)
         res = jmany([req("builtin", LOOT_PREFIX + c, "g3", [], seeds, x) for c in CELLS for x in (bs, ns)])
@@ -2409,7 +2437,7 @@ def loot_judge(bs, ns, forced):
         if not fd > 2.0 * fse:
             fails.append("fresh seeds: not confirmed (%+.2f, se %.2f)" % (fd, fse))
     row["accepted"] = not fails
-    row["why"] = "ACCEPTED: holdout, per-cell gates, fresh seeds (no list world exists for logistics)" if not fails else "; ".join(fails)
+    row["why"] = "ACCEPTED: holdout, %sper-cell gates, fresh seeds (no list world exists for logistics)" % ("gate rows on the train places, " if LOOT_PREFIX == "epi:" else "") if not fails else "; ".join(fails)
     return row
 
 
@@ -2444,6 +2472,8 @@ def stage_loot():
     st = {"uses": lines}
     SUMMARY["stages"]["loot_uses"] = st
     kept, rows = shared_search("loot", LOOT_KNOBS, "logi:" + ",".join(CELLS), range(7001, 7001 + CFG["train"]), loot_judge)
+    if kept:   # driver P3: no held-out check exists in this lab, so nothing it finds is kept
+        loot_reject("the stops lab (--loot-world stops) has no held-out places: a table it finds is not checked anywhere. Run the episodes with --loot-places <set>")
     for n, why in list(LOOT_NOT_SEARCHED.items()) + [(n, "read only by the loot world's episodes (run without --loot-world stops)") for n, _, _ in LOOT_EPISODE_KNOBS]:
         open_decision("loot %s not searched" % n, why + "; the placeholder stays")
 
@@ -2452,16 +2482,56 @@ def loot_report(sets, heldout):
     """One --loot-report run of every cell on the loot world's places (or the set's held-out places): the value per episode and the gate rows that fail."""
     cmd = [A.bin, "--no-json", "--threads", str(max(1, min(8, os.cpu_count() or 1))), "--loot-report", str(CFG["loot_eps"]), "--classes", ",".join(CELLS),
            "--seeds", ",".join(str(x) for x in range(9501, 9501 + CFG["loot_gate_seeds"]))] + loot_world_args(heldout) + (["--set", sets] if sets else [])
-    def chk(t):
-        if "LOOT-REPORT" not in t:
-            raise RuntimeError("no LOOT-REPORT line:\n%s" % t[-400:])
-    t = text_run("lootrep:" + json.dumps(cmd[1:]), cmd, "builtin", check=chk)
+    asked = list(range(9501, 9501 + CFG["loot_gate_seeds"]))
+    return loot_report_parse(text_run("lootrep:" + json.dumps(cmd[1:]), cmd, "builtin", check=lambda t: loot_report_parse(t, asked)), asked)
+
+
+def loot_report_parse(t, asked):
+    """The text of a --loot-report run over the seeds `asked`. FAILS CLOSED: a missing report line, a missing hard or reject row, or a gate row without
+    one LOOTSEED value for every seed asked is an error (the paired test would read it as "no difference")."""
     m = re.search(r"value/ep with gold ([-0-9.]+), without ([-0-9.]+) .*gate rows failing: ALL (\d+)", t)
+    if "LOOT-REPORT" not in t or not m:
+        raise RuntimeError("no LOOT-REPORT line:\n%s" % t[-400:])
     rows = {r.group(1): [float(r.group(2)), r.group(3) == "FAIL"] for r in re.finditer(r"^LOOTGATE ALL\s+(.+?)\s+([-0-9.]+)\s+<=\s+[-0-9.]+\s+(ok|FAIL)$", t, re.M)}
     seeds = {}   # row -> {seed: value}: the paired test's input (LootCli.h LOOTSEED)
     for r in re.finditer(r"^LOOTSEED (\d+) ([-0-9.]+) (.+)$", t, re.M):
         seeds.setdefault(r.group(3), {})[int(r.group(1))] = float(r.group(2))
+    missing = [k for k in LOOT_HARD_ROWS + LOOT_REJECT_ROWS if k not in rows]
+    if missing:
+        raise RuntimeError("the loot report has no gate row %s:\n%s" % (", ".join(missing), t[-400:]))
+    for k in rows:
+        if sorted(seeds.get(k, {})) != sorted(asked):
+            raise RuntimeError("the loot report's row %s has LOOTSEED lines for %d of %d seeds: the paired test cannot read it" % (k, len(set(seeds.get(k, {})) & set(asked)), len(asked)))
     return {"value": float(m.group(1)), "value_no_gold": float(m.group(2)), "gate": rows, "gate_failing": sorted(k for k, v in rows.items() if v[1]), "seeds": seeds}
+
+
+def loot_values(sets, heldout):
+    """The mean episode value with gold of every cell, PER SEED ({seed: value}; one --loot-report run a seed, the same seeds and places as loot_report,
+    whose value is their mean). Crimes and guard-seen takes are not in it: loot_gate_check judges those."""
+    def one(s):
+        cmd = [A.bin, "--no-json", "--threads", "1", "--loot-report", str(CFG["loot_eps"]), "--classes", ",".join(CELLS), "--seeds", str(s)] + loot_world_args(heldout) + (["--set", sets] if sets else [])
+        return s, loot_report_parse(text_run("lootrep:" + json.dumps(cmd[1:]), cmd, "builtin", check=lambda t: loot_report_parse(t, [s])), [s])["value"]
+    return dict(POOL.map(one, range(9501, 9501 + CFG["loot_gate_seeds"])))
+
+
+def loot_value_check(shipped, kept):
+    """The kept table's value on the held-out places against the shipped table's, PAIRED PER SEED. (reason or None, [d, se])."""
+    if not shipped or sorted(shipped) != sorted(kept):
+        raise RuntimeError("held-out loot values do not pair: seeds %s against %s" % (sorted(shipped), sorted(kept)))
+    d, se = mse([kept[s] - shipped[s] for s in sorted(shipped)])
+    lost = d < -HOLD_SET_SE * se and d < -1e-9
+    return ("heldout places: value per episode %+.3f (per seed, se %.3f, %d seeds)" % (d, se, len(shipped)) if lost else None), [round(d, 4), round(se, 4)]
+
+
+def loot_reject(why):
+    """Drop the loot stage's whole kept table, loudly, value by value."""
+    L = SUMMARY["stages"]["loot"]
+    L["kept_before_reject"], L["kept"], L["rejected"] = list(L["kept"]), [], why
+    for r in L.get("rows", []):
+        if r.get("accepted"):
+            r["accepted"], r["why"] = False, "DROPPED with the table: " + why
+            log("loot %s=%s dropped with the table: %s" % (r["knob"], r["best"], why))
+    open_decision("loot table REJECTED (%s)" % " ".join(L["kept_before_reject"]), why, kind="loot gate", verdict="rejected")
 
 
 LOOT_HARD_ROWS = ("crimes", "guardSeenTakes")   # more of either rejects the table outright (followers never commit detected crimes)
@@ -2471,17 +2541,20 @@ LOOT_REJECT_ROWS = ("leftRR/ep", "goldLeftRR/ep", "roadLeft%", "dibsNear/ep")   
 LOOT_ROW_SE = 2.0   # PLACEHOLDER: a row is worse when the kept table's paired per-seed difference is above this many se
 
 
-def loot_gate_check(name, shipped, kept_rep):
+def loot_gate_check(name, shipped, kept_rep, note=True):
     """EVERY gate row is a number that must not get worse (every row of kLootBounds is 'at most'). The test is PAIRED PER SEED (loot review R2: one take in 480
     episodes used to flip a row, so every searched table was flagged and the flag meant nothing): d = kept - shipped per seed, worse = mean d > LOOT_ROW_SE se
     and > 0. A REJECT row worse beyond noise rejects the table, and so does ONE more crime or guard-seen take in total (no noise band: a crime is not a
-    trade). Any other row worse beyond noise is a note. Returns (reason or None, {row: [shipped, kept, d, se, verdict]})."""
+    trade). Any other row worse beyond noise is a note (note=False: a candidate's check, not filed).
+    A row or a seed that only one of the two reports has is an error. Returns (reason or None, {row: [shipped, kept, d, se, verdict]})."""
     out, rej, notes = {}, [], []
+    if set(shipped["gate"]) != set(kept_rep["gate"]):
+        raise RuntimeError("loot gate (%s places): the two reports have other rows: %s" % (name, sorted(set(shipped["gate"]) ^ set(kept_rep["gate"]))))
     for k, v in sorted(kept_rep["gate"].items()):
-        if k not in shipped["gate"]:
-            continue
         a, b = shipped["seeds"].get(k, {}), kept_rep["seeds"].get(k, {})
-        d, se = mse([b[s] - a[s] for s in sorted(a) if s in b])
+        if not a or sorted(a) != sorted(b):
+            raise RuntimeError("loot gate row %s (%s places): LOOTSEED lines for %d and %d seeds do not pair" % (k, name, len(a), len(b)))
+        d, se = mse([b[s] - a[s] for s in sorted(a)])
         verdict = "ok"
         if k in LOOT_HARD_ROWS:
             if v[0] > shipped["gate"][k][0] + 1e-9:
@@ -2491,7 +2564,7 @@ def loot_gate_check(name, shipped, kept_rep):
         out[k] = [shipped["gate"][k][0], v[0], round(d, 4), round(se, 4), verdict]
         if verdict != "ok":
             (rej if verdict == "REJECT" else notes).append("%s %.3f -> %.3f (per seed %+.3f, se %.3f)" % (k, shipped["gate"][k][0], v[0], d, se))
-    if notes:
+    if notes and note:
         open_decision("loot table makes gate rows worse than the shipped table beyond noise (%s places)" % name, "; ".join(notes))
     return ("%s places: %s" % (name, "; ".join(rej))) if rej else None, out
 
@@ -2500,10 +2573,11 @@ def stage_loot_episodes():
     """THE IAUS LOOT TABLE in the loot world (sim v4 batch L, Loot.h: looting in the fight's own place, on the fight's own clock). The 16 score rows
     of LOOT_KNOBS and the batch hold (LOOT_EPISODE_KNOBS) are searched on the mean episode value (LootLab.h Score: fights + potion worth + GoldJ x
     gold + the museum term, less 1000 per crime or guard-seen take BEYOND what the shipped table commits in the same episode, LootLab.h ScoreOver: no
-    step can buy value with one, and none is paid for taking less). Then the kept table is CHECKED on the gate (LootLab.h kLootBounds) and, with
+    step can buy value with one, and none is paid for taking less), each candidate through the gate rows on the train places (loot_judge). Then the kept table is CHECKED on the gate (LootLab.h kLootBounds) and, with
     --loot-places, on that set's HELD-OUT places, paired per seed against the shipped table (loot_gate_check): one more crime or guard-seen take, or
     leftRR / goldLeftRR / roadLeft% / dibsNear worse beyond noise, REJECTS the table (kept is emptied, the reason recorded); another row worse beyond
-    noise is a note; and a table that loses value held-out is an open decision.
+    noise is a note. A table that loses VALUE on the held-out places (loot_value_check: paired per seed, d < -HOLD_SET_SE se) is REJECTED too (under
+    --decisions ask: an open decision). Without --loot-places there are no held-out places and NO table is kept.
     What is "wanted" in those rows is the shipped table's verdict on the starting bag, and roadLeft% counts what any road could take: a table that takes
     less cannot read better.
     KNOWN TIE (review): loot.gold and loot.valuables are not independent. native's Valuables road takes coin too (LootTake.cpp), so with valuables in
@@ -2520,15 +2594,19 @@ def stage_loot_episodes():
         why, st[name]["rows"] = loot_gate_check(name, b, k)
         if why:
             st["rejected"] = "; ".join(x for x in (st.get("rejected"), why) if x)
-        if held and kept and k["value"] < b["value"]:
-            open_decision("loot table loses value on the held-out places", "%.3f against %.3f shipped: the kept values are not confirmed off the places they were searched on" % (k["value"], b["value"]))
+        if held and kept:
+            lost, st["heldout_value"] = loot_value_check(loot_values(None, True), loot_values(",".join(kept), True))
+            log("loot: the kept table on the held-out places, value %+.3f (se %.3f): %s" % (st["heldout_value"][0], st["heldout_value"][1], "LOSES" if lost else "not worse beyond noise"))
+            if lost and A.decisions == "auto":
+                st["rejected"] = "; ".join(x for x in (st.get("rejected"), lost) if x)
+            elif lost:
+                open_decision("loot table loses value on the held-out places", lost + ": the kept values are not confirmed off the places they were searched on")
     if not getattr(A, "loot_places", ""):
-        open_decision("loot table not checked on held-out places", "the episodes ran on the hand-made fixtures; run with --loot-places <set> (needs ~/.cache/mfo-env and <set>.loot.json)")
+        open_decision("loot table not checked on held-out places", "the episodes had no held-out places; run with --loot-places <set> (needs ~/.cache/mfo-env and <set>.loot.json)")
+        if kept:
+            st["rejected"] = "; ".join(x for x in (st.get("rejected"), "no --loot-places: no held-out check, so no table is kept") if x)
     if st.get("rejected"):
-        open_decision("loot table REJECTED: more crimes or guard-seen takes than the shipped table, or it leaves more of what is wanted (leftRR, goldLeftRR, roadLeft%, dibsNear) beyond noise", st["rejected"], kind="loot gate", verdict="rejected")
-        SUMMARY["stages"]["loot"]["kept_before_reject"] = list(kept)
-        SUMMARY["stages"]["loot"]["kept"] = []
-        SUMMARY["stages"]["loot"]["rejected"] = st["rejected"]
+        loot_reject(st["rejected"])
     open_decision("loot.gold is tied with loot.valuables", "native's Valuables road takes coin too, so the two rows are not independent: read a kept loot.gold with that in mind")
     SUMMARY["stages"]["loot_world"] = st
 
@@ -2916,12 +2994,15 @@ def rerun_after(name, done, rest):
     -> (stages, why).
       recalib withheld a value after the joint gate graded the larger table: joint, on the table without it, in this same run, so the
         round ends with a verdict on exactly the table it would ship and the caller never changes its arguments (backlog 2026-11-19).
+      spells or worth left other shared values than the joint gate graded (driver P4): joint.
       the gap search moved the table (G2, review of 7e883a9a): a stage that reads the final table and already ran describes the table
         from before it (the default order puts gap first, so this is a custom order only)."""
     if name == "recalib" and SUMMARY.get("withheld") and "joint" in done and "joint" not in rest:
         return ["joint"], "recalib withheld %d value(s), the table changed" % len(SUMMARY["withheld"])
     if name == "follow" and SUMMARY["stages"].get("follow", {}).get("changed") and "joint" in done and "joint" not in rest:
         return ["joint"], "the follow stage moved the table after the joint gate graded it"
+    if name in ("spells", "worth") and "joint" in done and "joint" not in rest and SUMMARY["stages"].get("joint", {}).get("sets") != final_sets():
+        return ["joint"], "the %s stage moved the shared values after the joint gate graded them" % name
     if name == "gap" and SUMMARY["stages"].get("gap", {}).get("search_changed"):
         again = [x for x in ("floor", "rating", "recalib") if x in done and x not in rest]
         return again, "gap search moved the table"
