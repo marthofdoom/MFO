@@ -942,7 +942,9 @@ namespace MFO::Iaus {
                             const Combatant& centre = e.selfDelivery ? s.self : *foe;
                             // marth: never splash the party (his own blast does not hit him) and, M2, never a bystander: ONE reader (iaus/AreaCensus.h).
                             // 11-17b: a blast at the TARGET reaches a body past its area (Estimate::kFireBodyPad, the ch.25 cast guard's area + 64); his own does not
-                            const AreaHits hits = Estimate::AreaCensus(s, a_foes, centre, e.areaUnits, e.selfDelivery ? 0.0f : Estimate::kFireBodyPad);
+                            // M3 review F2: a wall's hazard lives 30 s, so its bystander margin is a walking distance (kAreaGuard.wallMargin), not the cast moment's
+                            const AreaHits hits = Estimate::AreaCensus(s, a_foes, centre, e.areaUnits, e.selfDelivery ? 0.0f : Estimate::kFireBodyPad,
+                                                                       e.wall ? kAreaGuard.wallMargin : kAreaGuard.safetyMargin);
                             c.f.hasArea = true;
                             c.f.foesInArea = static_cast<float>(hits.foes);
                             c.f.splashSafe = hits.allies == 0;
@@ -951,6 +953,17 @@ namespace MFO::Iaus {
                             if (!control || e.hostileArea) {
                                 c.f.areaGuardOk = hits.BystandersSafe() && !(control && hits.allies > 0);
                                 if (!hits.BystandersSafe()) x.out.areaBlocked.push_back({ e.form, foe->id, hits.blind ? 0u : hits.firstBystander, hits.firstKind, hits.firstDist, e.areaUnits });
+                            }
+                        }
+                        // M3 (placed-spells-plan 3.2): a WALL's stream also runs from him to the foe, and what it touches on the way is hit (a crime for a bystander).
+                        // The footprint round the foe was read above (areaUnits is the hazard's radius); this is the line, with the same bystander rules. Allies on
+                        // the line are the line-of-fire test's below.
+                        if (e.wall && !e.selfDelivery) {
+                            const AreaHits line = Estimate::AreaCensusLine(s, s.self, *foe, e.areaUnits, kAreaGuard.wallMargin);
+                            if (!line.BystandersSafe()) {
+                                const bool told = !c.f.areaGuardOk;   // the footprint already closed it and logged it
+                                c.f.areaGuardOk = false;
+                                if (!told) x.out.areaBlocked.push_back({ e.form, foe->id, line.blind ? 0u : line.firstBystander, line.firstKind, line.firstDist, e.areaUnits });
                             }
                         }
                         if (e.nature == Prune::Nature::Offense) {   // S11b: the reader's answer, blended in where it KNOWS the cast (live 0: this block changes nothing)

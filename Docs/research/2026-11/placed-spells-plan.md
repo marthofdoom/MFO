@@ -21,6 +21,7 @@ from the code but nobody has watched it run (principle 5). NEW = read for this p
   spell is hostile (Blizzard). The Teach Spells page lists such a tome greyed, with the reason.
 - **M2 built (2026-11-24, `feat/placed-m2`, not merged, not field run).** `Estimate::AreaCensus` (`iaus/AreaCensus.h`), the main-built table `iaus/AreaActors.*`, `kAreaGuard`.
   A hostile control area is guarded too, and for allies (Fire Storm class); Harmony is not. The interim self-blast block stays until M4. The lab has no bystanders, so it is not gated.
+- **M3 built (2026-11-24, `feat/placed-m3`, not merged, not field run).** A wall is no placement drop (`Prune::IsPlacement`); its area is the hazard's footprint and its stream's line is guarded for bystanders (`AreaCensusLine`). Value = the existing unmeasured-offense placeholder: the hazard-dwell value of 3.2 is NOT built (MFO-B871). The M2 leftovers landed with it: crime-faction non-fighters stay bystanders (F1), the MCM option `bAreaSummonsBlock` (F2, default OFF: party summons and the player's horse are not bystanders), the 6000 unit distance cull (F3), harness rows for the surviving mutations (F6). F1's wall look (a watched Wall of Flames cast) is still the field proof and M3 is NOT claimed field-ready before it.
 - **D1 ruled: APPROVED, NOT BUILT.** A rune-only exception for a perform call at release (package H2, after the tune). It becomes a Harbinger
   INVARIANTS #0 amendment when H2 is built, not before.
 
@@ -288,7 +289,7 @@ The lab book must equal the game book first (L1). On top of that, these rows are
 |---|---|---|
 | Runes (Target Location with a projectile), every nature | nothing is placed, no lab model (MFO-B864) | H2 + M6 |
 | Location bursts | lands at the hand | H1 + M5 |
-| Walls (`IsWallShape`): Vanilla Wall of Flames, Frost, Storms. Tuxborn 6 and LoreRim 5 no-script impact rows | native drops them today, hazard value is untested in game | M3 field-run |
+| Walls (`IsWallShape`): Vanilla Wall of Flames, Frost, Storms. Tuxborn 6 and LoreRim 5 no-script impact rows | M3: native offers them now. The LAB still drops them on purpose (`Data.h` `Classify`): it has no footprint gate and its hazards never hurt the party, and the game scores those 0 | M3 field-run, then the footprint (`areaUnits`) and party hazard damage in the lab |
 | Self blasts: every Self, fire-and-forget hostile area spell (`Drop::SelfBlast`; counts in section 11) | blocked by ruling D2, so no book holds one. Nothing about them may be concluded | M2 + M4 |
 | Both-hands summons (the thralls) | CANDIDATES since M1, but the claim is filed on LEFT with one hand prepared (`BuffClaim`, `Loadout::Prepare`) and no both-hands cast under a claim was ever seen (S9 [pred]). Their rows stay out | S9 / C3 |
 | Reanimate (Dead Thrall) | card C5, not this plan | its own card |

@@ -2,6 +2,7 @@
 #include "iaus/AreaActors.h"
 #include "iaus/AreaCensus.h"         // kAreaGuard
 #include "CombatSense.h"             // BodyRadius (field reads only)
+#include "EngageOnSight.h"            // FightingParty: the one "is he fighting the party" reader
 #include "MainThread.h"
 #include "logistics/InvSnapshot.h"   // the one worker-tick clock every main-built table counts freshness in
 
@@ -36,8 +37,36 @@ namespace MFO::AreaActors {
         std::atomic<std::uint64_t> g_lastRows{ 0 }, g_lastCasters{ 0 };
         std::atomic<bool>          g_overCap{ false };
 
-        Iaus::AreaKind KindOf(RE::Actor* a_a) {
-            if (a_a->IsCommandedActor()) return Iaus::AreaKind::Commanded;
+        // The player's own animals: ExtraOwnership names the player's base NPC (0x7), as SetActorOwner(PlayerRef.GetActorBase()) writes it (the test Harbinger's
+        // cast guard Bystander() makes, marth 2026-11-02 "Bystanders only"). Field reads on the main thread.
+        constexpr RE::FormID kPlayerBase = 0x7;
+        bool OwnedByPlayer(RE::Actor* a_a) {
+            const auto* own = a_a->extraList.GetByType<RE::ExtraOwnership>();
+            return own && own->owner && own->owner->GetFormID() == kPlayerBase;
+        }
+        // A summon commanded by the player, a teammate or one of the askers (M3 F2): the party's own.
+        bool PartyCommanded(RE::Actor* a_a, const std::vector<RE::NiPointer<RE::Actor>>& a_casters) {
+            const auto cmd = a_a->GetCommandingActor();   // HOLD the NiPointer
+            if (!cmd) return false;
+            if (cmd->IsPlayerRef() || cmd->IsPlayerTeammate()) return true;
+            return std::any_of(a_casters.begin(), a_casters.end(), [&](const auto& c) { return c.get() == cmd.get(); });
+        }
+
+        // M3 review F5: EngageOnSight::FightingParty knows only the player and his teammates as a target. A guard (or any crime-faction actor) whose current
+        // target is the party's own summon, or one of the askers who is not a teammate, is fighting the party too, so he is no bystander-by-crime. The shared
+        // reader stays as it is (EngageOnSight's behaviour); this widens the table's own test only.
+        bool FightingPartyOrItsOwn(RE::Actor* a_a, const std::vector<RE::NiPointer<RE::Actor>>& a_casters) {
+            if (EngageOnSight::FightingParty(a_a)) return true;
+            auto  tp = a_a->GetActorRuntimeData().currentCombatTarget.get();   // HOLD
+            auto* t  = tp.get();
+            if (!t) return false;
+            return std::any_of(a_casters.begin(), a_casters.end(), [&](const auto& c) { return c.get() == t; }) ||
+                   (t->IsCommandedActor() && PartyCommanded(t, a_casters));
+        }
+
+        Iaus::AreaKind KindOf(RE::Actor* a_a, const std::vector<RE::NiPointer<RE::Actor>>& a_casters) {
+            if (OwnedByPlayer(a_a)) return Iaus::AreaKind::PlayerHorse;
+            if (a_a->IsCommandedActor()) return PartyCommanded(a_a, a_casters) ? Iaus::AreaKind::PartySummon : Iaus::AreaKind::Commanded;
             if (a_a->IsAMount()) return Iaus::AreaKind::Mount;
             if (a_a->IsPlayerTeammate()) return Iaus::AreaKind::Teammate;
             if (a_a->IsGuard()) return Iaus::AreaKind::Guard;
@@ -112,17 +141,31 @@ namespace MFO::AreaActors {
         }
         if (auto* pl = RE::ProcessLists::GetSingleton()) {
             std::unordered_set<RE::FormID> seen;
+            // F3: where the askers stand. An actor farther than kAreaGuard.cullRange from EVERY one of them cannot be in any area they ask about, so he is not
+            // listed and IsHostileToActor is never called for him.
+            std::vector<RE::NiPoint3> from;
+            for (const auto& c : casters) from.push_back(c->GetPosition());
+            const float cull2 = Iaus::kAreaGuard.cullRange * Iaus::kAreaGuard.cullRange;
             const auto add = [&](RE::Actor* a) {
                 if (!a || a->IsDeleted() || a->IsDisabled() || a->IsDead() || !a->Is3DLoaded()) return;
+                const auto p = a->GetPosition();
+                if (!std::any_of(from.begin(), from.end(), [&](const RE::NiPoint3& c) {
+                        const float dx = p.x - c.x, dy = p.y - c.y, dz = p.z - c.z;
+                        return !(dx * dx + dy * dy + dz * dz > cull2); }))   // NaN stays listed: an unreadable position is never "far"
+                    return;
                 if (!seen.insert(a->GetFormID()).second) return;
                 Row r;
-                const auto p = a->GetPosition();
                 r.a.id = a->GetFormID();
                 r.a.x = p.x; r.a.y = p.y; r.a.z = p.z;
                 r.a.radius = CombatSense::BodyRadius(a);
-                r.a.kind = KindOf(a);
-                for (std::size_t i = 0; i < casters.size(); ++i)
-                    if (casters[i].get() != a && a->IsHostileToActor(casters[i].get())) r.hostileTo |= std::uint64_t{ 1 } << i;   // asked FROM the actor, as Gather's brawl gate does
+                r.a.kind = KindOf(a, casters);
+                // F1 (the crime hole): an actor with a CRIME FACTION who is not fighting the party is somebody whose being hit is a crime, whatever the engine's
+                // "would attack" answer says (a bounty, a vampire or a werewolf names every guard and townsperson hostile). He is listed as hostile to NOBODY,
+                // so every asker reads him as a bystander (the rule EngageOnSight::IsEnemy applies to a fight it would start).
+                r.a.crimeNotFighting = a->GetCrimeFaction() && !FightingPartyOrItsOwn(a, casters);
+                if (!r.a.crimeNotFighting)
+                    for (std::size_t i = 0; i < casters.size(); ++i)
+                        if (casters[i].get() != a && a->IsHostileToActor(casters[i].get())) r.hostileTo |= std::uint64_t{ 1 } << i;   // asked FROM the actor, as Gather's brawl gate does
                 t->rows.push_back(r);
             };
             for (auto* list : { &pl->highActorHandles, &pl->middleHighActorHandles })

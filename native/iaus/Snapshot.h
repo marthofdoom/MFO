@@ -126,6 +126,9 @@ struct SpellEntry {
         // M2 (iaus/AreaCensus.h): an effect hostile by its own flag has an area of its own (Prune::HostileAreaEffect, the impact hazard included). Read for
         // Nature::Control only: Harmony's calm area is no crime and stays ungated. The simulator leaves it false.
         bool          hostileArea = false;
+        // M3 (placed-spells-plan 3.2): the Wall shape (a concentration stream whose impact hazard drops to the ground, Prune::IsWallShape). Its `areaUnits` is
+        // the hazard's footprint radius, and the stream's line from him to the foe is guarded for bystanders too (Generate.cpp). The simulator leaves it false.
+        bool          wall = false;
         std::string   name;
     };
 
@@ -327,12 +330,18 @@ struct SpellEntry {
     };
 
     // ── M2: the bystander picture (iaus/AreaCensus.h; built by iaus/AreaActors.h on the main thread) ──
-    enum class AreaKind : std::uint8_t { Person = 0, Guard, Teammate, Commanded, Mount };   // for the log: every kind closes the gate
+    // PartySummon / PlayerHorse (APPENDED, placed-spells M3 review F2): a summon commanded by the player, a teammate or the caster, and a mount the player
+    // owns. They count as bystanders only while the MCM option "Summons and horses block area spells" is ON (Snapshot::areaPartyOwnedBlock).
+    enum class AreaKind : std::uint8_t { Person = 0, Guard, Teammate, Commanded, Mount, PartySummon, PlayerHorse };   // for the log
     struct AreaActor {   // an actor that is not hostile to the follower (Gather leaves out himself, his foes and his allies)
         std::uint32_t id = 0;
         float x = 0.0f, y = 0.0f, z = 0.0f;
         float radius = 0.0f;   // its body (0 = the nominal pad)
         AreaKind kind = AreaKind::Person;
+        // M3 review F1 (the crime hole): this actor has a crime faction and is NOT fighting the party (EngageOnSight::FightingParty), so hitting him is a crime
+        // whatever IsHostileToActor says (a bounty, a vampire or a werewolf names every guard hostile). Gather keeps him in the picture even when he is in
+        // the follower's foe list.
+        bool crimeNotFighting = false;
     };
     // NotApplicable = this host has no bystanders (the simulator, the harness). In the game Gather always sets Ready or NotReady.
     enum class AreaPicture : std::uint8_t { NotApplicable = 0, Ready, NotReady };
@@ -345,6 +354,7 @@ struct SpellEntry {
         std::vector<Combatant> allies;   // the player (isPlayer) and the active followers other than the follower
         AreaPicture            areaPicture = AreaPicture::NotApplicable;   // M2: NotReady closes every hostile area gate this lap
         std::vector<AreaActor> areaActors;                                 // M2: who is NOT hostile to him nearby
+        bool                   areaPartyOwnedBlock = true;                 // M3 F2: party summons and the player's horse count as bystanders (Config::g_areaSummonsBlock; the game's default is OFF)
         std::uint32_t playerId = 0;
         bool  selfSneaking = false;   // G2 Layer 1: Actor::IsSneaking() on the follower this lap, counted only when MFO owns the sneak
                                       // (bSneakInCombat on, or G1's stance claim live): with the defaults it stays false, as on main
