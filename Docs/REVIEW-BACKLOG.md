@@ -3934,6 +3934,16 @@ Author: Harbinger serves a fire-once Reanimate spell only with kCastFlag_CorpseT
 - SEV-5 `ExitsAt` (the pooled spot's exits) still counts open directions; only the retreat kind has `CheckExit`.
 - SEV-5 `CheckExit` floods up to 64 times in one Generate unit when nothing passes. Harness "dearest unit" 1.3 ms of the 3 ms slice, host.
 
+### MOVE-S3: what `feat/move-s3` closed of the MOVE-S2 findings below (evidence: iaus-sim-v4.md 18.1)
+- F1 CLOSED: 48 fights a row, the vacuity guard counts fights that filed a place, 16 seeds pass (1, 4, 21 to 26, 31 to 38). Lost-sight's true rate at 200 fights is 97.5 and 94 percent. No rule was loosened.
+- F2 CLOSED: fixtures 4.7x to 2.3x, extracted places 2.3 to 2.5x to 1.7x, oracle env-ridge 5.1x to 2.25x, byte identical baselines.
+- F4 CLOSED: six peel rows and spot-test `peel-bow-in-hand`. Each of the three mutations (Intercepts, 2 x spotPeelU, KeptHolds) fails a row.
+- F5 CLOSED: the doorway is measured by geometry. PortalsAt ring off fails the pass arm.
+- F6 CLOSED: `Trust::Refused` and `MoveClaim::walks` (spot-test `blocked-spot`, `waiting-claim`). F8's cost half CLOSED (cached floods); its behaviour half (a big room on a dense mesh as its own exit, the drift) stays open.
+- OPEN: F3 (S5), F7, the heal move-only candidate.
+- SEV-4 (author, S3): a route's trust is read at points 128 units apart. A distrusted corner clipped between two points is missed.
+- SEV-4 (author, S3): the six static rows of `kTrustSigns`, and `moved-unwalked`, `unplanned-move`, `falling`, have rows and harness checks and no filler (G1 / G3 / M2).
+
 ### MOVE-S2: review findings on 409231ba (Opus, nothing above SEV-3). F1 and the heal finding are taken by the next slot B rounds
 
 PROVEN
@@ -3957,3 +3967,15 @@ F7 SEV-4 parity: lab phase 1 is one go (native slices at 3 ms; worst window here
 F8 SEV-5 CheckExit floods 256 triangles; on dense meshes f.cut makes `far` small (0.8 x bound) so a big room can be its own exit; UnitOffer also calls it per member/action/spot (backlogged as "64 in one unit"). Drift adds up to 0.4 run speed on top of the brain's own step.
 S1 BACKLOG: R3 flood alloc FIXED. R1 (21.8 ms slices) OPEN, measured 4.5 to 8.4 ms worst window here with small parties, still over one 3 ms slice. R2 re-ask stamp OPEN in native (sim always sends t); must be closed before G2.
 HEAL FINDING (8): real in game. Generate.cpp:969 drops any heal whose recipient is past e.reach or Sight::Occluded (Actuation::HealInReach, same in the cast roads), and the ch.24 held-heal approach (CombatApproach.cpp) is built for a heal already held, so a patient who STARTS out of reach or round a corner gets no approach. heal_reach gets no ranked heal, so its weight can not be tuned: the tune would learn nothing. Do: a small native brief (own review) before S5: emit such a heal as a MOVE-ONLY candidate (scored as if in reach, never a Decide winner, never cast, exported only through TopRanked / MoveNoteRanked), gated so that shipped decisions stay byte identical when no pass asks. Safety: HealRefused must still apply. Then the healer scenario runs unscripted.
+
+### MOVE-S3: review findings on 6996d274 (Opus, nothing above SEV-3). R1 and R2 are fixed at the start of S4; R5 before G2
+
+R1 SEV-3 (determinism) MovePass.cpp UnitGenerate: partial_sort to max(geomPerGen 64, perGen 3), but the new `Trust::Refused -> continue` does not count in `tested`, so a checked kind with k refused spots in its prefix reads k entries of the UNSORTED tail (order implementation defined: gcc vs MSVC, golden/live parity). Fix: drop refused before the sort, or add refused.size() to the bound.
+R2 SEV-3 Trust::Crosses gate plane is only 16 u (aheadU/2) past where he stood and clearU 64 wide: PROVEN with unit program, a body that slides 30 u along a 45 degree wall clears its own true NoGround mark (marks 1 -> 0). Walking round a thin end does the same within 64. Never reaching "repeat" on an oblique wall is possible; my lab variants (starts 9,1 / 9,0 / 8,1) still recovered in 2.6 to 5.5 s, so not seen live. Before G2.
+R3 SEV-4 one crossing clears the whole 512 region: PROVEN, a LengthFar mark 540 u away walked over erased two true NoGround marks. Clear per mark (or marks within a radius).
+R4 SEV-4 independence: PROVEN one leg that goes LengthFar then STUCK = two signs = distrusted; two bodies stuck at one moment = distrusted at once. Rule says different signs, but one leg / one event should be one.
+R5 SEV-3 pre-G2 (Q4): LengthFar doubts every unpassed region of up to 16 points; in game engine routes differ routinely and two followers on one detour distrust all of them for 30 s (spots x0.02 = party stays). Mostly self-heals in 30 s. Rows PLACEHOLDER; needs field calibration before any caller.
+R6 SEV-4 vacuous scenario half: mutation "Walked clears nothing" PASSES spot-test 34/34: "used again within a decay of the walk" is satisfied by decay alone. "allroute" (passed bits ignored), "noexempt", "notrail" also pass spot-test. Harness rows catch all four (1,1,2,1 fails).
+R7 SEV-4 trust scenarios are one fight repeated: worst == mean on all seeds (2.6 s), so 48 fights / 16 seeds add no evidence there. Variant starts 8,1->18,5 and 9,1->13,6: distrusted + recovered, but "used again after repair" 0 of 12 (may be the route not crossing the gap; not traced).
+Q2 clipped corner: backlogged as SEV-4, agree. avoid ×6 softens it. Deviations 1 to 5: acceptable; 1 (0.02) makes R5 costlier.
+NOT DONE: cost sample (running bf849bgi1 output), cli/off4 read, R7 trace.

@@ -116,6 +116,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     iaus/Hide.cpp
     iaus/EnvQuery.cpp
     iaus/PathSearch.cpp
+    iaus/EnvTrust.cpp
     iaus/Spots.cpp
     iaus/MovePass.cpp
     iaus/SpellWorth.cpp

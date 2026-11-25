@@ -8,6 +8,9 @@
 //   its end     phase 3 on the answers, Adopt, and the claims change. So a fact is at most a window old when it is used, as in the game
 // An event (hit hard, a leg that ended, the leash) sets a mark. It never starts a window.
 //
+// TRUST (S3): the claim's legs tell EnvTrust how they ended (MoveTrustLeg: no ground, refused, the engine's way far from ours), every party body's walk clears
+// marks (MoveTrustWalk), and the [env-trust] lines go to the trace and MoveState::trustLog. The pass reads the table, nothing here decides by it.
+//
 // THE CLAIM (ch.24 point + hold, MoveTuning): he walks to the point by the sim's own mover (EnvMove: the same routes, doors, bodies, leg ends), fights a foe
 // in reach on the way, and then holds: his own combat movement does not leave the radius. Retreat, flee, a run of card G3 / batch I, a move order and the
 // hold row keep their precedence (today's rules, until G2's one owner): the claim waits under them and its member is not asked.
@@ -35,6 +38,30 @@ namespace Sim {
 
     inline std::string MoveKindNames(std::uint32_t mask) { std::string o; for (const MV::SpotKindRow& r : MV::kSpotKinds) if (mask & MV::KindBit(r.kind)) o += std::string(o.empty() ? "" : "+") + r.name; return o; }
 
+    inline void MoveTrustLeg(Fight& F, const Body& x, TR::End end, bool laneClear, const EQ::Vec3& toward) {
+        MoveState& S = *F.move.s; MoveClaim& q = S.claim[static_cast<std::size_t>(x.ctl)];
+        TR::LegEvent e; e.who = x.c.id; e.spot = q.key; e.end = end; e.t = F.now; e.laneClear = laneClear; e.at = { x.c.x, x.c.y, x.c.z }; e.toward = toward;
+        e.planned = q.len; e.walked = q.walked; e.route = q.via; e.passed = q.passed;
+        F.t.trustMarks += TR::Leg(S.pic.trust, e);
+    }
+    // Nothing that explains a leg without ground: no body within arm's reach ahead of him, no door in hand.
+    inline bool MoveLaneClear(const Fight& F, const Body& x, const EQ::Vec3& toward) {
+        if (x.nav.door >= 0) return false;
+        const float dx = toward.x - x.c.x, dy = toward.y - x.c.y, l = std::max(1.0f, std::hypot(dx, dy));
+        for (const Body& o : F.b) { if (&o == &x || !Fight::Up(o) || std::fabs(o.c.z - x.c.z) > 100.0f) continue;
+            const float ox = o.c.x - x.c.x, oy = o.c.y - x.c.y; if (std::hypot(ox, oy) < 120.0f && (ox * dx + oy * dy) / l > 0.0f) return false; }
+        return true;
+    }
+    // One step of everybody's walk (native: the tick's own samples).
+    inline void MoveTrustWalk(Fight& F) {
+        MoveState& S = *F.move.s; const std::size_t n0 = S.lastAt.size(); S.lastAt.resize(F.b.size());
+        for (std::size_t i = 0; i < F.b.size(); ++i) { const Body& x = F.b[i]; const EQ::Vec3 at{ x.c.x, x.c.y, x.c.z };
+            if (i < n0 && x.Party() && Fight::Up(x) && x.role != Role::Summon && (at.x != S.lastAt[i].x || at.y != S.lastAt[i].y) && MV::Dist(S.lastAt[i], at) < 100.0f) TR::Walked(S.pic.trust, i == 0, S.lastAt[i], at, F.now);
+            S.lastAt[i] = at; }
+        for (const TR::Line& l : S.pic.trust.log) { S.trustLog.push_back(l); if (F.trace) std::fprintf(F.trace, "%7.2f  %s\n", F.now, TR::Text(l, F.env->name.c_str()).c_str()); }
+        S.pic.trust.log.clear();
+    }
+
     // The picture's inputs, from the fight as it stands. A member keeps what the pass remembers of him (commit, marks).
     inline void MoveFill(Fight& F) {
         MoveState& S = *F.move.s; MV::PartyPicture& P = S.pic;
@@ -50,7 +77,7 @@ namespace Sim {
             m.anchor = { F.b[0].c.x, F.b[0].c.y, F.b[0].c.z }; m.leash = 0.0f;
             if (x.ctl >= 0) { const Ctl& c = F.ctl[static_cast<std::size_t>(x.ctl)]; MoveClaim& q = S.claim[static_cast<std::size_t>(x.ctl)];
                 m.leash = c.leash; m.classId = static_cast<std::uint8_t>(x.ctl); m.kinds = MV::SpotKindsFor(c.gate) & ~g_moveFault->kinds; m.decides = !MoveBodyTaken(F, x);
-                m.top = q.top; m.nTop = q.nTop; m.ageSec = static_cast<float>(F.now - q.topAt);
+                m.top = q.top; m.nTop = q.nTop; if (g_moveFault->meleeHands) for (auto& a : m.top) a.melee = a.target != 0; m.ageSec = static_cast<float>(F.now - q.topAt);
                 // what the holder finds: he was hit hard, and a place the leash no longer lets him stand on (a leash wins over a point, kLeashStandU past it he still stands)
                 if (x.burstMax > q.burstSeen + 1.0f && x.burstMax >= kOneHitLine * x.c.hpMax) m.marks |= MV::kMarkHitHard;
                 q.burstSeen = x.burstMax;
@@ -61,6 +88,7 @@ namespace Sim {
         }
         for (const Area& a : F.areas) { const Body* o = F.Find(a.src); if (a.hostile && o && !o->Party()) P.areas.push_back({ { a.x, a.y, a.z }, a.r }); }
         for (const Hazard& h : F.hazards) if (!h.party && !h.pcOnly) P.areas.push_back({ { h.x, h.y, h.z }, h.r });   // 16.3: a hazard is a spot input, as designed
+        if (g_moveFault->noTrust) { P.trust.marks.clear(); ++P.trust.gen; } if (g_moveFault->hairTrust) P.trust.rules.repeat = 1; if (g_moveFault->noMemory) P.trust.refused.clear();
         P.sight = g_sightT; if (g_moveFault->terrainBlind) P.sight.terrain = false; if (g_moveFault->blind) P.sight.walls = false;
     }
 
@@ -115,8 +143,11 @@ namespace Sim {
             if (q.on && q.key == m->commit.key) { q.act = m->commit.act; q.kinds = m->commit.kinds; continue; }
             if (subj) { ++t.spotFiled; if (q.on && !q.arrived) ++t.spotChanges; for (std::size_t i = 0; i < MFO::Iaus::kSpotKindCount; ++i) if (m->commit.kinds & (1u << i)) ++t.spotKind[i];
                 for (const auto& p : S.pic.work.pairs) if (p.spot == a.spot && S.pic.party[p.member].id == a.who) t.spotPathLen += static_cast<double>(p.path.length); }
+            const MP::PathFact* way = nullptr; for (const auto& p : S.pic.work.pairs) if (p.spot == a.spot && S.pic.party[p.member].id == a.who) way = &p.path;
             const float bs = q.burstSeen; const auto top = q.top; const auto nTop = q.nTop; const double topAt = q.topAt; q = MoveClaim{}; q.burstSeen = bs; q.top = top; q.nTop = nTop; q.topAt = topAt;
             q.on = true; q.key = m->commit.key; q.p = m->commit.p; q.tri = m->commit.tri; q.kinds = m->commit.kinds; q.act = m->commit.act; q.since = F.now;
+            q.from = { x->c.x, x->c.y, x->c.z };
+            if (way) { q.len = way->length; q.via.assign(way->via.begin(), way->via.begin() + way->nVia); }
             x->nav.n = x->nav.i = 0;   // a new claim is a new path
             if (g_moveT.dropShare > 0.0f) q.dropDue = static_cast<double>(Fight::Mix64(F.avSeed ^ Fight::Mix64(q.key ^ (static_cast<std::uint64_t>(a.who) << 40)) ^ static_cast<std::uint64_t>(S.pic.window)) >> 11) * (1.0 / 9007199254740992.0) < static_cast<double>(g_moveT.dropShare);
             if (F.trace) std::fprintf(F.trace, "%7.2f  SPOT %s: %s at (%.0f, %.0f, %.0f) for %s -> %u, %.0f from him, score %.3f\n", F.now, x->c.name.c_str(), MoveKindNames(q.kinds).c_str(), q.p.x, q.p.y, q.p.z, std::string(Name(q.act.family)).c_str(), q.act.target, std::hypot(q.p.x - x->c.x, q.p.y - x->c.y), a.score);
@@ -136,6 +167,7 @@ namespace Sim {
             if (S.open && F.now >= S.winEnd - 1e-9) MoveClose(F);
             if (!S.open) MoveOpen(F);
             MoveRays(F);
+            MoveTrustWalk(F);
         }
         if (F.ctl.empty()) return;
         const Body& s0 = F.b[static_cast<std::size_t>(F.ctl[0].body)]; if (!Fight::Up(s0)) return;
@@ -156,7 +188,7 @@ namespace Sim {
         const Ctl& c = F.ctl[static_cast<std::size_t>(x.ctl)];
         const float d = std::hypot(q.p.x - x.c.x, q.p.y - x.c.y), dz = std::fabs(q.p.z - x.c.z); const bool near = dz < g_envT.storeyU;
         if (c.leash > 0.0f && std::hypot(q.p.x - F.b[0].c.x, q.p.y - F.b[0].c.y) > c.leash + kLeashStandU) return false;   // a leash wins over a point (the pass is told at the next window)
-        if (near && d <= g_moveT.insideU) { if (!q.arrived) { q.arrived = true; if (x.ctl == 0) ++F.t.spotArrived; if (F.trace) std::fprintf(F.trace, "%7.2f  SPOT REACHED %s\n", F.now, x.c.name.c_str()); } }
+        if (near && d <= g_moveT.insideU) { if (!q.arrived) { q.arrived = true; MoveTrustLeg(F, x, TR::End::Arrived, true, q.p); q.len = 0.0f; if (x.ctl == 0) ++F.t.spotArrived; if (F.trace) std::fprintf(F.trace, "%7.2f  SPOT REACHED %s\n", F.now, x.c.name.c_str()); } }
         else if (q.arrived && (!near || d > MoveRadius())) q.arrived = false;   // pushed out of the radius: he walks back in
         auto step = [&](float tx, float ty, float speed, const EnvPoint* pt) { x.ranLast = speed >= 0.9f * x.spec->run; EnvMove(F, x, tx, ty, x.sneaking ? speed * 0.55f : speed, false, nullptr, pt); };
         if (q.arrived) {
@@ -167,11 +199,16 @@ namespace Sim {
                 if (std::hypot(q.dx - x.c.x, q.dy - x.c.y) > 20.0f && (q.dx != 0.0f || q.dy != 0.0f)) EnvTryStep(F, x, q.dx, q.dy, g_moveT.driftSpeedX * x.spec->run * TM::dt); }
             return false;   // he holds: the rest of his combat goes on, MoveBounds keeps him in
         }
-        if (q.dropDue && F.now - q.since > 0.5) { MV::Member* m = MoveMember(F, x.c.id); if (m) { m->marks |= MV::kMarkPathBlocked; m->commit = MV::Commit{}; } if (x.ctl == 0) ++F.t.spotDropped; MoveRelease(F, x.ctl, "the engine dropped it"); return false; }
+        if (q.dropDue && F.now - q.since > 0.5) { MV::Member* m = MoveMember(F, x.c.id); if (m) { m->marks |= MV::kMarkPathBlocked; m->commit = MV::Commit{}; } MoveTrustLeg(F, x, TR::End::Refused, true, q.p); if (x.ctl == 0) ++F.t.spotDropped; MoveRelease(F, x.ctl, "the engine dropped it"); return false; }
         if (g_moveT.fightsOnTheWay && (c.drawn == PostureKind::Melee || c.drawn == PostureKind::Silver))   // "the actor fights the whole way": a foe in reach is swung at
             for (const Body& o : F.b) if (o.role == Role::Foe && Fight::Up(o) && Fight::Dist(x, o) <= F.Reach(x) * 0.9f && EnvMeleeClear(F, x, o)) return false;
         EnvPoint pt; pt.p = q.p; pt.tri = q.tri;
-        step(q.p.x, q.p.y, g_moveT.speedX * x.spec->run, &pt); Fight::Face(x, q.p.x, q.p.y);
+        if (F.now - q.walkAt > 2.5 * static_cast<double>(TM::dt) && q.walked > 0.0f) q.len = 0.0f;   // something else moved him in between: the two lengths no longer measure one walk
+        const EQ::Vec3 from{ x.c.x, x.c.y, x.c.z }; q.walkAt = F.now; q.walks = true;
+        step(q.p.x, q.p.y, g_moveT.speedX * x.spec->run, &pt); q.walks = false; Fight::Face(x, q.p.x, q.p.y);
+        q.walked += MV::Dist(from, { x.c.x, x.c.y, x.c.z });
+        for (std::size_t i = 0; i < q.via.size(); ++i) if (!(q.passed & (1u << i)) && MV::Dist(q.via[i], { x.c.x, x.c.y, x.c.z }) < 100.0f) q.passed |= 1u << i;
+        if (q.on && q.len > 0.0f && TR::Seen(TR::Sign::LengthFar, q.walked / q.len)) { if (q.walked - q.len >= F.move->pic.trust.rules.lengthFloorU) { MoveTrustLeg(F, x, TR::End::Walking, true, q.p); q.len = 0.0f; } }   // once a claim
         return q.on;
     }
 
@@ -184,9 +221,10 @@ namespace Sim {
     }
 
     // A leg toward the claimed point ended (EnvLegEnd). BLOCKED and UNREACHABLE are the engine dropping the path: the claim is over. STUCK only marks him.
-    inline void MoveLegEnd(Fight& F, Body& x, LegEnd how) {
-        MoveClaim& q = F.move->claim[static_cast<std::size_t>(x.ctl)]; if (!q.on || q.arrived || x.nav.goalBody != 0) return;
+    inline void MoveLegEnd(Fight& F, Body& x, LegEnd how, const EQ::Vec3& toward) {
+        MoveClaim& q = F.move->claim[static_cast<std::size_t>(x.ctl)]; if (!q.on || q.arrived || x.nav.goalBody != 0 || (!q.walks && !g_moveFault->anyLeg)) return;   // walks: the leg was HIS claim's. Give ground, a run, a regroup have no goal body either, and a claim that waits under them keeps its place (S2 review F6)
         MV::Member* m = MoveMember(F, x.c.id); if (m) m->marks |= MV::kMarkPathBlocked;
+        MoveTrustLeg(F, x, how == LegEnd::Stuck ? TR::End::Stuck : how == LegEnd::Blocked ? TR::End::Blocked : TR::End::Refused, MoveLaneClear(F, x, toward), toward);
         if (x.ctl == 0) ++F.t.spotBlocked;
         if (how == LegEnd::Stuck) return;
         if (m) m->commit = MV::Commit{};

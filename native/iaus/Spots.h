@@ -15,7 +15,7 @@ namespace MFO::Iaus::Move {
         const Work::Flood& own;
         Env::Vec3 target; bool hasTarget = false; const Foe* foe = nullptr; bool targetIsAlly = false; bool targetUnreachable = false;
     };
-    struct Cand { SpotKey key = 0; Env::Vec3 p; std::int32_t tri = -1; float walk = 0.0f; };
+    using Cand = SpotPoint;
     using SpotGen   = bool (*)(const GenIn&, const Cand&, float& a_rank);
     using SpotCheck = bool (*)(const GenIn&, const Cand&, Env::Scratch&);   // the dear half (geometry rays), on the best few only. Null = none
 
@@ -69,11 +69,15 @@ namespace MFO::Iaus::Move {
 
     // ── geometry helpers of the pass ──
     [[nodiscard]] float Dist(const Env::Vec3& a, const Env::Vec3& b);
-    void Flood(const Env::View& a_v, const Env::Vec3& a_from, std::int32_t a_tri, const Env::Walker& a_who, float a_radius, int a_maxTris, Work::Flood& a_out);
-    void Points(const Env::View& a_v, std::int32_t a_tri, const Tuning& a_t, std::vector<Cand>& a_out);   // the candidate points of one triangle, appended
+    void Flood(const Env::View& a_v, const Env::Vec3& a_from, std::int32_t a_tri, const Env::Walker& a_who, float a_radius, int a_maxTris, Work::Flood& a_out, const MeshFacts* a_mesh = nullptr);   // a_mesh: the same walk, with the lengths worked out once
+    void Points(const Env::View& a_v, std::int32_t a_tri, const Tuning& a_t, std::vector<Cand>& a_out, const MeshFacts* a_mesh = nullptr);   // the candidate points of one triangle, appended
     void WallVerts(const Env::View& a_v, std::vector<std::uint8_t>& a_out);
     [[nodiscard]] std::uint64_t DoorwayOf(const Env::View& a_v, const std::vector<std::uint8_t>& a_wallVert, std::int32_t a_tri, int a_edge, const Tuning& a_t);   // 0 = not a doorway
     [[nodiscard]] std::array<std::uint64_t, 2> PortalsAt(const Env::View& a_v, const std::vector<std::uint8_t>& a_wallVert, std::int32_t a_tri, const Env::Vec3& a_p, const Tuning& a_t);
     [[nodiscard]] std::uint8_t ExitsAt(const Env::View& a_v, std::int32_t a_tri, const Env::Vec3& a_p, const std::vector<Foe>& a_foes, const Env::Walker& a_who, const Tuning& a_t);
+    [[nodiscard]] std::uint8_t OpenOctants(const Env::View& a_v, std::int32_t a_tri, const Env::Vec3& a_p, const Env::Walker& a_who, const Tuning& a_t, const MeshFacts* a_mesh = nullptr);   // the mesh half of ExitsAt
+    [[nodiscard]] std::uint8_t ExitsOf(std::uint8_t a_open, const Env::Vec3& a_p, const std::vector<Foe>& a_foes, const Tuning& a_t);   // ... and the foes'
+    [[nodiscard]] std::shared_ptr<const MeshFacts> FactsOf(const Env::View& a_v);
+    [[nodiscard]] inline std::uint32_t WalkerBits(const Env::Walker& a_w) { return (a_w.large ? 1u : 0u) | (a_w.opensDoors ? 2u : 0u) | (a_w.unlocks ? 4u : 0u); }   // all a flood reads of him
     [[nodiscard]] bool GeomSees(const Env::View& a_v, const Env::Vec3& a_a, const Env::Vec3& a_b, const Tuning& a_t, Env::Scratch& a_s, const Env::SightTuning& a_sight = Env::kSightTuning);
 }

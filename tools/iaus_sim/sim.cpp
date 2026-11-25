@@ -72,7 +72,7 @@ namespace {
             S(pathStuckSec); S(pathHoldUnreachSec); S(pathWalked); S(detourSum); S(envBad); S(envStuckForever); S(pathAwaySec); S(pathCorneredSec); S(castHeldTurns); S(pathHoldSec); S(pathRepeat); S(castZeroFires); S(castZeroHeld);
             S(castUnseated); S(castNeverShort); S(castNeverLong); S(castHeldOff); S(castInterrupted); S(foeCastInterrupted); S(castOccRelease); S(neverSec); S(apprDrops); S(apprBlocked);
             // S2 (the movement pass)
-            S(spotFiled); S(spotChanges); S(spotArrived); S(spotBlocked); S(spotDropped); S(spotReleased); for (std::size_t k = 0; k < MFO::Iaus::kSpotKindCount; ++k) S(spotKind[k]); S(spotPathLen); S(spotClaimSec); S(spotWalkSec); S(threatSec); S(coverSec); S(exposedSec);
+            S(spotFiled); S(spotChanges); S(spotArrived); S(spotBlocked); S(spotDropped); S(spotReleased); S(trustMarks); for (std::size_t k = 0; k < MFO::Iaus::kSpotKindCount; ++k) S(spotKind[k]); S(spotPathLen); S(spotClaimSec); S(spotWalkSec); S(threatSec); S(coverSec); S(exposedSec);
             S(moveWindows); S(moveUnfinished); S(movePathShort); S(moveAskShort); S(moveSpotShort); S(moveTripleShort); S(movePaths); S(moveRays);
             S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined); S(spTop); S(spTie); S(spUnmTop); S(spCapTop); S(scrollsUsed); S(extActions); S(moveOrderSec);
 #undef S
@@ -171,7 +171,7 @@ namespace {
         if (g_road != Road::Off || g_spotMeter) { const double up = std::max(1e-9, s.upSec);
           m["cover%"] = s.threatSec > 0 ? 100.0 * s.coverSec / s.threatSec : -1; m["exposed%"] = s.threatSec > 0 ? 100.0 * s.exposedSec / s.threatSec : -1;
           m["spot/f"] = double(s.spotFiled) / n; m["spotChange/f"] = double(s.spotChanges) / n; m["spotArr/f"] = double(s.spotArrived) / n; m["spotLen"] = s.spotFiled ? s.spotPathLen / double(s.spotFiled) : -1;
-          m["spotBlocked/f"] = double(s.spotBlocked) / n; m["spotDropped/f"] = double(s.spotDropped) / n; m["spotRel/f"] = double(s.spotReleased) / n; m["claim%"] = 100.0 * s.spotClaimSec / up; m["toSpot%"] = 100.0 * s.spotWalkSec / up;
+          m["spotBlocked/f"] = double(s.spotBlocked) / n; m["spotDropped/f"] = double(s.spotDropped) / n; m["trustMarks/f"] = double(s.trustMarks) / n; m["spotRel/f"] = double(s.spotReleased) / n; m["claim%"] = 100.0 * s.spotClaimSec / up; m["toSpot%"] = 100.0 * s.spotWalkSec / up;
           const double w = std::max(1e-9, double(s.moveWindows)); m["mv.win/f"] = double(s.moveWindows) / n; m["mv.unfin"] = double(s.moveUnfinished); m["mv.paths"] = double(s.movePaths) / w; m["mv.rays"] = double(s.moveRays) / w;
           m["mv.pathShort"] = double(s.movePathShort) / w; m["mv.askShort"] = double(s.moveAskShort) / w; m["mv.spotShort"] = double(s.moveSpotShort) / w; m["mv.tripleShort"] = double(s.moveTripleShort) / w;
           for (const MV::SpotKindRow& r : MV::kSpotKinds) m[std::string("sk.") + r.name] = double(s.spotKind[static_cast<std::size_t>(r.kind)]) / n; }
@@ -845,6 +845,7 @@ static int RealMain(int argc, char** argv) {
                 if (q == std::string::npos) break; p0 = q + 1; } }
         else if (!std::strcmp(argv[i], "--move-fault") && i + 1 < argc) { g_moveFault = MoveFaultByName(argv[++i]); if (!g_moveFault) { std::fprintf(stderr, "--move-fault:"); for (const MoveFaultRow& r : kMoveFaults) std::fprintf(stderr, " %s", r.name); std::fprintf(stderr, "\n"); return 2; } }
         else if (!std::strcmp(argv[i], "--spot-test")) spotTest = true;
+        else if (!std::strcmp(argv[i], "--spot-fights") && i + 1 < argc) g_spotFights = std::max(1, std::atoi(argv[++i]));
         else if (!std::strcmp(argv[i], "--env") && i + 1 < argc) envFile = argv[++i];
         else if (!std::strcmp(argv[i], "--env-set") && i + 1 < argc) envSet = argv[++i];
         else if (!std::strcmp(argv[i], "--env-class") && i + 1 < argc) envClass = argv[++i];
