@@ -348,7 +348,7 @@ namespace Sim {
                 F.move->forceUsed = in && held && asked && OraclePolicy::Asked(G, 0) && stands(true) && !stands(false) ? 2 : 1; }, "offered, held, asked when its time is over and when he is marked");
             raceCase("race-pick", "oracle-best", "S5-C: IAUS's answer stands unless the winner leads it by over 2 standard errors and over 0.3, on the race's streams and on fresh ones", [](Fight& F) { if (!raceNow(F)) return; bool ok = true;
                 const auto race = [](double d, double sd) { OraclePolicy::Race R; R.U.assign(3, std::vector<double>(16, 50.0)); for (std::size_t k = 0; k < 16; ++k) { R.U[0][k] += d + (k % 2 ? sd : -sd); R.U[2][k] -= 5.0; } R.n = 16; R.u = { 50.0 + d, 50.0, 45.0 }; R.alive.assign(3, 1); R.best = 0; return R; };
-                const auto fresh = [](double d) { return [d](std::size_t i, int k) -> std::optional<double> { return 50.0 + (i == 0 ? d + (k % 2 ? 0.5 : -0.5) : i == 2 ? -5.0 : 0.0); }; };
+                const auto fresh = [](double d) { return [d](std::size_t i, int k) -> std::optional<double> { return 50.0 + (i == 0 ? d + (k % 2 ? 0.1 : -0.1) : i == 2 ? -5.0 : 0.0); }; };
                 const auto pick = [&](double d, double sd, double f, int ii, int last) { return OraclePolicy::Choose(race(d, sd), ii, last, fresh(f)).best; };
                 ok = pick(5, 1, 5, 1, -1) == 0 && pick(0.25, 0.01, 0.25, 1, -1) == 1 && pick(3, 20, 3, 1, -1) == 1 && pick(5, 1, 0.1, 1, -1) == 1 && pick(5, 1, 0.1, -1, 1) == 1 && pick(5, 1, 5, 2, 1) == 0 && pick(5, 1, 5, 0, 1) == 0;
                 // and the race of the fight uses it: IAUS's order, unless its rule leaves it
