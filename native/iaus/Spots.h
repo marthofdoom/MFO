@@ -48,15 +48,15 @@ namespace MFO::Iaus::Move {
         { SpotKind::Flank,       "flank",       &GenFlank,        nullptr,     Families(Family::Attack, Family::PowerAttack, Family::Sneak, Family::Step), kNeedPin },
         { SpotKind::HealReach,   "heal_reach",  &GenHealReach,    &CheckSight, Families(Family::CastHeal, Family::CastBuff), 0 },
         { SpotKind::Peel,        "peel",        &GenPeel,         nullptr,     Families(Family::Attack, Family::PowerAttack, Family::Taunt, Family::Bash, Family::CastControl), 0 },
-        { SpotKind::Kite,        "kite",        &GenKite,         nullptr,     Families(Family::GiveGround, Family::BackOff, Family::Attack, Family::CastOffense), 0 },
+        { SpotKind::Kite,        "kite",        &GenKite,         nullptr,     Families(Family::GiveGround, Family::BackOff, Family::Attack, Family::CastOffense), kNeedKite },
         { SpotKind::Regroup,     "regroup",     &GenRegroup,      nullptr,     Families(Family::Regroup, Family::Retreat), 0 },
         { SpotKind::LootRoute,   "loot_route",  nullptr,          nullptr,     0, 0 },   // the logistics run's: no combat action pairs with it, so it is never offered here
-        { SpotKind::RetreatExit, "retreat",     &GenRetreatExit,  &CheckExit,  Families(Family::Retreat, Family::Disengage, Family::GiveGround, Family::BackOff, Family::DrinkHealth), 0 },
+        { SpotKind::RetreatExit, "retreat",     &GenRetreatExit,  &CheckExit,  Families(Family::Retreat, Family::Disengage, Family::GiveGround, Family::BackOff, Family::DrinkHealth), kNeedDisengage },
         { SpotKind::ReachUnreach,"reach",       &GenReachUnreach, &CheckSight, Families(Family::Attack, Family::PowerAttack, Family::CastOffense, Family::CastControl), 0 },
     } };
     static_assert([] { for (std::size_t i = 0; i < kSpotKindCount; ++i) if (static_cast<std::size_t>(kSpotKinds[i].kind) != i) return false; return true; }(), "kSpotKinds is indexed by SpotKind");
 
-    // The kinds the mover and the tuning allow now (KindBit mask): `needs` met by the caps, and a pin kind only with t.spotPinKinds on.
+    // The kinds the mover and the tuning allow now (KindBit mask): `needs` met by the caps, and a pin kind only with t.spotPinKinds on or on a strict road.
     [[nodiscard]] std::uint32_t AllowedKinds(const RoadCaps& a_caps, const Tuning& a_t);
     // The kinds a class may be offered (the ClassGate rule, as families are gated).
     [[nodiscard]] std::uint32_t SpotKindsFor(const ClassGate& a_g);

@@ -327,7 +327,9 @@ namespace MFO::Iaus::Move {
     std::uint32_t AllowedKinds(const RoadCaps& c, const Tuning& t) {
         if (!c.point) return KindBit(SpotKind::Stay);
         std::uint32_t have = 0;
-        if (c.pin && t.spotPinKinds >= 1.0f) have |= kNeedPin;
+        if (c.strict || (c.pin && t.spotPinKinds >= 1.0f)) have |= kNeedPin;
+        if (!c.strict || c.kite) have |= kNeedKite;
+        if (!c.strict || c.disengage) have |= kNeedDisengage;
         if (c.facing) have |= kNeedFacing;
         if (c.gait) have |= kNeedGait;
         std::uint32_t m = 0;

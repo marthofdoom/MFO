@@ -1,6 +1,7 @@
 // tools/iaus_harness/move_rows.cpp -- the movement pass's rows (S1, movement-plan.md "Acceptance" of S1) and its golden vectors.
 // Linked into the harness by run.sh. MOVE_STANDALONE builds it alone, which is how another compiler replays the same golden file (the line in run.sh).
 #include "iaus/MoveDump.h"
+#include "iaus/MoveOrder.h"
 
 #include <algorithm>
 #include <chrono>
@@ -87,7 +88,7 @@ namespace {
         for (r.slices = 1; !MP::Phase1(pic, v, s, prof, t, r.asks, slice); ++r.slices) {}
         if (answer) { r.answers = Engine(m, pic, r.asks, t); MP::Answer(pic, r.answers, t); }
         MP::Phase3(pic, prof, t, r.as);
-        MP::Adopt(pic, r.as);
+        MP::Adopt(pic, r.as); MP::Orders(pic, r.as, t);
         pic.t += static_cast<double>(MoveDecisionSec(t));
         return r;
     }
@@ -796,8 +797,44 @@ namespace {
             { "move_only", [] { PartyPicture p; p.party = { Who(0x13, At(4, 5), { Act(Family::CastHeal, 0x14, 1.2f, 4096.0f, Sight::Occluded, false, 0x200), Act(Family::CastOffense, 0x91, 0.6f, 3000.0f, Sight::Visible) }), Who(0x14, At(13, 2), {}) };   // a heal that only works from elsewhere
                 p.party[0].top[0].moveOnly = true; p.party[1].decides = false; p.foes = { Bad(0x91, At(2, 2), 0x14) };
                 return std::pair{ Build({ "################", "#....######....#", "#....######....#", "#....######....#", "#....######....#", "#....######....#", "#....######....#", "#..............#", "#..............#", "#..............#", "################" }), p }; } },
+            { "strict", [] { PartyPicture p = RoomFight(); p.caps.strict = p.caps.kite = p.caps.disengage = true; p.foes[0].target = 0x12; p.foes[0].p = At(5, 6);   // orders of several modes over three windows
+                p.party[1].top[1] = Act(Family::GiveGround, 0, 0.75f, 0.0f, Sight::None); p.party[1].nTop = 2; p.party[2].top[1] = Act(Family::DrinkHealth, 0, 0.8f, 0.0f, Sight::None); p.party[2].nTop = 2; return std::pair{ Build(kRoom), p }; } },
+            { "strict_blades", [] { PartyPicture p; p.caps.strict = p.caps.kite = true; p.party = { Who(0x51, At(2, 2), { Act(Family::Attack, 0x91, 0.7f, 200.0f, Sight::None, true) }), Who(0x52, At(1, 1), { Act(Family::Attack, 0x92, 0.7f, 200.0f, Sight::None, true) }) };
+                p.foes = { Bad(0x91, At(3, 2), 0x51), Bad(0x92, At(2, 3), 0x51), Bad(0x93, At(7, 2), 0x52) }; return std::pair{ Build({ "#########", "#...#...#", "#.......#", "#...#...#", "#########" }), p }; } },
             { "class_room", [] { PartyPicture p = RoomFight(); for (auto& m : p.party) m.classId = 1; p.foes[0].target = 0x12; return std::pair{ Build(kRoom), p }; } },
         };
+    }
+    void OrderRows() {
+        std::printf("\n== movement: orders (MoveOrder.h) ==\n");
+        const auto m = Build(kRoom); const Tuning& t = ShippedTuning();
+        const auto run = [&](PartyPicture p) { p.caps.strict = p.caps.kite = p.caps.disengage = true; Ran r = Window(m, p, t); return std::pair{ p, r }; };
+        const auto mem = [](PartyPicture& p, FormID id) -> Member& { for (Member& x : p.party) if (x.id == id) return x; std::abort(); };
+        {   // without the cap nobody is ordered anything, and the pass is what it was
+            PartyPicture a = RoomFight(), b = RoomFight(); b.caps.strict = b.caps.kite = b.caps.disengage = true;
+            (void)Window(m, a, t); bool none = true; for (const Member& x : a.party) none = none && x.order.mode == MoveMode::Free && x.order.gen == 0; Row(none, "no strict cap: every order is Free");
+            const auto [p, r] = run(RoomFight()); bool agree = true, some = false; for (const Assignment& x : r.as) { const Member& w = *std::find_if(p.party.begin(), p.party.end(), [&](const Member& q) { return q.id == x.who; });
+                if (x.spot >= 0) { some = true; agree = agree && w.order.mode == OrderRowOf(x.kinds).mode && w.order.p.x == x.p.x && w.order.p.y == x.p.y && w.order.tri == x.tri && w.order.leashR > 0.0f && w.order.arriveR <= w.order.leashR && w.order.gen == 1; } }
+            Row(some && agree, "strict: a place becomes its kind's order, at its point, arrival inside the leash"); }
+        {   // the caps gate the kinds
+            RoadCaps c; const auto has = [&](SpotKind k, const RoadCaps& q) { return (AllowedKinds(q, t) & KindBit(k)) != 0; };
+            Row(has(SpotKind::Kite, c) && has(SpotKind::RetreatExit, c) && !has(SpotKind::Cover, c), "the point road: as today");
+            c.strict = true; Row(!has(SpotKind::Kite, c) && !has(SpotKind::RetreatExit, c) && has(SpotKind::Cover, c) && has(SpotKind::Chokepoint, c) && has(SpotKind::Flank, c) && has(SpotKind::Firing, c), "strict alone: no kite, no disengage, cover, chokepoint and flank on");
+            c.kite = true; Row(has(SpotKind::Kite, c) && !has(SpotKind::RetreatExit, c), "... the kite cap adds the kite alone"); c.kite = false; c.disengage = true; Row(!has(SpotKind::Kite, c) && has(SpotKind::RetreatExit, c), "... the disengage cap the retreat alone"); }
+        {   // several kinds: the table's order
+            Row(OrderRowOf(KindBit(SpotKind::Firing) | KindBit(SpotKind::Kite)).mode == MoveMode::Kite && OrderRowOf(KindBit(SpotKind::Kite) | KindBit(SpotKind::RetreatExit)).mode == MoveMode::Disengage && OrderRowOf(KindBit(SpotKind::Firing) | KindBit(SpotKind::Cover)).pin && OrderRowOf(0).mode == MoveMode::Free, "a place of several kinds: the first row of kOrderRows");
+            Row(static_cast<int>(MoveMode::Stand) == 1 && static_cast<int>(MoveMode::GoTo) == 2 && static_cast<int>(MoveMode::Kite) == 3 && static_cast<int>(MoveMode::Disengage) == 4 && static_cast<int>(MoveMode::Path) == 5, "the modes are Harbinger's numbers"); }
+        {   // the stay half
+            PartyPicture p; p.caps.strict = true; p.party = { Who(0x11, At(5, 6), {}) }; p.foes = { Bad(0x91, At(6, 6), 0x11) }; Member& w = p.party[0]; const auto mode = [&](const RankedAction& a, const Tuning& u) { return StayMode(p, w, a, u); };
+            const auto blade = Act(Family::Attack, 0x91, 0.8f, 150.0f, Sight::None, true), bow = Act(Family::Attack, 0x91, 0.8f, 1800.0f, Sight::Visible);
+            Row(mode(blade, t) == MoveMode::Free, "a blade with one foe on him fights freely"); p.foes.push_back(Bad(0x92, At(4, 6), 0x11)); Row(mode(blade, t) == MoveMode::Stand, "... with two he holds");
+            p.foes[1].target = 0x99; Row(mode(blade, t) == MoveMode::Free, "... a foe on somebody else is none of his"); p.foes[1].target = 0x11; p.foes[0].p = At(9, 6); Row(mode(blade, t) == MoveMode::Free, "... nor does he hold out of reach of his target"); p.foes[0].p = At(6, 6);
+            Row(mode(bow, t) == MoveMode::Free, "a shooter with a foe in his face is the engine's"); p.foes[0].p = At(9, 6); p.foes[1].p = At(2, 2); Row(mode(bow, t) == MoveMode::Stand, "... with room he stands"); auto hid = bow; hid.sight = Sight::Occluded; Row(mode(hid, t) == MoveMode::Free, "... not without sight"); hid.sight = Sight::Visible; hid.reach = 100.0f; Row(mode(hid, t) == MoveMode::Free, "... nor out of reach");
+            Tuning off = t; off.orderHoldStay = 0.0f; Row(mode(bow, off) == MoveMode::Free, "t.orderHoldStay 0: never"); auto run = Act(Family::Retreat, 0, 0.9f, 0.0f, Sight::None); Row(mode(run, t) == MoveMode::Free, "a movement is not held"); auto heal = Act(Family::CastHeal, 0x11, 0.9f, 0.0f, Sight::None); Row(mode(heal, t) == MoveMode::Free, "nor what he does to himself"); }
+        {   // a hold keeps its point, its gen and its leash; another order is another gen
+            PartyPicture p; p.caps.strict = true; p.party = { Who(0x11, At(5, 6), { Act(Family::Attack, 0x91, 0.8f, 1800.0f, Sight::Visible) }) }; p.foes = { Bad(0x91, At(10, 6), 0) };
+            Assignment a; a.who = 0x11; a.p = p.party[0].p; a.tri = 3; a.act = p.party[0].top[0]; std::vector<Assignment> as{ a }; MP::Orders(p, as, t); const MoveOrder one = p.party[0].order; Row(one.mode == MoveMode::Stand && one.gen == 1 && one.p.x == a.p.x, "he is held where he stands");
+            as[0].p.x += 50.0f; p.party[0].p = as[0].p; MP::Orders(p, as, t); Row(p.party[0].order.Same(one) && p.party[0].order.gen == 1, "... pushed inside twice his leash: the same order"); as[0].p.x += 200.0f; p.party[0].p = as[0].p; MP::Orders(p, as, t); Row(p.party[0].order.gen == 2 && p.party[0].order.p.x == as[0].p.x, "... carried off: held where he is now");
+            as.clear(); MP::Orders(p, as, t); Row(p.party[0].order.mode == MoveMode::Free && p.party[0].order.gen == 3, "... nobody decides for him: Free"); mem(p, 0x11).decides = false; as.push_back(a); MP::Orders(p, as, t); Row(p.party[0].order.mode == MoveMode::Free, "... a body the pass plans around gets no order"); }
     }
     void Golden(const std::string& path, bool write) {
         std::printf("\n== movement: golden vectors (%s) ==\n", path.c_str());
@@ -813,7 +850,7 @@ namespace {
                     // what was filed and never answered is the next Freeze's carried list: the dump states it
                     PartyPicture before = pic; MP::File(before);
                     const auto r = Window(mesh, pic, t, 1.0e9f, true, &Profiles);
-                    MD::Write(f, name + "_" + std::to_string(w), mesh, before, r.answers, r.as, w > 0, set);
+                    MD::Write(f, name + "_" + std::to_string(w), mesh, before, r.answers, r.as, pic, w > 0, set);
                 }
             }
         }
@@ -827,24 +864,25 @@ namespace {
             while (!MP::Phase1(p, v, s, &Profiles, t, asks, 1.0f)) {}
             bool asked = asks.size() == c->answers.size();
             for (std::size_t i = 0; asked && i < asks.size(); ++i) asked = asks[i].spot == c->answers[i].spot && asks[i].viewer == c->answers[i].viewer;
-            MP::Answer(p, c->answers, t); MP::Phase3(p, &Profiles, t, as);
+            MP::Answer(p, c->answers, t); MP::Phase3(p, &Profiles, t, as); MP::Adopt(p, as); MP::Orders(p, as, t);
             bool exact = as.size() == c->expect.size(); float worst = 0.0f;
             for (std::size_t i = 0; exact && i < as.size(); ++i) {
                 const auto& e = c->expect[i];
                 exact = as[i].who == e.who && as[i].key == e.key && static_cast<int>(as[i].action) == e.family && as[i].form == e.form && as[i].target == e.target;
+                for (const auto& m : p.party) if (m.id == e.who) exact = exact && m.order.Same(e.order) && m.order.target == e.order.target && m.order.gen == e.order.gen;
                 worst = (std::max)(worst, std::fabs(as[i].score - e.score));
             }
             char b[160]; std::snprintf(b, sizeof b, "%s: the same asks, the same assignments, scores within 1e-4 (%g)", c->name.c_str(), static_cast<double>(worst));
             Row(asked && exact && worst <= 1.0e-4f, b);
             ++cases;
         }
-        Row(err.empty() && cases == 30, "every golden case was read");
+        Row(err.empty() && cases == 36, "every golden case was read");
     }
 }
 
 int MoveRows(const char* a_golden, bool a_write) {
     g_bad = 0;
-    Determinism(); Tunables(); Scoring(); Behaviour(); Budgets(); Review(); TrustRows(); LightRows(); Golden(a_golden, a_write);
+    Determinism(); Tunables(); Scoring(); Behaviour(); Budgets(); Review(); TrustRows(); LightRows(); OrderRows(); Golden(a_golden, a_write);
     return g_bad;
 }
 

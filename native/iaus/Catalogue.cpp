@@ -547,6 +547,8 @@ namespace MFO::Iaus {
             { "t.moveDecisionSec", &Tuning::moveDecisionSec }, { "t.spotPinKinds", &Tuning::spotPinKinds }, { "t.spotMomentum", &Tuning::spotMomentum }, { "t.spotPreempt", &Tuning::spotPreempt },   // MOVEMENT (S1): the sim's list gains them with S2
             { "t.spotRadius", &Tuning::spotRadius }, { "t.spotSplitArea", &Tuning::spotSplitArea }, { "t.spotEyeU", &Tuning::spotEyeU }, { "t.spotHighU", &Tuning::spotHighU },
             { "t.spotPortalU", &Tuning::spotPortalU }, { "t.spotPortalStandU", &Tuning::spotPortalStandU }, { "t.spotExitU", &Tuning::spotExitU }, { "t.spotPeelU", &Tuning::spotPeelU },
+            { "t.orderLeash", &Tuning::orderLeash }, { "t.orderLeashPin", &Tuning::orderLeashPin }, { "t.orderArrive", &Tuning::orderArrive }, { "t.orderHoldStay", &Tuning::orderHoldStay },
+            { "t.orderHoldFoes", &Tuning::orderHoldFoes }, { "t.orderNearU", &Tuning::orderNearU }, { "t.orderStandMinU", &Tuning::orderStandMinU },
             { "t.spotArriveU", &Tuning::spotArriveU }, { "t.spotFactMoveU", &Tuning::spotFactMoveU }, { "t.spotFactMaxAgeSec", &Tuning::spotFactMaxAgeSec }, { "t.spotKeptAgeSec", &Tuning::spotKeptAgeSec }, { "t.spotUnknownExposure", &Tuning::spotUnknownExposure },
             { "t.lightNearU", &Tuning::lightNearU }, { "t.lightStoreyU", &Tuning::lightStoreyU }, { "t.lightMaxAgeSec", &Tuning::lightMaxAgeSec }, { "t.lightMinConf", &Tuning::lightMinConf }, { "t.lightLitLevel", &Tuning::lightLitLevel }, { "t.lightGenU", &Tuning::lightGenU }, { "t.lightDarkHoldSec", &Tuning::lightDarkHoldSec },   // S4
             { "t.unmeasuredDamage", &Tuning::unmeasuredDamage },   // fix/spell-worth C2: game only until the sim mirror (PLACEHOLDER)

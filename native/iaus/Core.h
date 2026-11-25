@@ -392,6 +392,14 @@ namespace MFO::Iaus {
         float spotPortalStandU = 100.0f;         // a point this near to it stands in it. A gap one square (128) deep is ONE doorway, both its edges (at 60 two bodies stood in it)
         float spotExitU = 500.0f;                // a route out must lead this far
         float spotPeelU = 250.0f;                // a peel spot lies this near to the middle between attacker and ally
+        // ORDERS (MoveOrder.h, strict movement). PLACEHOLDERS, read only by MovePass.cpp OrderOf / StayMode
+        float orderLeash = 64.0f;                // a Stand / Kite / GoTo order's leashR: pushed past it he is walked back
+        float orderLeashPin = 40.0f;             // ... on a kind that needs a pin (cover, chokepoint, flank)
+        float orderArrive = 24.0f;               // arriveR: he walks on until this near (Harbinger's kDefaultArriveR)
+        float orderHoldStay = 1.0f;              // >= 1: "stay" may be a Stand on his own place (StayMode). 0 = always Free
+        float orderHoldFoes = 2.0f;              // a blade holds where he is with this many foes on him in orderNearU, and fights freely with fewer
+        float orderNearU = 400.0f;
+        float orderStandMinU = 300.0f;           // a shooter stands while no foe that targets him is nearer than this. Nearer, the engine's own back-off is worth more than standing
         float spotArriveU = 90.0f;               // inside this of a committed spot he has arrived
         float spotFactMoveU = 128.0f;            // a sight fact or a path is reused until an end moved this far (or left its triangle)
         float spotFactMaxAgeSec = 5.0f;          // ... or got this old
