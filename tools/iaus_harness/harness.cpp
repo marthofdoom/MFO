@@ -2577,10 +2577,10 @@ namespace {
             Check(score(find(r, 0x1C789)) == 0.0f && score(find(r, 0x12FCD)) == score(find(s, 0x12FCD)) && score(find(s, 0x12FCD)) > 0.0f,
                   "M2: an unreadable picture closes the area spell and leaves the bolt without an area alone");
             // the self blast is centred on HIM: a bystander beside him, none beside the foe
-            Snapshot b = s; b.areaPicture = AreaPicture::Ready; b.areaActors = { person(0.0f, 100.0f) };
+            Snapshot b = s; b.areaPicture = AreaPicture::Ready; b.areaActors = { person(-600.0f, 0.0f) };   // 600 from him, 1200 from the foe
             for (auto& e : b.book.entries) if (e.form == 0x1C789) { e.selfDelivery = true; e.areaUnits = 700.0f; }
             Check(!find(b, 0x1C789).f.areaGuardOk, "M2: a self blast counts the bystander beside the caster");
-            b.areaActors = { person(1600.0f, 0.0f) };
+            b.areaActors = { person(1400.0f, 0.0f) };   // 1400 from him, 800 from the foe
             Check(find(b, 0x1C789).f.areaGuardOk, "M2: a self blast does not count one outside its own area");
             // control: a hostile area is guarded (allies too), a harmless one (Harmony) is not, and the lab (hostileArea false) is unchanged
             Snapshot k = s; k.areaPicture = AreaPicture::Ready; k.areaActors = { person(600.0f, 50.0f) };
