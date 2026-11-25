@@ -560,10 +560,19 @@ namespace {
             Row(n1 && l1 == Level::Doubted, "one lived sign doubts and never distrusts");
             Row(!n2 && l2 == Level::Doubted, "the same event again (inside repeatSec) is not a repeat");
             Row(n3 && l3 == Level::Distrusted, "one sign repeated distrusts");
-            TR::Table b; TR::Note(b, Sign::NoGround, 1, at, ahead, 0.0); TR::Note(b, Sign::EngineRefused, 1, at, ahead, 0.1);
+            TR::Table b; TR::Note(b, Sign::NoGround, 1, at, ahead, 0.0); TR::Note(b, Sign::EngineRefused, 1, at, ahead, 2.0);
             Row(TR::Of(b, here) == Level::Distrusted, "two different signs distrust");
-            TR::Table c; TR::Note(c, Sign::NoGround, 1, at, ahead, 0.0); TR::Note(c, Sign::NoGround, 2, at, ahead, 0.2);
+            TR::Table c; TR::Note(c, Sign::NoGround, 1, at, ahead, 0.0); TR::Note(c, Sign::NoGround, 2, at, ahead, 2.0);
             Row(TR::Of(c, here) == Level::Distrusted, "the same sign lived by two bodies is a repeat");
+            // S3 review R4: one event is one sign
+            TR::Table o; TR::Note(o, Sign::NoGround, 1, at, ahead, 0.0); TR::Note(o, Sign::NoGround, 2, at, ahead, 0.2); TR::Note(o, Sign::EngineRefused, 1, at, ahead, 0.1);
+            const auto oneMoment = TR::Of(o, here); TR::Note(o, Sign::NoGround, 2, at, ahead, 3.0);
+            Row(o.marks.size() == 4 && oneMoment == Level::Doubted && TR::Of(o, here) == Level::Distrusted, "two bodies stuck and a refusal at one moment are one event, a later one is the second");
+            TR::Table g; TR::Note(g, Sign::LengthFar, 1, at, ahead, 0.0, 0, 0, 5); TR::Note(g, Sign::NoGround, 1, at, ahead, 8.0, 0, 0, 5); const auto oneLeg = TR::Of(g, here);
+            TR::Note(g, Sign::NoGround, 1, at, ahead, 12.0, 0, 0, 6);
+            Row(g.marks.size() == 3 && oneLeg == Level::Doubted && TR::Of(g, here) == Level::Distrusted, "one leg that was far and then stuck is one event, the next leg's is the second");
+            TR::Table st; TR::Note(st, Sign::DanglingLink, 1, at, ahead, 0.0); TR::Note(st, Sign::OneWayLinks, 1, at, ahead, 0.0);
+            Row(TR::Of(st, here) == Level::Distrusted, "... static signs are not lived: two kinds read at one moment are two");
             bool lived = true, stat = true;
             for (const auto& row : TR::kTrustSigns) { TR::Table d; TR::Note(d, row.sign, 1, at, ahead, 0.0); (row.lived ? lived : stat) &= TR::Of(d, here) == row.alone && (!row.lived || row.alone == Level::Doubted) && row.decaySec > 0.0f && TR::Seen(row.sign, row.threshold) && !TR::Seen(row.sign, row.threshold - 0.01f); }
             Row(lived && stat, "every row of kTrustSigns: alone it argues its own level, no lived row distrusts alone, every row decays, its threshold is >=");
@@ -573,11 +582,20 @@ namespace {
             TR::Table b = a; TR::Decay(b, 29.0); const auto d1 = TR::Of(b, here); TR::Decay(b, 31.0); const auto d2 = TR::Of(b, here); TR::Decay(b, 36.0);
             Row(d1 == Level::Distrusted && d2 == Level::Doubted && b.Clean(), "marks decay one by one (30 s): distrusted, doubted, trusted");
             const auto walk = [&](Env::Vec3 p, Env::Vec3 q) { TR::Table w = a; TR::Walked(w, true, p, q, 6.0); return w.Clean(); };
-            Row(walk({ 1000, 800, 0 }, { 1040, 800, 0 }), "a walk across the place, the way it was going, clears the region");
-            Row(!walk({ 1040, 800, 0 }, { 1000, 800, 0 }), "... the other way does not (a one-way edge)");
-            Row(!walk({ 1040, 900, 0 }, { 1080, 900, 0 }) && !walk({ 1000, 1000, 0 }, { 1040, 1000, 0 }), "... nor a walk beside it or on the far side of it");
-            Row(!walk({ 1000, 800, 300 }, { 1040, 800, 300 }), "... nor one on the floor above");
-            TR::Table f = a; TR::Walked(f, false, { 1000, 800, 0 }, { 1040, 800, 0 }, 6.0);
+            Row(walk({ 1000, 800, 0 }, { 1080, 800, 0 }), "a walk across the place, the way it was going, clears it");
+            {   // S3 review R2 and R3
+                const auto slide = [&](float deg, float u) { TR::Table w = a; const float c = std::cos(deg * 0.0174533f), n = std::sin(deg * 0.0174533f); for (float s = 0.0f; s < 160.0f; s += u) TR::Walked(w, false, { 1000.0f + c * s, 800.0f + n * s, 0 }, { 1000.0f + c * (s + u), 800.0f + n * (s + u), 0 }, 6.0); return w.marks.size(); };
+                Row(slide(45, 30) == 2 && slide(45, 7) == 2 && slide(-45, 30) == 2 && slide(60, 30) == 2 && slide(30, 30) == 2, "sliding along a wall at 30, 45 or 60 degrees to the way he was going clears nothing (R2)");
+                TR::Table w = a; for (const auto& [p, q] : { std::pair{ Env::Vec3{ 1000, 800, 0 }, Env::Vec3{ 1000, 850, 0 } }, std::pair{ Env::Vec3{ 1000, 850, 0 }, Env::Vec3{ 1100, 850, 0 } }, std::pair{ Env::Vec3{ 1100, 850, 0 }, Env::Vec3{ 1100, 800, 0 } } }) TR::Walked(w, false, p, q, 6.0);
+                Row(w.marks.size() == 2, "... nor does walking round the end of a thin one (R2)");
+                Row(!walk({ 1000, 800, 0 }, { 1050, 800, 0 }), "... nor a push a body's width on");
+                TR::Table far = a; TR::Note(far, Sign::LengthFar, 1, { 1480, 800, 0 }, { 1900, 800, 0 }, 5.5); TR::Walked(far, false, { 1500, 800, 0 }, { 1560, 800, 0 }, 6.0);
+                Row(far.marks.size() == 2 && TR::Of(far, here) == Level::Distrusted, "a walk across one mark leaves the region's others (R3)");
+            }
+            Row(!walk({ 1080, 800, 0 }, { 1000, 800, 0 }), "... the other way does not (a one-way edge)");
+            Row(!walk({ 1080, 800, 0 }, { 1140, 800, 0 }) && !walk({ 1000, 900, 0 }, { 1080, 900, 0 }), "... nor a walk beside it or on the far side of it");
+            Row(!walk({ 1000, 800, 300 }, { 1080, 800, 300 }), "... nor one on the floor above");
+            TR::Table f = a; TR::Walked(f, false, { 1000, 800, 0 }, { 1080, 800, 0 }, 6.0);
             Row(f.Clean() && f.trail.empty(), "a follower's crossing clears too, and leaves no trail");
             TR::Table g = a; TR::Walked(g, true, { 1200, 700, 0 }, { 1210, 700, 0 }, 6.0);
             Row(TR::Of(g, Env::Vec3{ 1250, 720, 0 }) == Level::Trusted && TR::Of(g, Env::Vec3{ 1100, 950, 0 }) == Level::Distrusted, "a place the player stood on is proven, the rest of the region is not");
@@ -646,6 +664,20 @@ namespace {
             for (const auto& o : one.work.offers) two.trust.refused.push_back({ 0x61, one.pool[static_cast<std::size_t>(o.spot)].key, 0.0 });
             Window(m, two, t); bool same = false; for (const auto& o : two.work.offers) for (const auto& x : one.work.offers) same = same || two.pool[static_cast<std::size_t>(o.spot)].key == one.pool[static_cast<std::size_t>(x.spot)].key;
             Row(!one.work.offers.empty() && !two.work.offers.empty() && !same, "... and the next best are looked for in its stead");
+            {   // S3 review R1: many refused places. What is looked at next is the next best, never the unsorted rest
+                const auto room = Build(std::vector<std::string>{ "##############", "#............#", "#............#", "#............#", "#............#", "#............#", "#............#", "#............#", "#............#", "#............#", "#............#", "##############" }); const auto v = room.Get();
+                std::set<SpotKey> gone; float worst = 0.0f; bool order = true; int rounds = 0;
+                for (; rounds < 60; ++rounds) {
+                    PartyPicture p; p.party = { Who(0x71, At(2, 2), { Act(Family::Regroup, 0, 0.8f, 0.0f, Sight::None) }) }; p.party[0].anchor = At(11, 9); p.party[0].leash = 4000.0f; p.envStamp = v.stamp; WallVerts(v, p.wallVert);
+                    for (const auto k : gone) p.trust.refused.push_back({ 0x71, k, 0.0 });
+                    Window(room, p, t); if (p.pool.empty()) break;
+                    Work::Flood fl; Flood(v, p.party[0].p, p.party[0].tri, p.party[0].who, t.spotRadius, kMoveBudget.gatherTris, fl);
+                    float lo = kInf, hi = 0.0f; for (const auto& s : p.pool) { const float w = s.tri == p.party[0].tri ? Dist(p.party[0].p, s.p) : fl.At(s.tri) + Dist(Env::Centroid(v, s.tri), s.p); lo = (std::min)(lo, w); hi = (std::max)(hi, w); if (!gone.insert(s.key).second) order = false; }
+                    if (lo < worst - 1.5f) order = false;
+                    worst = (std::max)(worst, hi);
+                }
+                Row(rounds >= 40 && gone.size() > 100 && order, "refused places take no room: the next best are found in order, however many were refused (R1)");
+            }
             PartyPicture late = TwoWays(m); gapMark(late, 2); late.t = 60.0; Window(m, late, t);
             Row(late.trust.Clean() && late.avoid.empty(), "the pass lets marks decay");
             PartyPicture k = TwoWays(m); Window(m, k, t); const bool was = k.party[0].commit.on; k.trust.refused.push_back({ 0x61, k.party[0].commit.key, k.t }); const auto old = k.party[0].commit.key; const auto rk = Window(m, k, t);

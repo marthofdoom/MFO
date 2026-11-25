@@ -41,8 +41,9 @@ namespace Sim {
     inline void MoveTrustLeg(Fight& F, const Body& x, TR::End end, bool laneClear, const EQ::Vec3& toward) {
         MoveState& S = *F.move.s; MoveClaim& q = S.claim[static_cast<std::size_t>(x.ctl)];
         TR::LegEvent e; e.who = x.c.id; e.spot = q.key; e.end = end; e.t = F.now; e.laneClear = laneClear; e.at = { x.c.x, x.c.y, x.c.z }; e.toward = toward;
-        e.planned = q.len; e.walked = q.walked; e.route = q.via; e.passed = q.passed;
+        e.leg = q.leg; e.planned = q.len; e.walked = q.walked; e.route = q.via; e.passed = q.passed;
         F.t.trustMarks += TR::Leg(S.pic.trust, e);
+        if (end != TR::End::Walking) q.leg = ++S.legs;   // an end ends the leg: the claim's next try is another one
     }
     // Nothing that explains a leg without ground: no body within arm's reach ahead of him, no door in hand.
     inline bool MoveLaneClear(const Fight& F, const Body& x, const EQ::Vec3& toward) {
@@ -56,7 +57,7 @@ namespace Sim {
     inline void MoveTrustWalk(Fight& F) {
         MoveState& S = *F.move.s; const std::size_t n0 = S.lastAt.size(); S.lastAt.resize(F.b.size());
         for (std::size_t i = 0; i < F.b.size(); ++i) { const Body& x = F.b[i]; const EQ::Vec3 at{ x.c.x, x.c.y, x.c.z };
-            if (i < n0 && x.Party() && Fight::Up(x) && x.role != Role::Summon && (at.x != S.lastAt[i].x || at.y != S.lastAt[i].y) && MV::Dist(S.lastAt[i], at) < 100.0f) TR::Walked(S.pic.trust, i == 0, S.lastAt[i], at, F.now);
+            if (i < n0 && x.Party() && Fight::Up(x) && x.role != Role::Summon && (at.x != S.lastAt[i].x || at.y != S.lastAt[i].y) && MV::Dist(S.lastAt[i], at) < 100.0f) { if (g_moveFault->noWalked) { const auto was = S.pic.trust.marks; TR::Walked(S.pic.trust, i == 0, S.lastAt[i], at, F.now); S.pic.trust.marks = was; } else TR::Walked(S.pic.trust, i == 0, S.lastAt[i], at, F.now); }
             S.lastAt[i] = at; }
         for (const TR::Line& l : S.pic.trust.log) { S.trustLog.push_back(l); if (F.trace) std::fprintf(F.trace, "%7.2f  %s\n", F.now, TR::Text(l, F.env->name.c_str()).c_str()); }
         S.pic.trust.log.clear();
@@ -145,7 +146,7 @@ namespace Sim {
                 for (const auto& p : S.pic.work.pairs) if (p.spot == a.spot && S.pic.party[p.member].id == a.who) t.spotPathLen += static_cast<double>(p.path.length); }
             const MP::PathFact* way = nullptr; for (const auto& p : S.pic.work.pairs) if (p.spot == a.spot && S.pic.party[p.member].id == a.who) way = &p.path;
             const float bs = q.burstSeen; const auto top = q.top; const auto nTop = q.nTop; const double topAt = q.topAt; q = MoveClaim{}; q.burstSeen = bs; q.top = top; q.nTop = nTop; q.topAt = topAt;
-            q.on = true; q.key = m->commit.key; q.p = m->commit.p; q.tri = m->commit.tri; q.kinds = m->commit.kinds; q.act = m->commit.act; q.since = F.now;
+            q.on = true; q.key = m->commit.key; q.p = m->commit.p; q.tri = m->commit.tri; q.kinds = m->commit.kinds; q.act = m->commit.act; q.since = F.now; q.leg = ++S.legs;
             q.from = { x->c.x, x->c.y, x->c.z };
             if (way) { q.len = way->length; q.via.assign(way->via.begin(), way->via.begin() + way->nVia); }
             x->nav.n = x->nav.i = 0;   // a new claim is a new path

@@ -131,25 +131,35 @@ namespace Sim {
         const auto bow = [](Fight& F) { Body& f = *Foes(F)[0]; Script(F, 0, { Want(Family::Attack, f.c.id, 0.8f, 800.0f, EnvSees(F, Sub(F), f) ? Sight::Visible : Sight::Occluded, false) }); };
         const auto stage = [](Fight& F, EQ::Vec3 me, EQ::Vec3 foe, EQ::Vec3 pc) { AllStatues(F); for (Body* f : Foes(F)) Put(F, *f, foe); for (std::size_t i = 1; i < Foes(F).size(); ++i) Foes(F)[i]->alive = false; Put(F, Sub(F), me); Put(F, F.b[0], pc); F.ctl[0].leash = 0.0f; for (std::size_t i = 1; i < F.ctl.size(); ++i) F.b[static_cast<std::size_t>(F.ctl[i].body)].alive = false;
             F.ctl[0].drawn = PostureKind::Bow; Sub(F).rangedMode = true; F.ctl[0].gate.weaponBow = true; };
+        // the fights differ in where he and his target stand (S3 review R7: one fight 48 times is one fight)
+        const auto vary = [](const Fight& F, int salt, int n) { return static_cast<float>(Fight::Mix64(F.avSeed ^ Fight::Mix64(static_cast<std::uint64_t>(salt) * 0x9E3779B97F4A7C15ull)) % static_cast<std::uint64_t>(n)); };
+        // three lanes of the place, so every mark's own line is walked (a walk clears only what it crosses)
+        const auto walkLanes = [walkPlayer](Fight& F, float x0, float x1, float y, double t0) { for (int k = 0; k < 3; ++k) walkPlayer(F, x0, x1, y + 36.0f * static_cast<float>(k - 1), t0 + k * (std::fabs(x1 - x0) / 300.0 + 0.1)); };
         { SpotCase c{ "trust-ignored-wall", "trust-ignored-wall", "no-trust" }; c.scripted = true; c.sec = 58.0; c.what = "the mesh walks through a wall that is really there, the engine reads the same mesh: he stops being sent into it";
-          const Bad b{ 1290.0f, 640.0f, 768.0f }; c.setup = [=](Fight& F) { stage(F, At(F, 7, 3, 8), At(F, 18, 2, 8), At(F, 2, 5, 8)); };
-          c.script = [=](Fight& F) { bow(F); if (F.now >= kRepairAt && !F.meshEdit) EnvRepair(F); walkPlayer(F, 1100.0f, 1460.0f, 704.0f, kRepairAt + 0.5); };
+          const Bad b{ 1290.0f, 640.0f, 768.0f }; c.setup = [=](Fight& F) { stage(F, At(F, 6 + vary(F, 1, 3), 1 + vary(F, 2, 3), 8), At(F, 17 + vary(F, 4, 3), 4 + vary(F, 3, 2), 8), At(F, 2, 5, 8)); };
+          c.script = [=](Fight& F) { bow(F); if (F.now >= kRepairAt && !F.meshEdit) EnvRepair(F); walkLanes(F, 1100.0f, 1460.0f, 704.0f, kRepairAt + 0.5); };
           c.watch = [=](Fight& F, SpotProbe& p) { watchTrust(F, p, b, 0); }; c.rule = [=](const auto& r, std::string& o) { return ruleTrust(r, 12.0, o); }; v.push_back(c); }
+        // S3 review R6: what makes a place planned on again is the WALK. Repaired and walked at 10 s, long before any mark decays (the last is made before 10 s, 30 s decay)
+        { SpotCase c{ "trust-walk-clears", "trust-ignored-wall", "no-walked" }; c.scripted = true; c.sec = 22.0; c.what = "the wall is gone and the player walks through: the place is planned on within 10 s, not when the marks are old";
+          const Bad b{ 1290.0f, 640.0f, 768.0f }; c.setup = [=](Fight& F) { stage(F, At(F, 6 + vary(F, 1, 3), 1 + vary(F, 2, 3), 8), At(F, 17 + vary(F, 4, 3), 4 + vary(F, 3, 2), 8), At(F, 2, 5, 8)); };
+          c.script = [=](Fight& F) { bow(F); if (F.now >= 10.0 && !F.meshEdit) EnvRepair(F); walkLanes(F, 1100.0f, 1460.0f, 704.0f, 10.5); };
+          c.watch = [=](Fight& F, SpotProbe& p) { watchTrust(F, p, b, 0, 10.0); if (F.now < 10.0 && TR::Of(F.move->pic.trust, TR::RegionOf({ 1300.0f, 704.0f, 0.0f })) == TR::Level::Distrusted) p["was"] = 1; };
+          c.rule = [](const std::vector<SpotProbe>& r, std::string& o) { const int n = static_cast<int>(r.size()), k = Count(r, [](const SpotProbe& p) { return Get(p, "again", 1e9) <= 20.0; }); o = Fmt("distrusted before the walk in %.0f of %d, planned on again within 10 s of the repair in %d", Sum(r, "was"), n, k); return Sum(r, "was") * 10 >= n * 9 && k * 10 >= n * 9; }; v.push_back(c); }
         { SpotCase c{ "trust-buried-patch", "env-doorway-block", "no-trust" }; c.scripted = true; c.sec = 58.0; c.what = "a patch of mesh under a wall the rays see and the mesh does not (the one gap between two rooms)";
-          const Bad b{ 1344.0f, 512.0f, 640.0f }; c.setup = [=](Fight& F) { stage(F, At(F, 7, 5, 9), At(F, 18, 2, 9), At(F, 2, 6, 9));
+          const Bad b{ 1344.0f, 512.0f, 640.0f }; c.setup = [=](Fight& F) { stage(F, At(F, 5 + vary(F, 1, 4), 2 + vary(F, 2, 3), 9), At(F, 17 + vary(F, 4, 3), 1, 9), At(F, 2, 6, 9));
               EnvEdit(F, [](const EQ::View& w, std::int32_t i, std::int32_t j) { const auto in = [&](std::int32_t k) { const auto q = EQ::Centroid(w, k); return q.x > 1280.0f && q.x < 1408.0f; }; return in(i) != in(j); }, { { 1344.0f, 512.0f, 0.0f, 1344.0f, 640.0f, 0.0f, -24.0f, 300.0f, EQ::WallKind::Face } }); };
-          c.script = [=](Fight& F) { bow(F); if (F.now >= kRepairAt) EnvRepair(F); walkPlayer(F, 1100.0f, 1560.0f, 576.0f, kRepairAt + 0.5); };
+          c.script = [=](Fight& F) { bow(F); if (F.now >= kRepairAt) EnvRepair(F); walkLanes(F, 1100.0f, 1560.0f, 576.0f, kRepairAt + 0.5); };
           c.watch = [=](Fight& F, SpotProbe& p) { watchTrust(F, p, b, 0); }; c.rule = [=](const auto& r, std::string& o) { return ruleTrust(r, 12.0, o); }; v.push_back(c); }
         { SpotCase c{ "trust-missing-link", "env-doorway-block", "no-trust" }; c.scripted = true; c.sec = 58.0; c.what = "a link goes after the plan was made and the engine knows: it refuses the paths we find";
-          const Bad b{ 1344.0f, 512.0f, 640.0f }; c.setup = [=](Fight& F) { stage(F, At(F, 7, 5, 9), At(F, 18, 2, 9), At(F, 2, 6, 9)); F.engineTrue = true; };
+          const Bad b{ 1344.0f, 512.0f, 640.0f }; c.setup = [=](Fight& F) { stage(F, At(F, 4 + vary(F, 1, 3), 2 + vary(F, 2, 3), 9), At(F, 17 + vary(F, 4, 3), 1, 9), At(F, 2, 6, 9)); F.engineTrue = true; };
           c.script = [=](Fight& F) { bow(F); if (F.now >= 1.6 && F.now < kRepairAt && !F.meshEdit) EnvEdit(F, [](const EQ::View& w, std::int32_t i, std::int32_t j) { return (EQ::Centroid(w, i).x < 1280.0f) != (EQ::Centroid(w, j).x < 1280.0f); });
-              if (F.now >= kRepairAt) EnvRepair(F); walkPlayer(F, 1100.0f, 1560.0f, 576.0f, kRepairAt + 0.5); };
+              if (F.now >= kRepairAt) EnvRepair(F); walkLanes(F, 1100.0f, 1560.0f, 576.0f, kRepairAt + 0.5); };
           c.watch = [=](Fight& F, SpotProbe& p) { watchTrust(F, p, b, 0); }; c.rule = [=](const auto& r, std::string& o) { return ruleTrust(r, 12.0, o); }; v.push_back(c); }
         { SpotCase c{ "trust-one-way", "trust-one-way", "no-trust" }; c.scripted = true; c.sec = 68.0; c.what = "an edge walkable one way only and the engine knows: it takes him round, twice, and the plan follows it round (the target crosses every 4 s, so he has to)";
-          const Bad b{ 1290.0f, 640.0f, 768.0f }; c.setup = [=](Fight& F) { stage(F, At(F, 15, 2, 8), At(F, 3, 2, 8), At(F, 20, 5, 8)); F.engineTrue = true; };
+          const Bad b{ 1290.0f, 640.0f, 768.0f }; c.setup = [=](Fight& F) { stage(F, At(F, 14 + vary(F, 1, 3), 2 + vary(F, 2, 3), 8), At(F, 3, 2, 8), At(F, 20, 5, 8)); F.engineTrue = true; };
           c.script = [=](Fight& F) { Body& f = *Foes(F)[0]; const bool west = std::fmod(F.now, 8.0) < 4.0; const bool isWest = f.c.x < 1280.0f; if (west != isWest) Put(F, f, west ? At(F, 3, 2, 8) : At(F, 18, 2, 8));
               Script(F, 0, { Want(Family::Attack, f.c.id, 0.8f, 700.0f, EnvSees(F, Sub(F), f) ? Sight::Visible : Sight::Occluded, false) });
-              if (F.now >= kRepairLate && !F.meshEdit) EnvRepair(F); walkPlayer(F, 1460.0f, 1100.0f, 704.0f, kRepairLate + 0.5); };
+              if (F.now >= kRepairLate && !F.meshEdit) EnvRepair(F); walkLanes(F, 1460.0f, 1100.0f, 704.0f, kRepairLate + 0.5); };
           c.watch = [=](Fight& F, SpotProbe& p) { watchTrust(F, p, b, -1, kRepairLate); }; c.rule = [=](const auto& r, std::string& o) { return ruleTrust(r, 20.0, o); }; v.push_back(c); }
         // one blocked leg in a clean place: nothing is distrusted and he goes on (the 11-17 GATED lesson)
         { SpotCase c{ "trust-one-blocked-leg", "env-doorway-block", "hair-trust" }; c.scripted = true; c.sec = 20.0; c.what = "a clean place, something stands in the gap for a moment and one leg ends STUCK: the region is not distrusted and he goes through it";

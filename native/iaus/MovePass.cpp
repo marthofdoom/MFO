@@ -324,14 +324,14 @@ namespace MFO::Iaus::MovePass {
                     for (std::size_t i = from; i < pts.size(); ++i) pts[i].walk = tri == m.tri ? Dist(m.p, pts[i].p) : d + Dist(c, pts[i].p);
                 }
             thread_local std::vector<R> found; found.clear();
-            for (const Cand& k : pts) { float r = 0.0f; if (row.gen(g, k, r) && std::isfinite(r)) found.push_back({ QDist(r), k }); }
+            // a place his leg was refused at is not looked at, so it takes no room of the sorted part below (S3 review R1)
+            for (const Cand& k : pts) { float r = 0.0f; if (row.gen(g, k, r) && std::isfinite(r) && !Trust::Refused(pic.trustNow, m.id, k.key)) found.push_back({ QDist(r), k }); }
             // only the first geomPerGen are ever looked at, and the order is total (a key is one point)
             const auto upTo = found.begin() + static_cast<std::ptrdiff_t>((std::min)(found.size(), static_cast<std::size_t>((std::max)(B.geomPerGen, B.perGen))));
             std::partial_sort(found.begin(), upTo, found.end(), [](const R& x, const R& y) { return x.q != y.q ? x.q < y.q : x.c.key < y.c.key; });
             int kept = 0, tested = 0;
             for (const R& x : found) {
                 if (kept >= B.perGen) break;
-                if (Trust::Refused(pic.trustNow, m.id, x.c.key)) continue;
                 if (row.check) { if (tested++ >= B.geomPerGen) break; if (!row.check(g, x.c, s)) continue; }
                 Spot sp; sp.key = x.c.key; sp.p = x.c.p; sp.tri = x.c.tri; sp.kinds = KindBit(row.kind);
                 w.hits.push_back({ sp, kept * 100000 + (std::min)(99999, QDist(x.c.walk)) });   // the first of every kind before the second of any, nearest first
