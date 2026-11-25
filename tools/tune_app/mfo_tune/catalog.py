@@ -3,9 +3,10 @@ unknown --scenario lists the known ones); static fallbacks otherwise."""
 import re
 import subprocess
 
-STAGES = ["prep", "rejudge", "classes", "joint", "edge", "gap", "globals", "consts", "worth", "floor", "rating", "recalib", "logistics",
+# the driver's stages in the driver's DEFAULT order (tune_driver.py DEFAULT_STAGES, which is what runs when no --stages is sent); "summary" last
+STAGES = ["prep", "rejudge", "classes", "edge", "follow", "spells", "worth", "joint", "gap", "globals", "consts", "floor", "rating", "recalib", "logistics",
           "loot", "summary"]
-DEFAULT_STAGES = "prep,rejudge,classes,joint,edge,gap,globals,consts,floor,rating,recalib,logistics,summary"
+DEFAULT_STAGES = ",".join(STAGES)
 WORLDS = ["builtin", "LoreRim", "Tuxborn", "Vanilla"]
 CLASSES_FALLBACK = ("melee ranged mage knight warrior mercenary archer thief evoker conjurer healer warlock melee-off ranged-off mage-off").split()
 BETA1 = CLASSES_FALLBACK

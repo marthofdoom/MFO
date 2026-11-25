@@ -772,8 +772,56 @@ class ShipState(unittest.TestCase):   # backlog 2026-11-19: needs_joint_rerun st
         self.assertEqual(T.ship_state()["sets"], [])
 
 
+class StartChecks(unittest.TestCase):   # review E2 of 2d6948a4: what a stage needs is said before any work
+    def ns(self, stages, flags="--consumables on", places="Tuxborn", world="episodes"):
+        return types.SimpleNamespace(stages=stages, sim_flags=flags, loot_places=places, loot_world=world)
+
+    def setUp(self):
+        self.keep = T.loot_table
+        self.asked = []
+        T.loot_table = lambda p: self.asked.append(p) or "/x/%s.loot.json" % p
+
+    def tearDown(self):
+        T.loot_table = self.keep
+
+    def test_worth_and_loot_need_the_consumables_flag(self):
+        for st in ("worth", "loot"):
+            with self.assertRaises(SystemExit) as e:
+                T.check_start(self.ns("prep,classes,%s,summary" % st, flags=""))
+            self.assertIn("--consumables on", str(e.exception))
+            T.check_start(self.ns("prep,%s,summary" % st))
+        T.check_start(self.ns("prep,classes,joint,summary", flags="", places=""))   # neither stage: nothing to say
+
+    def test_the_loot_episodes_need_places_and_their_table(self):
+        with self.assertRaises(SystemExit) as e:
+            T.check_start(self.ns("loot", places=""))
+        self.assertIn("--loot-places", str(e.exception))
+        self.assertEqual(self.asked, [])
+        T.check_start(self.ns("loot"))
+        self.assertEqual(self.asked, ["Tuxborn"])                                    # its .loot.json is looked up now
+        T.loot_table = self.keep
+        with self.assertRaises(SystemExit) as e:
+            T.check_start(self.ns("loot", places="NoSuchSet"))
+        self.assertIn("NoSuchSet.loot.json", str(e.exception))
+        T.check_start(self.ns("loot", places="", world="stops"))                    # the stops lab has no places
+        T.loot_table = lambda p: self.asked.append(p)
+        T.check_start(self.ns("worth,summary", places=""))                          # worth alone needs no places
+
+    def test_main_refuses_before_any_work(self):
+        out = tempfile.mkdtemp()
+        old = sys.argv
+        sys.argv = ["tune_driver.py", "--bin", "/nonexistent/sim", "--out", os.path.join(out, "o"), "--stages", "prep,worth"]
+        try:
+            with self.assertRaises(SystemExit) as e:
+                T.main()
+        finally:
+            sys.argv = old
+        self.assertIn("--consumables on", str(e.exception))
+        self.assertFalse(os.path.exists(os.path.join(out, "o")))                    # nothing was created, nothing hashed
+
+
 class LootGates(unittest.TestCase):   # driver P2, P3: the loot stage judges each candidate on the gate rows and its table on held-out places
-    NAMES = ("A", "CFG", "log", "save_summary", "jmany", "race", "final_curves", "loot_report", "loot_values", "LOOT_KNOBS", "LOOT_EPISODE_KNOBS", "LOOT_NOT_SEARCHED", "LOOT_PREFIX", "POOL", "text_run")
+    NAMES = ("A", "CFG", "log", "save_summary", "jmany", "race", "final_curves", "loot_report", "loot_values", "LOOT_KNOBS", "LOOT_EPISODE_KNOBS", "LOOT_NOT_SEARCHED", "LOOT_PREFIX", "POOL", "text_run", "loot_gate_check")
     ROWS = ("leftRR/ep", "goldLeftRR/ep", "roadLeft%", "dibsNear/ep", "crimes", "guardSeenTakes", "restart%")
 
     def setUp(self):
@@ -800,8 +848,10 @@ class LootGates(unittest.TestCase):   # driver P2, P3: the loot stage judges eac
                 for row, v in (self.heldrows if heldout else self.bad).get(k, {}).items():
                     add[row] = add.get(row, 0.0) + v
             seeds = {r: {s: (0.0 if r in T.LOOT_HARD_ROWS else 10.0 + noise[s % 4]) + add.get(r, 0.0) for s in range(9501, 9505)} for r in self.ROWS}
-            return {"value": 0.0, "gate": {r: [sum(v.values()) / 4, False] for r, v in seeds.items()}, "gate_failing": [], "seeds": seeds}
+            return {"value": 0.0, "gate": {r: [sum(v.values()) / 4, False] for r, v in seeds.items()}, "gate_failing": [], "seeds": seeds, "sets": sets, "held": heldout}
         T.loot_report = report
+        self.checks, real = [], T.loot_gate_check
+        T.loot_gate_check = lambda name, a, b, note=True: (self.checks.append((name, a.get("sets"), a.get("held"), b.get("sets"), b.get("held"), note)), real(name, a, b, note))[1]
         T.loot_values = lambda sets, heldout: {s: 100.0 + noise[s % 4] + sum(self.held.get(k, 0.5) * (1.0 + 0.1 * (s % 3)) for k in parts(sets)) for s in range(9501, 9505)}
 
     def tearDown(self):
@@ -828,6 +878,44 @@ class LootGates(unittest.TestCase):   # driver P2, P3: the loot stage judges eac
         self.assertTrue(any("loot.buffScale" in m and "loot gate" in m for m in self.logged))   # the log says why
         self.assertNotIn("rejected", w)
         self.assertEqual(self.rejected(), [])
+
+    def test_the_candidate_gate_is_the_whole_table_against_the_shipped_one_on_the_train_places(self):   # review E6 of 2d6948a4 (two surviving mutations)
+        self.run_stage()
+        cand = [c for c in self.checks if not c[5]]
+        self.assertTrue(cand)
+        for name, a_sets, a_held, b_sets, b_held, note in cand:
+            self.assertEqual((name, a_sets, a_held, b_held), ("train", None, False, False))   # NOT against the table before the step (bs), NOT on the held-out places
+            self.assertTrue(b_sets)
+        self.assertTrue(any(len(c[3].split(",")) > 1 for c in cand))                         # a second candidate is judged as the whole table with the first
+        final = [c for c in self.checks if c[5]]
+        self.assertEqual([(c[0], c[2], c[4]) for c in final], [("train", False, False), ("heldout", True, True)])   # the final checks: both places, notes filed
+
+    def test_a_refused_candidate_files_no_note(self):   # review E6: the candidate check runs with note=False
+        self.bad = {"loot.buffScale=0.475": {"leftRR/ep": 1.5, "restart%": 1.5}}
+        L, w = self.run_stage()
+        self.assertEqual(L["kept"], ["loot.healthTarget=8"])
+        self.assertFalse([d for d in T.SUMMARY["open_decisions"] + T.SUMMARY["auto_decisions"] if "makes gate rows worse" in d["what"]])
+
+    def test_the_summary_neither_keeps_nor_completes_the_table_before_the_final_checks(self):   # review E5
+        seen = []
+        real = T.loot_report
+        def spy(sets, held):
+            if held:
+                seen.append({k: v for k, v in T.SUMMARY["stages"]["loot"].items() if k in ("kept", "complete", "final_check", "searched")})
+            return real(sets, held)
+        T.loot_report = spy
+        saved = []   # what a kill right now would leave on disk: summary.json is written when the search ends, before the checks
+        T.save_summary = lambda: saved.append(dict(T.SUMMARY["stages"].get("loot", {})))
+        L, w = self.run_stage()
+        self.assertTrue([x for x in saved if x.get("final_check") == "pending" and x["kept"] == [] and x["complete"] is False])
+        self.assertFalse([x for x in saved if x.get("complete") and x.get("final_check")])
+        self.assertTrue(seen)
+        for x in seen:
+            self.assertEqual((x["kept"], x["complete"], x["final_check"], x["searched"]), ([], False, "pending", ["loot.healthTarget=8"]))
+        self.assertEqual((L["kept"], L["complete"], "final_check" in L), (["loot.healthTarget=8"], True, False))
+        self.held = {"loot.healthTarget=8": -3.0}                                  # rejected at the end: complete, nothing kept, what was searched is named
+        L, w = self.run_stage()
+        self.assertEqual((L["kept"], L["complete"], L["kept_before_reject"]), ([], True, ["loot.healthTarget=8"]))
 
     def test_each_reject_and_hard_row_refuses_a_candidate_and_another_row_does_not(self):
         for r in T.LOOT_REJECT_ROWS + T.LOOT_HARD_ROWS:
@@ -982,6 +1070,29 @@ class RerunAfter(unittest.TestCase):   # the joint gate runs again, in the same 
     def test_gap_rule_unchanged(self):
         T.SUMMARY["stages"]["gap"] = {"search_changed": True}
         self.assertEqual(T.rerun_after("gap", ["floor", "rating", "gap"], ["summary"])[0], ["floor", "rating"])
+
+    def test_the_gap_search_reruns_joint_first(self):   # review E1 of 2d6948a4: the default order is joint -> gap, so ship.table stayed empty at the end
+        T.SUMMARY["stages"]["gap"] = {"search_changed": True}
+        dflt = T.DEFAULT_STAGES.split(",")
+        done = dflt[:dflt.index("gap") + 1]
+        self.assertIn("joint", done)
+        self.assertEqual(T.rerun_after("gap", done, dflt[dflt.index("gap") + 1:])[0], ["joint"])                      # floor / rating / recalib are still to come
+        self.assertEqual(T.rerun_after("gap", ["joint", "floor", "rating", "recalib", "gap"], ["summary"])[0], ["joint", "floor", "rating", "recalib"])
+        self.assertEqual(T.rerun_after("gap", ["joint", "gap"], ["joint", "summary"])[0], [])                         # joint still to come
+        T.SUMMARY["stages"]["gap"] = {"search_changed": False}
+        self.assertEqual(T.rerun_after("gap", done, ["summary"])[0], [])
+
+    def test_the_default_order_ends_with_a_joint_verdict_on_the_final_table(self):   # the whole loop, as main() runs it
+        T.SUMMARY["stages"] = {"joint": {"verdict": "PASS", "table": []}, "gap": {"search_changed": True}}
+        order, done, i = T.DEFAULT_STAGES.split(","), [], 0
+        ran = []
+        while i < len(order):
+            n = order[i]; i += 1
+            ran.append(n); done.append(n)
+            again, _ = T.rerun_after(n, done, order[i:])
+            order[i:i] = again
+        self.assertEqual(ran[ran.index("gap") + 1], "joint")
+        self.assertEqual(ran.count("joint"), 2)
 
 
 class CarryOverBinary(unittest.TestCase):   # a summary made by another simulator binary is not carried over

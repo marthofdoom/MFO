@@ -31,6 +31,7 @@ STAGES    prep      the world inputs exist, each list's potion-worth table is me
                     control_worth curves, the SpellWorth rows of SW_KNOBS) against the SPELL REGRET on field-size books, pooled over
                     the cells that cast. One oracle fight prices every candidate (--regret-alt). Its RULE is its docstring.
           worth     the shared worth-the-gold table (needs --sim-flags "--consumables on"), before joint: joint grades it too.
+                    (worth and loot refuse AT START, before any work, without --sim-flags "--consumables on"; loot without --loot-places <set> and its <set>.loot.json)
           joint     the whole final table (class rows AND the shared spells / worth values) against the shipped one on every cell (128 seeds, three configs), and each T1 value
                     left out in turn. A failure is an open decision: no value is written.
           edge      marth "Widen to x4 / x0.25": only knobs whose accepted value sits at the edge of the range tried are searched
@@ -2472,8 +2473,11 @@ def stage_loot():
     st = {"uses": lines}
     SUMMARY["stages"]["loot_uses"] = st
     kept, rows = shared_search("loot", LOOT_KNOBS, "logi:" + ",".join(CELLS), range(7001, 7001 + CFG["train"]), loot_judge)
+    loot_pending()
     if kept:   # driver P3: no held-out check exists in this lab, so nothing it finds is kept
         loot_reject("the stops lab (--loot-world stops) has no held-out places: a table it finds is not checked anywhere. Run the episodes with --loot-places <set>")
+    SUMMARY["stages"]["loot"]["complete"] = True
+    SUMMARY["stages"]["loot"].pop("final_check", None)
     for n, why in list(LOOT_NOT_SEARCHED.items()) + [(n, "read only by the loot world's episodes (run without --loot-world stops)") for n, _, _ in LOOT_EPISODE_KNOBS]:
         open_decision("loot %s not searched" % n, why + "; the placeholder stays")
 
@@ -2523,10 +2527,19 @@ def loot_value_check(shipped, kept):
     return ("heldout places: value per episode %+.3f (per seed, se %.3f, %d seeds)" % (d, se, len(shipped)) if lost else None), [round(d, 4), round(se, 4)]
 
 
+def loot_pending():
+    """The search is over but the final checks (the gate rows, the held-out places) are not: summary.json must not say `complete` or list a kept table
+    until they have run (review E5 of 2d6948a4: a run killed there left kept + complete=True for a table nobody had checked, and the loot rows are
+    exempt from the ship flag). The searched values wait in `searched`; stage_loot_episodes puts them back as `kept` only when the checks pass."""
+    L = SUMMARY["stages"]["loot"]
+    L["searched"], L["kept"], L["complete"], L["final_check"] = list(L["kept"]), [], False, "pending"
+    save_summary()
+
+
 def loot_reject(why):
     """Drop the loot stage's whole kept table, loudly, value by value."""
     L = SUMMARY["stages"]["loot"]
-    L["kept_before_reject"], L["kept"], L["rejected"] = list(L["kept"]), [], why
+    L["kept_before_reject"], L["kept"], L["rejected"] = list(L.get("searched", L["kept"])), [], why
     for r in L.get("rows", []):
         if r.get("accepted"):
             r["accepted"], r["why"] = False, "DROPPED with the table: " + why
@@ -2585,6 +2598,7 @@ def stage_loot_episodes():
     global LOOT_PREFIX
     LOOT_PREFIX = "epi:"
     kept, rows = shared_search("loot", LOOT_KNOBS + LOOT_EPISODE_KNOBS, "epi:" + ",".join(CELLS), range(7001, 7001 + CFG["train"]), loot_judge)
+    loot_pending()
     for n, why in LOOT_NOT_SEARCHED.items():
         open_decision("loot %s not searched" % n, why + "; the placeholder stays")
     st = {"places": getattr(A, "loot_places", "") or "fixtures", "kept": kept}
@@ -2607,6 +2621,10 @@ def stage_loot_episodes():
             st["rejected"] = "; ".join(x for x in (st.get("rejected"), "no --loot-places: no held-out check, so no table is kept") if x)
     if st.get("rejected"):
         loot_reject(st["rejected"])
+    else:
+        SUMMARY["stages"]["loot"]["kept"] = kept
+    SUMMARY["stages"]["loot"]["complete"] = True
+    SUMMARY["stages"]["loot"].pop("final_check", None)
     open_decision("loot.gold is tied with loot.valuables", "native's Valuables road takes coin too, so the two rows are not independent: read a kept loot.gold with that in mind")
     SUMMARY["stages"]["loot_world"] = st
 
@@ -2996,7 +3014,7 @@ def rerun_after(name, done, rest):
         round ends with a verdict on exactly the table it would ship and the caller never changes its arguments (backlog 2026-11-19).
       spells or worth left other shared values than the joint gate graded (driver P4): joint.
       the gap search moved the table (G2, review of 7e883a9a): a stage that reads the final table and already ran describes the table
-        from before it (the default order puts gap first, so this is a custom order only)."""
+        from before it, joint first (the default order runs joint BEFORE gap, so without it ship.table stays empty at the end of an unattended run)."""
     if name == "recalib" and SUMMARY.get("withheld") and "joint" in done and "joint" not in rest:
         return ["joint"], "recalib withheld %d value(s), the table changed" % len(SUMMARY["withheld"])
     if name == "follow" and SUMMARY["stages"].get("follow", {}).get("changed") and "joint" in done and "joint" not in rest:
@@ -3004,7 +3022,7 @@ def rerun_after(name, done, rest):
     if name in ("spells", "worth") and "joint" in done and "joint" not in rest and SUMMARY["stages"].get("joint", {}).get("sets") != final_sets():
         return ["joint"], "the %s stage moved the shared values after the joint gate graded them" % name
     if name == "gap" and SUMMARY["stages"].get("gap", {}).get("search_changed"):
-        again = [x for x in ("floor", "rating", "recalib") if x in done and x not in rest]
+        again = [x for x in ("joint", "floor", "rating", "recalib") if x in done and x not in rest]   # joint FIRST: the gap search moved the table it graded (the default order runs it before gap)
         return again, "gap search moved the table"
     return [], ""
 
@@ -3034,6 +3052,20 @@ def carry_over(old, cells_now, bin_sha_now=None):
         SUMMARY[key] = [d for d in SUMMARY[key] if d.get("stage") not in ("joint", "recalib")]
     return lines + ["RESUME: the summary in --out is of a --cells %s run and this is --cells %s: its %s stage result(s) and %d withheld value(s) describe another table and are DROPPED; run joint and recalib again in this round"
             % (was, cells_now, " and ".join(dropped) or "no joint / recalib", len(wh))]
+
+
+def check_start(a):
+    """What the stages to run need, said BEFORE any work (review E2 of 2d6948a4: worth and loot met these only at their own stage, after the long
+    ones, and adding the flag then changes every cache key, so the whole run was lost): --sim-flags "--consumables on" for worth and loot (both read
+    the consumables kit), and for the loot episodes --loot-places <set> with its compiled <set>.loot.json (no held-out places = no table is kept)."""
+    stages = a.stages.split(",")
+    for st in ("worth", "loot"):
+        if st in stages and "--consumables on" not in (a.sim_flags or ""):
+            raise SystemExit("--stages has %s, which needs --sim-flags \"--consumables on\" (the consumables kit is what its values are worth against); refused before any work" % st)
+    if "loot" in stages and getattr(a, "loot_world", "episodes") == "episodes":
+        if not getattr(a, "loot_places", ""):
+            raise SystemExit("--stages has loot (the episodes): it needs --loot-places <Vanilla|LoreRim|Tuxborn>, else there are no held-out places and no table could be kept; refused before any work")
+        loot_table(a.loot_places)   # a missing <set>.loot.json stops here, not hours in
 
 
 def main():
@@ -3071,6 +3103,7 @@ def main():
         if A.classes or A.stages != ap.get_default("stages"):
             raise SystemExit("--for-class sets --classes and --stages itself: give neither")
         A.classes, A.stages = A.for_class, FOR_CLASS_STAGES
+    check_start(A)
     A.worlds = A.worlds.split(",")
     if A.cells == "all":
         global CELLS
