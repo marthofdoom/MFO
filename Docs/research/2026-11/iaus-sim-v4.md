@@ -1883,6 +1883,8 @@ Its score is Stay's score, times the kind weight `spot.hold`, times ten factors 
 | `hold_player` | the player's place in `t.orderLeadSec` over the leash | his walk is `Member::anchorVel`, unread = where he is |
 | `hold_kept` | `t.orderHoldMomentum` | the hysteresis. Off while he has a committed place: there the momentum is the place's own |
 
+On a committed place that is still offered no Hold row competes at all (R2-1): the place has none of these factors, so they are no reason over it. A hold begins when the place is gone.
+
 - The hysteresis multiplies: a kept hold has `hold_kept`, and a new place must beat the bar (his hold's score) by `1 + t.spotPreempt` on top.
 - `hold_kept`'s exponent and `t.orderHoldMomentum` are ONE degree of freedom (momentum to the power of the weight). A search moves one of the two, the other stays at its value.
 - Not his place but where he IS: sight, exposure, cover, the stay key and the plan position are read at his body, while the point of a kept hold is up to twice its leash off (128). Only `hold_player` reads the point. The pin row needs exactly that. S5-C must evaluate an option at the order's point.
@@ -1924,3 +1926,50 @@ Twenty new `strict-*` spot rows (five of the review round: `strict-refile-own`, 
 ### 22.5 Cost
 
 User CPU, one core, 4 classes, 480 fights on fixtures: off 2.38 (main) and 2.11, point 4.40 and 4.35, strict 5.22 and 5.20. Thief and nightingale strict 2.01 and 1.97. `i_Skyrim-0213A0` strict,kite 5.75 and 5.59. No change beyond noise.
+
+## 23. The oracle over places and modes (s5-plan.md package S5-C, branch `feat/s5-c`, 2026-11-25)
+
+Code: `Oracle.h` (`Order`, `RunRace`, `OrderRefuses`), `MoveWorld.h` (`PicksBefore`, `PicksAfter`, `MoveNoteFront`), `Move.h` (`OrderPick`), `Policy.h` (`Policy::Window`). No native change but R2-1.
+
+Before it (first commit of the branch): R2-1 (22.1, golden and shipped digests untouched) and R2-2 (`dueBlock` counts from `max(now, carriedAt)`).
+
+### 23.1 The claim
+
+The oracle's subject is ranked for the pass each lap like anybody: IAUS's own ranking (`MoveNoteRanked`), with the action the oracle is on first, and the chosen one first as soon as it is begun. VERIFIED for the rollouts (the plan's open question): `RolloutPolicy` serves through `IausPolicy::ServeWith`, which calls `MoveNoteRanked`, so every body it serves has a ranking. It does not while a body is held to an option (`commitUntil`), so the option's action is put first when it is applied. The oracle's own IAUS pick now reads `t.sp` too (`hasSpotAction`), as IAUS does.
+
+### 23.2 The window
+
+`Policy::Window` runs before every step and does something only when that step will close a movement window (`MoveStep`), never between windows. He is asked when the pass would decide for him: free, not committed or marked, ranked, phase 1 done. A forced arm is never asked.
+
+Options = orders x his ranked actions (the three the pass pairs). An action that is refused (class, ruling) or on a hard cooldown has no option. A move-only one has no candidate: the order then goes with what IAUS does.
+
+| Order | Note |
+|---|---|
+| Free | his own place |
+| Hold | the caps and his class mask only. TARGET-FREE (F5): he may hold while he drinks. The point is `HoldPoint`'s (the standing order's, at its radii), so it is evaluated where it stands by playing it out |
+| a pooled place | in the mode of its `kOrderRows` row, and in each other served mode the executor carries out DIFFERENTLY |
+
+- Places the generator paired with none of his actions are offered too when his class and the caps allow a kind of theirs (`paired=0`, the (c) divergence of the plan). Refusals go through `ClassRefuses` (`OrderRefuses`: cap, class kind, leash, trust, another body, no way) and `RulingRefuses` (a Kite order is ground given, a Disengage a run).
+- He is made a fixed member before the same Phase 3 (`PicksBefore`), so the others are planned around him. A place that another fixed or undecided body has is refused.
+- An order ends by TIME or a mark, never by an end event: a place after `--oracle-order-sec` (5 s), his own place at the next window (in a rollout it is held as long as an action option, 2.5 s, unless an event marks him).
+- The action of the pair is begun in the rollout at his first free lap within a second. In the fight the oracle races actions again at that lap, under the order.
+- The race is the one race (`RunRace`), with the cuts. The order that stands wins within 0.3 U. The streams' plan is the action race's, so `oracle_replay.py --check` reads a dump with orders (`"order":1`) as it is.
+
+### 23.3 What is printed
+
+`ORCMODE` one line an order decision (gap pass, `--gap-dump`): time, options, streams, the winner (mode, kind, action, paired), IAUS's own order, and per served mode the best of the options that stood longest, the winner's paired lead over it and its standard error. `GAPORD` the divergences of the order (not `GAPSIT`: the driver's classes do not know them). `ORCORDER` windows, options, rollouts, wins a mode against the pass's, claim share. `ORCASSIGN` per party size the winner's lead over the pass's order (plan item 7, the subject's, or everybody's without `--oracle-subject-only`). It reads high: it is a race's winner.
+
+`--oracle-orders on|rank|off`: rank = the claim alone, off = the oracle as before S5-C.
+
+### 23.4 Differences from the plan
+
+- Under `strict,kite` the modes of one place are ONE option. `StrictWorld.h` reads nothing of a mode but Disengage, and GoTo's free aim under the disengage cap, so "walk there as Stand, Kite or GoTo" are the same order to the last bit and would be raced as twins. The option counts under its place's own row. Consequence for S5-D: in `ORCMODE` Kite means a kite PLACE, and GoTo has no option for a class with no regroup or flank place. With the disengage cap GoTo and Disengage are options of their own at every place.
+- The pass's own gate (`HoldOffered`) still asks for a target (plan 3.1). Only the oracle holds without one, so a hold while drinking that IAUS cannot make shows up as a divergence. Whether the gate opens is read from `GAPORD` and the free / stand leads.
+- Equal outcomes keep the order that stands (the 0.3 rule). Free against Hold is often exactly equal (an archer who would not have moved): a tie, not a Free win.
+- Places are not clustered (cut 4) and the rollout's pass is not frozen (cut 6): S5-F, with the replay tables.
+- `hold_kept`'s exponent and `t.orderHoldMomentum` are one degree of freedom: a search takes `t.orderHoldMomentum` and leaves the exponent (S5-E2's not-searched list).
+- `displaceDownU` gives no verdict in a cell without a paralysis foe. Nothing here reads a verdict.
+
+### 23.5 Proof and cost
+
+PROOFTABLE

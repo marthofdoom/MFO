@@ -6,7 +6,7 @@
 // `--mode-test [--mode-n N] [--mode-fights F]` plays a balanced sample of N cells with every class of kModeClasses under FORCED ARMS of the strict road, and counts which
 // mode is best: the acceptance of the plan. With --env-set the set's own places are extra terrain rows.
 //
-// The oracle is not asked: its subject has no ranking in the picture, so he holds no claim (S2 finding F3, S5's work). What is measured here is a TOURNAMENT OF CONSTANT
+// The oracle is not asked for orders under a forced arm (its order race is Oracle.h, S5-C). What is measured here is a TOURNAMENT OF CONSTANT
 // RULES (kModeArms) over the same fights with his own IAUS choosing the actions: a lower bound on how often a mode is right, never an optimum.
 //
 // TO ADD: a foe kind = a kModeKinds row + its case in ModeFoes. A terrain = a fixture (envs/) + a kModeTerrain row. An arm = a kModeArms row + its case in ModeRule.
