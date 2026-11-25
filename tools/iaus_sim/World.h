@@ -470,6 +470,7 @@ namespace Sim {
         bool scrollRoad = false;                   // card S3 prototype: scrolls can be read (Snapshot::scrollRoad)
         float arenaX = 0, arenaY = 0, arenaR = 0; bool arenaSet = false;   // --space: the enclosed fight's bounds (0 = open)
         float light = 0.6f; bool interior = false; double nextDetect = 0; Detect::Gmst dg;   // stealth: the cell's light on him, 0 dark .. 1 daylight (MODEL)
+        std::uint64_t raceSeed = 0;                // S5-C: the oracle's streams (Oracle.h RaceSeed). No draw of the world reads it
         std::uint64_t avSeed = 0;                  // ch.32: the per (foe, follower, 6 s window) draws come from a hash of this, never from R
         bool estimates = true;                     // fill the Snapshot's estimate inputs (iaus/Estimate.h) as the game's gather will   // card I6: the game fills Combatant::taunted
         Tally t;

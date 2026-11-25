@@ -161,7 +161,7 @@ namespace Sim {
             if (!m || !m->decides || m->tri < 0 || (S.force != Force::None && ci == 0)) { k.on = false; continue; }
             if (!k.fresh) {
                 if (k.spot) { if (!m->commit.on || m->commit.key != k.key) k.on = false; continue; }   // the commit stands by itself
-                if (F.now >= k.until - 1e-9 || m->seen) { k.on = false; continue; } }
+                if (F.now >= k.until - 1e-9 || (m->seen && !k.end)) { k.on = false; continue; } }
             if (k.spot) {
                 const auto s = std::find_if(P.pool.begin(), P.pool.end(), [&](const MV::Spot& x) { return x.key == k.key; });
                 if (s == P.pool.end()) { k.on = false; continue; }

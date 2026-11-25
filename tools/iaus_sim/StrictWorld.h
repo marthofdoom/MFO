@@ -43,7 +43,7 @@ namespace Sim {
     inline void StrictPublish(Fight& F, Body& x, MoveClaim& q, const MV::MoveOrder& o) {
         const bool was = q.order.mode != MV::MoveMode::Free && q.phase != StrictPhase::Ended, moving = was && (q.phase == StrictPhase::Travelling || q.phase == StrictPhase::Returning);
         const bool samePoint = was && q.order.p.x == o.p.x && q.order.p.y == o.p.y && q.order.p.z == o.p.z;
-        q.order = o; q.orderGen = o.gen; q.blocks = {}; q.nBlocks = 0; q.dueBlock = -1.0;
+        q.order = o; q.orderGen = o.gen; q.blocks = {}; q.nBlocks = 0; q.dueBlock = q.blockDraw = -1.0;
         if (x.ctl == 0) { ++F.t.strictOrders[static_cast<std::size_t>(o.mode)]; }
         if (!was) q.fearSeen = 0.0;   // a fear that began before the order holds it off (again)
         if (o.mode == MV::MoveMode::Free) { q.phase = StrictPhase::None; return; }
@@ -55,7 +55,15 @@ namespace Sim {
             q.notCarried = StrictHash(F, x, 0xCA44ull ^ (static_cast<std::uint64_t>(o.gen) << 20)) < g_residue.notCarriedShare;
             q.notBefore = std::max(q.carriedAt, F.now + static_cast<double>(moving ? g_residue.repointStall : 0.0f)); }
         x.nav.n = x.nav.i = 0;
-        if (StrictDist(x, q) > o.arriveR && StrictHash(F, x, 0xB10CCull ^ (static_cast<std::uint64_t>(o.gen) << 20)) < g_residue.blockedShare) q.dueBlock = std::max(F.now, q.carriedAt) + static_cast<double>(g_moveT.blockAfterSec);   // of walking, not of waiting to be carried (R2-2)
+        if (StrictDist(x, q) > o.arriveR) q.blockDraw = std::max(F.now, q.carriedAt) + static_cast<double>(g_moveT.blockAfterSec);   // of walking, not of waiting to be carried (R2-2)
+        if (q.blockDraw > 0.0 && StrictHash(F, x, 0xB10CCull ^ (static_cast<std::uint64_t>(o.gen) << 20)) < g_residue.blockedShare) q.dueBlock = q.blockDraw;
+    }
+    // A stream of the oracle has luck of its own (F.avSeed was reseeded): what an order in hand has drawn and not shown yet is drawn again.
+    inline void StrictRedraw(Fight& F) {
+        if (g_road != Road::Strict || !F.move) return;
+        for (const Ctl& c : F.ctl) { Body& x = F.b[static_cast<std::size_t>(c.body)]; MoveClaim* q = StrictClaim(F, x); if (!q || q->order.mode == MV::MoveMode::Free) continue; const std::uint64_t g = static_cast<std::uint64_t>(q->order.gen) << 20;
+            if (q->carriedAt > F.now) q->notCarried = StrictHash(F, x, 0xCA44ull ^ g) < g_residue.notCarriedShare;
+            if (q->blockDraw > F.now && (q->dueBlock < 0.0 || q->dueBlock == q->blockDraw) && q->phase != StrictPhase::Standing && q->phase != StrictPhase::Ended) q->dueBlock = StrictHash(F, x, 0xB10CCull ^ g) < g_residue.blockedShare ? q->blockDraw : -1.0; }
     }
     // A leg of an order ended without ground, or the residue says so. true = the order is over.
     inline bool StrictBlock(Fight& F, Body& x, MoveClaim& q) {

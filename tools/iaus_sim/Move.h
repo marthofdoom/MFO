@@ -115,7 +115,7 @@ namespace Sim {
         const char* name; std::uint32_t kinds = 0 /* never offered */; bool terrainBlind = false /* the pass's rays do not see the ground */; bool blind = false /* ... nor the walls */;
         bool reachBlind = false /* who cannot be walked to is not known */; bool noPortals = false /* no place stands in a doorway */; bool noExits = false /* a dead end counts as a way on */;
         bool noRays = false /* no ray is ever answered */; bool stayHolds = false /* "stay" is carried out as a claim on his own place */; bool meleeHands = false /* the pass is told every attack is a blade's */;
-        bool noMoveHeal = false /* no heal past its reach is told to the pass */; bool noTrust = false /* no mark is ever kept (S3) */; bool hairTrust = false /* one lived sign distrusts: the 11-17 GATED mistake */; bool noMemory = false /* a blocked leg does not remember its spot */; bool noLight = false /* S4: the light layer and every light fact off */; bool noVeto = false /* nobody is told to want the dark */; bool noDecast = false /* no road ends a light */; bool noNeed = false /* whom and how dark are not read */; bool noWalked = false /* no walk clears a mark (S3 review R6) */; bool fleeWins = false /* strict: the engine's flee beats the order */; bool noReturn = false /* strict: displaced, he is not walked back */; bool kiteRuns = false /* strict: he backs away at his run */; bool disengageFights = false /* strict: a disengage order travels like a goto */; bool dodgeOut = false /* strict: a dodge is not cut at the leash */; bool noLeash = false /* strict: ch.23's leash does not win over the order */; bool gotoRuns = false /* strict: a GoTo has his run without the disengage cap */; bool noOrders = false /* strict: every order is Free */; bool noPickEnd = false /* S5-C: an order the oracle gave has no end in time */; bool noBlock = false /* strict: a block is never counted, the order stands for ever */; bool anyLeg = false /* any goal-less leg that ends ends the claim (S2 review F6) */;
+        bool noMoveHeal = false /* no heal past its reach is told to the pass */; bool noTrust = false /* no mark is ever kept (S3) */; bool hairTrust = false /* one lived sign distrusts: the 11-17 GATED mistake */; bool noMemory = false /* a blocked leg does not remember its spot */; bool noLight = false /* S4: the light layer and every light fact off */; bool noVeto = false /* nobody is told to want the dark */; bool noDecast = false /* no road ends a light */; bool noNeed = false /* whom and how dark are not read */; bool noWalked = false /* no walk clears a mark (S3 review R6) */; bool fleeWins = false /* strict: the engine's flee beats the order */; bool noReturn = false /* strict: displaced, he is not walked back */; bool kiteRuns = false /* strict: he backs away at his run */; bool disengageFights = false /* strict: a disengage order travels like a goto */; bool dodgeOut = false /* strict: a dodge is not cut at the leash */; bool noLeash = false /* strict: ch.23's leash does not win over the order */; bool gotoRuns = false /* strict: a GoTo has his run without the disengage cap */; bool noOrders = false /* strict: every order is Free */; bool noPickEnd = false /* S5-C: an order the oracle gave has no end in time */; bool oracleAv = false /* its streams keep the world's own block and aversion draws */; bool oracleBest = false /* it takes the highest mean of a race */; bool oracleDistrusted = false /* it is offered a place trust has refused */; bool oraclePaired = false /* only places an action of his was paired with */; bool oracleNoEnd = false /* Free is raced for 2.5 s only */; bool noBlock = false /* strict: a block is never counted, the order stands for ever */; bool anyLeg = false /* any goal-less leg that ends ends the claim (S2 review F6) */;
     };
     inline constexpr MoveFaultRow kMoveFaults[] = {
         { .name = "none" },
@@ -147,6 +147,11 @@ namespace Sim {
         { .name = "no-orders", .noOrders = true },
         { .name = "no-block", .noBlock = true },
         { .name = "no-pick-end", .noPickEnd = true },
+        { .name = "oracle-av", .oracleAv = true },
+        { .name = "oracle-best", .oracleBest = true },
+        { .name = "oracle-distrusted", .oracleDistrusted = true },
+        { .name = "oracle-paired", .oraclePaired = true },
+        { .name = "oracle-no-end", .oracleNoEnd = true },
         { .name = "any-leg", .anyLeg = true },
     };
     inline const MoveFaultRow* g_moveFault = &kMoveFaults[0];
@@ -160,6 +165,8 @@ namespace Sim {
         MV::MoveMode mode = MV::MoveMode::Free; MV::SpotKey key = 0; std::uint32_t kinds = 0;
         MFO::Iaus::RankedAction act;                 // the action it is paired with. family kCount = none
         double until = 0.0;
+        double askAt = 0.0;                          // his own place: not asked again before (unless marked). What was raced is what is played
+        bool end = false;                            // his own place to the fight's end: a mark does not end it
         [[nodiscard]] bool SameOrder(const OrderPick& o) const { return spot == o.spot && mode == o.mode && (spot ? key == o.key : kinds == o.kinds); }
     };
     // --oracle-orders: on = the oracle's followers hold a claim and race orders with their actions (strict road), rank = the claim alone, off = neither (as before S5-C).
@@ -167,7 +174,7 @@ namespace Sim {
     inline OracleOrders g_oracleOrders = OracleOrders::On;
     // What one follower's claim is doing (by Fight::ctl index).
     struct StrictHand {   // the strict order in hand (StrictWorld.h). A new place claim keeps it
-        MV::MoveOrder order; std::uint32_t orderGen = 0; StrictPhase phase = StrictPhase::None; float stopAt = 0.0f; double nextPick = 0.0, notBefore = 0.0, carriedAt = 0.0, retryAt = 0.0, dueBlock = -1.0; std::array<double, 3> blocks{}; std::uint8_t nBlocks = 0;
+        MV::MoveOrder order; std::uint32_t orderGen = 0; StrictPhase phase = StrictPhase::None; float stopAt = 0.0f; double nextPick = 0.0, notBefore = 0.0, carriedAt = 0.0, retryAt = 0.0, dueBlock = -1.0, blockDraw = -1.0; std::array<double, 3> blocks{}; std::uint8_t nBlocks = 0;
         bool filed = false;                          // an order was filed before: the next one pays refileStall
         bool notCarried = false;                     // Residue::notCarriedShare: this point never is. carriedAt: when the area carries it, the engine's until then
         MV::MoveOrder next; double nextAt = -1.0;    // Residue::bridgeLag: the order that is not live yet
