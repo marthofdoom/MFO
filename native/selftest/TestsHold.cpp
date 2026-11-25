@@ -6,7 +6,7 @@
 // own rays through Sightline::PointSeenNow), file ONE claim (apmf/DevHold.cpp, the Disengage.cpp road), sample him every pump tick
 // (~133 ms), release, print ONE line:
 //   [hold] RESULT <test> leg n/m <what> R=<r>: PASS|FAIL|MEASURED|SKIP ...
-// PASS = arrived, and inside R + 25 u (kT.margin) for >= 90% of the time after arrival (gate P2; inside R itself is reported beside it). FAIL = he was held by our claim and did not.
+// PASS = arrived, and inside R for >= 90% of the time after arrival (gate P2, STRICT: marth 11-24 "spots must be strictly held, no margin"; the R + 25 u number is logged as extra data and never counts). FAIL = he was held by our claim and did not.
 // SKIP = the leg could not be measured (no such place here, another MFO claim owned the channel, combat ended).
 // A TEST's own verdict: INFO (complete, the numbers are in the evidence); FAIL only when the claim was refused or never carried by the
 // engine in every leg; RETRY when nothing could be measured.
@@ -42,7 +42,7 @@ namespace MFO::SelfTest {
         // ── tunables of the exerciser, one table ─────────────────────────────────────────────────
         struct Tuning {
             float passInside   = 0.90f;   // gate P2
-            float margin       = 25.0f;   // a spot is scored with this margin (field 11-24c: he stops AT the circle edge, avg dist 0.9 to 1.0 R, so "inside R" punishes the edge); R itself is reported too
+            float margin       = 25.0f;   // LOGGED ONLY (marth 11-24: strict, no margin): the share of time inside R + this is printed beside the strict inside-R number, never judged
             float coverWalk    = 1400.0f; // how far he may walk to a cover / flank point
             float coverGap     = 250.0f;  // a cover point stays this far from the foe
             int   coverPerFrame = 10;     // engine sight answers (3 rays each) per frame
@@ -533,7 +533,7 @@ namespace MFO::SelfTest {
                 return;
             }
             const float inside  = s.afterT > 0.2f ? s.insideT / s.afterT : 0.0f;
-            const float insideM = s.afterT > 0.2f ? s.insideMT / s.afterT : 0.0f;   // inside R + margin: the number the verdict reads
+            const float insideM = s.afterT > 0.2f ? s.insideMT / s.afterT : 0.0f;   // inside R + margin: extra data only, the verdict reads `inside`
             const float avgD   = s.samples ? s.sumD / static_cast<float>(s.samples) : -1.0f;
             const float drift  = s.afterT > 0.2f ? s.walkedIn / s.afterT : 0.0f;
             const char* v      = "MEASURED";
@@ -551,7 +551,7 @@ namespace MFO::SelfTest {
             } else if (s.arriveAt < 0) {
                 v = "FAIL(never arrived)";
             } else {
-                v = insideM >= kT.passInside ? "PASS" : "FAIL(left the radius)";
+                v = inside >= kT.passInside ? "PASS" : "FAIL(left the radius)";
             }
             if (v[0] != 'S') ++r.measured;
             if (leg.quiet || std::string_view(leg.what) == "normal") {

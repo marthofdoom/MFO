@@ -152,7 +152,7 @@ Log: `[selftest] ...MFO_SelfTest.ini: reset generation 0 -> 1: cleared N result(
 
 **Code retest (no INI edit).** `kRetestIds` in `native/selftest/Runner.cpp` (`ApplyCodeRetest`) lists tests whose stored result a fix has made stale. On the first load whose save lacks the marker result `_retest.<tag>` the listed ids are cleared once and the marker is stored (a bookkeeping result with a leading underscore, never counted). To retest a test after a later fix, add its id and bump the tag. Log: `[selftest] code retest _retest.1124c: cleared N stale result(s)`.
 
-**Row order.** `r.rows` is the table order: the first row listed for a table is its top row (it used to be reversed). `g0b.*` legs score a spot inside R and inside R + 25 u (both are printed; the verdict reads R + 25 u).
+**Row order.** `r.rows` is the table order: the first row listed for a table is its top row (it used to be reversed). `g0b.*` legs score a spot inside R and inside R + 25 u (both are printed; the verdict is STRICT, inside R only, the R + 25 u number never counts toward PASS).
 
 ## 8. Adding a test
 
