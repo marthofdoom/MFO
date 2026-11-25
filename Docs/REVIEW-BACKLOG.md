@@ -3968,6 +3968,15 @@ F8 SEV-5 CheckExit floods 256 triangles; on dense meshes f.cut makes `far` small
 S1 BACKLOG: R3 flood alloc FIXED. R1 (21.8 ms slices) OPEN, measured 4.5 to 8.4 ms worst window here with small parties, still over one 3 ms slice. R2 re-ask stamp OPEN in native (sim always sends t); must be closed before G2.
 HEAL FINDING (8) **CLOSED on `feat/heal-move` (iaus-sim-v4.md 20)**: real in game. Generate.cpp:969 drops any heal whose recipient is past e.reach or Sight::Occluded (Actuation::HealInReach, same in the cast roads), and the ch.24 held-heal approach (CombatApproach.cpp) is built for a heal already held, so a patient who STARTS out of reach or round a corner gets no approach. heal_reach gets no ranked heal, so its weight can not be tuned: the tune would learn nothing. Do: a small native brief (own review) before S5: emit such a heal as a MOVE-ONLY candidate (scored as if in reach, never a Decide winner, never cast, exported only through TopRanked / MoveNoteRanked), gated so that shipped decisions stay byte identical when no pass asks. Safety: HealRefused must still apply. Then the healer scenario runs unscripted.
 
+### `feat/sim-strict` (author notes, Opus 5.5, 2026-11-24; no review yet)
+- CLOSED here: HEAL-MOVE F1 (the export keeps Decide's order), F2 (five rows, each mutation fails one), F3 (doc), F5 (a patient whose in-reach heal is on its hard cooldown). F4 and F6 stay open (SEV-5).
+- OPEN (S5): the acceptance of the mode set is a tournament of constant rules under IAUS's own actions. The oracle's subject still holds no claim (S2 F3).
+- OPEN (S5, SEV-4): `StayMode`'s three lines (`t.orderHoldFoes`, `t.orderNearU`, `t.orderStandMinU`) are rules, not scores: Free against a hold on his own place is not weighed by the considerations. If the oracle over spots shows gaps there it wants a spot kind of its own.
+- OPEN (SEV-4): Free is the only order without a leash here. H-M1's Free keeps the claim's R as a bound (hm1 7.2): the MFO client has to end the claim for a Free, or the lab must bound it.
+- OPEN (SEV-5): `blockedShare` blocks an order at 0.5 s and again each 2 s until it ends. The field may show single blocks that pass.
+- OPEN (SEV-5): the lab's summoner (what he calls joins as a late foe) and flyer (the dragon) are models. 1 foe kind x count cell is not applicable (a boss with adds is no single foe).
+- OPEN (G2): hide run, back-off, retreat, regroup still take the body from an order, in the lab as in the game today.
+
 ### `feat/heal-move` (author notes, Opus 5.5, 2026-11-24; no review yet)
 - OPEN (design, marth or S5): the in-reach rule is literal. A patient in reach who is scratched but ranked over the act floor holds the healer from one who is dying round a corner, as long as his heal loses to other actions. `t.moveHealYield` (0 = literal) is the knob, not searched.
 - OPEN: a patient whose nearest healing place is past `t.spotRadius` (1500 walked) is still not approached: no place is found.
