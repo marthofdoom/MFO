@@ -26,7 +26,7 @@ namespace MFO::Iaus::Reposition {
 //                              out-ranges melee (reach >= StrikeDistance) also has the aimed spell's minimum (0.4 of desired)
     //   Self-delivered blast       its own area x0.8 (he stands in it: the foe must be inside)
     //   aimed / target actor       the furthest range at which it works x0.9
-    //   target location            its range (never an IAUS candidate today: Placement is dropped)
+    //   target location            its range (runes and bursts are no IAUS candidate: Prune::IsPlacement; a summon is, and takes no range)
     // `desired` = the distance to fight at (0 = the record gives none: no range is kept). `minimum` = the distance under which a foe
     // that has to close is too near for him to keep casting at it: only a spell that is cast from AFAR has one (an aimed or
     // target-actor spell, or a concentration spell that out-ranges melee); a touch / cone / self-area spell WANTS the foe near. CHOSEN: 0.4 of the

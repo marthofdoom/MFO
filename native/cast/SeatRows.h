@@ -52,6 +52,53 @@ namespace MFO::SeatRows {
         return a_abi >= kMinAbiCoverage && (a_coverage & Info(a_row).coverageBit) != 0 && (a_coverage & kTypeEquipBit) != 0;
     }
 
+    // ABI v47 FIRE ONCE (APMF_API.h kCastFlag_FireOnce, "ABI v47: FIRE ONCE"), the pure half of its adoption (anim-residue plan A2).
+    // A claim that carries the flag casts AT MOST ONCE on any caster type, so a spell whose effects map to several caster rows
+    // (Mystic Wind: Script + Restore) can be claimed although a candidate row (Restore, Offensive) has no bound of its own.
+    //   * kFireOnceBit / kMinAbiFireOnce: kCastSeat_FireOnce and the ABI that first reports it (the literals are static_assert-ed
+    //     against the header in apmf/CastClaims.cpp).
+    //   * kEngineRowBit: the CastSeatCoverage bit of the row's own seat, indexed by cast/Actuation.h EngineRow's ordinal (the order
+    //     is static_assert-ed there). 0 = no seat (Unknown). A rowless spell (NoRow) is served as Script by Harbinger.
+    //   * FireOnceServed: the whole gate. abi >= 47 AND the coverage carries kCastSeat_FireOnce AND EVERY candidate row of the mask
+    //     has its OWN seat bit (the four v46 hostile rows also need kTypeEquip, as RowSeated). A Reanimate candidate needs the claim
+    //     to be a corpse claim (kCastFlag_CorpseTarget, a_corpseClaim), else the claim is not fire-once. Harbinger keeps the engine's
+    //     own answers on a row whose bit is clear, so a candidate without a bit would be an UNBOUNDED wrong caster: not served.
+    // To adopt another row or flag: edit kEngineRowBit; the readers do not change.
+    inline constexpr std::uint32_t kFireOnceBit    = 1u << 18;   // APMF_API::kCastSeat_FireOnce (v47)
+    inline constexpr std::uint32_t kMinAbiFireOnce = 47;
+    inline constexpr std::uint32_t kReanimateRow   = 16;         // EngineRow::Reanimate's ordinal
+    inline constexpr std::uint32_t kEngineRowBit[17] = {
+        1u << 9,    // NoRow (served as Script)
+        0,          // Unknown
+        1u << 1,    // Offensive
+        1u << 0,    // Restore
+        1u << 10,   // Stagger
+        1u << 11,   // Disarm
+        1u << 12,   // TargetEffect
+        1u << 13,   // Paralyze
+        1u << 9,    // Script
+        1u << 2,    // Ward
+        1u << 3,    // Summon
+        1u << 4,    // Cloak
+        1u << 5,    // Light
+        1u << 6,    // Invisibility
+        1u << 7,    // BoundItem
+        1u << 8,    // Armor
+        1u << 14,   // Reanimate (the corpse seat)
+    };
+    [[nodiscard]] constexpr bool FireOnceServed(std::uint32_t a_abi, std::uint32_t a_coverage, std::uint32_t a_rowMask,
+                                                bool a_corpseClaim = false) {
+        if (a_abi < kMinAbiFireOnce || (a_coverage & kFireOnceBit) == 0) return false;
+        for (std::uint32_t r = 0; r < 17; ++r) {
+            if ((a_rowMask & (1u << r)) == 0) continue;
+            const std::uint32_t bit = kEngineRowBit[r];
+            if (bit == 0 || (a_coverage & bit) == 0) return false;
+            if (r >= 4 && r <= 7 && (a_coverage & kTypeEquipBit) == 0) return false;   // the v46 hostile rows
+            if (r == kReanimateRow && !a_corpseClaim) return false;
+        }
+        return (a_rowMask >> 17) == 0;   // a bit past the table is a row this build does not know: not served
+    }
+
     // The target-side test of a Need. a_holdsDroppableWeapon: an equipped weapon in either hand that is not flagged cannot-drop.
     [[nodiscard]] constexpr bool NeedMet(Need a_need, bool a_holdsDroppableWeapon, bool a_summoned) {
         switch (a_need) {

@@ -204,6 +204,42 @@ namespace MFO::Iaus::SpellBook {
         // per area spell and per staff; PostRefresh logs each form ONCE per session, outside the leaf mutex.
         using Probes = std::vector<std::pair<RE::FormID, std::string>>;
 
+        // The BLAST: the effect's own explosion (MGEF data.explosion) and its projectile's (BGSProjectile
+        // data.explosionType) carry the real damage radius in world units (BGSExplosion data.radius). It can
+        // be larger than the EFIT area, and the never-splash rule must see the larger one.
+        // MFO-B661 (card I6): an explosion with a PAYLOAD (BGSExplosion data.damage > 0, or an enchantment) is
+        // tracked apart from a cosmetic one. Only a payload explosion can give an area to a spell whose EFIT
+        // area is 0; a cosmetic impact explosion can at most enlarge an area the record already states.
+        // ONE reader: StaticOf (is it a hostile AREA spell) and MakeEntry (areaUnits). Form data only, any thread.
+        struct Blast {
+            float explosionUnits = 0.0f;          // the largest radius of ANY explosion
+            float payloadUnits = 0.0f;            // the largest radius of an explosion that carries a payload
+            const char* explosionSrc = "none";
+            float units = 0.0f;                   // Prune::BlastUnits: the radius IAUS uses, 0 = no area
+            bool  hostileArea = false;            // an effect that is hostile by its own flag AND has an area of its own (Prune::HostileAreaEffect)
+        };
+        Blast BlastOf(RE::SpellItem* a_sp, const Actuation::SpellArchetype& a_arch) {
+            Blast b;
+            const auto note = [&](const RE::BGSExplosion* ex, const char* a_src) {   // true = it carries a payload
+                if (!ex || !std::isfinite(ex->data.radius) || !(ex->data.radius > 0.0f)) return false;
+                const bool payload = (std::isfinite(ex->data.damage) && ex->data.damage > 0.0f) || ex->formEnchanting != nullptr;
+                if (payload && ex->data.radius > b.payloadUnits) b.payloadUnits = ex->data.radius;
+                if (ex->data.radius > b.explosionUnits) { b.explosionUnits = ex->data.radius; b.explosionSrc = a_src; }
+                return payload;
+            };
+            for (auto* eff : a_sp->effects) {
+                auto* base = eff ? eff->baseEffect : nullptr;
+                if (!base) continue;
+                bool payload = note(base->data.explosion, "effect");
+                if (const auto* proj = base->data.projectileBase) payload |= note(proj->data.explosionType, "projectile");
+                b.hostileArea |= Prune::HostileAreaEffect(base->IsHostile(), eff->effectItem.area > 0, false, payload);   // the impact hazard: SpellArchetype::hostileImpact
+            }
+            // With an EFIT area any explosion may enlarge it (the larger radius is the safe one for the never-splash
+            // rule); without one only a payload explosion counts (MFO-B661).
+            b.units = Prune::BlastUnits(static_cast<float>(a_arch.area), a_arch.area > 0 ? b.explosionUnits : b.payloadUnits, b.payloadUnits > 0.0f);
+            return b;
+        }
+
         // The STATIC verdict on one spell record: its nature and whether it is ever an IAUS candidate (the "never generated"
         // list, P1, and the batch I item 6 test: an effect list IAUS cannot weight). Form data only, any thread. MakeEntry and
         // WouldWeigh (the Teach Spells page) both call it, so the book and the page can never disagree.
@@ -249,13 +285,20 @@ namespace MFO::Iaus::SpellBook {
                               ? Vocab::IsCastableSpell(a_sp)
                               : a_sp->GetCastingType() != RE::MagicSystem::CastingType::kConstantEffect;
             // The animation rule is about MFO's spell roads; a scroll is used through its own road (card S3).
-            st.roadUnsupported = a_source == Source::Spell && Actuation::CastRoadUnsupported(a_sp);
-            st.targetLocation  = delivery == RE::MagicSystem::Delivery::kTargetLocation ||
-                                 a_arch.shape == Actuation::SpellShape::Rune ||
-                                 a_arch.shape == Actuation::SpellShape::Wall ||
-                                 a_arch.shape == Actuation::SpellShape::TLBurst ||
-                                 Prune::IsSelfBlastPlacement(selfDelivery, a_sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration,
-                                                             out.nature == Prune::Nature::Offense, a_arch.impactHazard);   // interim, see Prune.h
+            // A summon the claim road can never serve (review F1) is out for IAUS alone: its only road is the unanimated one-shot.
+            st.roadUnsupported = a_source == Source::Spell &&
+                                 (Actuation::CastRoadUnsupported(a_sp) || (in.summon && Actuation::SummonClaimUnservedWhy(a_sp, a_arch)));
+            Prune::PlacementIn pl;
+            pl.targetLocationDelivery = delivery == RE::MagicSystem::Delivery::kTargetLocation;
+            pl.rune      = a_arch.shape == Actuation::SpellShape::Rune;
+            pl.wall      = a_arch.shape == Actuation::SpellShape::Wall;
+            pl.tlBurst   = a_arch.shape == Actuation::SpellShape::TLBurst;
+            pl.selfBlast = Prune::IsSelfBlastPlacement(selfDelivery, a_sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration,
+                                                       out.nature == Prune::Nature::Offense || out.nature == Prune::Nature::Control,
+                                                       BlastOf(a_sp, a_arch).hostileArea || a_arch.hostileImpact, a_arch.hazardHostile);   // interim, see Prune.h
+            pl.summon    = in.summon;
+            st.targetLocation = Prune::IsPlacement(pl);
+            st.selfBlast = pl.selfBlast;
             st.nature    = out.nature;
             st.weighable = Prune::WeighableSpell(archetypes);
             out.drop     = Prune::StaticDrop(st);
@@ -279,27 +322,11 @@ namespace MFO::Iaus::SpellBook {
             e.concentration = arch.casting == RE::MagicSystem::CastingType::kConcentration;
 
             float costliestHostile = -1.0f;
-            // The BLAST: the effect's own explosion (MGEF data.explosion) and its projectile's (BGSProjectile
-            // data.explosionType) carry the real damage radius in world units (BGSExplosion data.radius). It can
-            // be larger than the EFIT area, and the never-splash rule must see the larger one.
-            // MFO-B661 (card I6): an explosion with a PAYLOAD (BGSExplosion data.damage > 0, or an enchantment) is
-            // tracked apart from a cosmetic one. Only a payload explosion can give an area to a spell whose EFIT
-            // area is 0; a cosmetic impact explosion can at most enlarge an area the record already states.
-            float explosionUnits = 0.0f;          // the largest radius of ANY explosion
-            float payloadUnits = 0.0f;            // the largest radius of an explosion that carries a payload
-            const char* explosionSrc = "none";
-            const auto noteExplosion = [&](const RE::BGSExplosion* ex, const char* a_src) {
-                if (!ex || !std::isfinite(ex->data.radius) || !(ex->data.radius > 0.0f)) return;
-                const bool payload = (std::isfinite(ex->data.damage) && ex->data.damage > 0.0f) || ex->formEnchanting != nullptr;
-                if (payload && ex->data.radius > payloadUnits) payloadUnits = ex->data.radius;
-                if (ex->data.radius > explosionUnits) { explosionUnits = ex->data.radius; explosionSrc = a_src; }
-            };
+            const Blast blast = BlastOf(a_sp, arch);
             for (auto* eff : a_sp->effects) {
                 auto* base = eff ? eff->baseEffect : nullptr;
                 if (!base) continue;
                 if (base->GetArchetype() == Arch::kTurnUndead) e.undeadOnly = true;
-                noteExplosion(base->data.explosion, "effect");
-                if (const auto* proj = base->data.projectileBase) noteExplosion(proj->data.explosionType, "projectile");
                 // The element (design fact 7, section 3.1 exploit): the COSTLIEST hostile effect's resist AV.
                 if ((base->IsHostile() || base->IsDetrimental()) && eff->cost > costliestHostile) {
                     costliestHostile = eff->cost;
@@ -328,16 +355,13 @@ namespace MFO::Iaus::SpellBook {
 
             e.meleeBuff = arch.row == Actuation::EngineRow::Armor || arch.row == Actuation::EngineRow::Cloak ||
                           arch.shape == Actuation::SpellShape::Cloak;
-            // With an EFIT area any explosion may enlarge it (the larger radius is the safe one for the never-splash
-            // rule); without one only a payload explosion counts (MFO-B661).
-            e.areaUnits = Prune::BlastUnits(static_cast<float>(arch.area), arch.area > 0 ? explosionUnits : payloadUnits,
-                                            payloadUnits > 0.0f);
-            if (arch.area > 0 || explosionUnits > 0.0f)
+            e.areaUnits = blast.units;
+            if (arch.area > 0 || blast.explosionUnits > 0.0f)
                 a_probes.emplace_back(e.form, std::format("area probe: {} ({:08X}): EFIT area {} ft = {:.0f} units, explosion radius {:.0f} units ({}), "
                                                           "payload explosion {:.0f} units -> blast {:.0f} units{}", e.name, e.form, arch.area,
-                                                          Prune::AreaUnits(static_cast<float>(arch.area)), explosionUnits,
-                                                          explosionSrc, payloadUnits, e.areaUnits,
-                                                          (e.areaUnits <= 0.0f && explosionUnits > 0.0f)
+                                                          Prune::AreaUnits(static_cast<float>(arch.area)), blast.explosionUnits,
+                                                          blast.explosionSrc, blast.payloadUnits, e.areaUnits,
+                                                          (e.areaUnits <= 0.0f && blast.explosionUnits > 0.0f)
                                                               ? " (cosmetic explosion: no area, MFO-B661)" : ""));
             // The aimed reach (spell range, else projectile range; Self / Touch = Heal Other's reach, which is
             // what a heal or buff placed on an ally needs). "No cap of its own" is a huge number there: 0 here.
@@ -403,6 +427,7 @@ namespace MFO::Iaus::SpellBook {
             }
             // The engine fills (iaus/Fills.h): what one cast does to health, probe first, written only with
             // [Debug] bIausFillSpells = 1. With both keys off it returns at once.
+            if (e.drop == Prune::Drop::Keep) Fills::ReadSpellForm(a_sp, e);   // S11b: the spell-worth reader's form data, every nature
             if (e.drop == Prune::Drop::Keep &&
                 (e.nature == Prune::Nature::Offense || e.nature == Prune::Nature::Control || e.nature == Prune::Nature::Heal)) {
                 std::string line;
@@ -619,11 +644,12 @@ namespace MFO::Iaus::SpellBook {
 
     }
 
-    bool WouldWeigh(RE::SpellItem* a_spell, const ClassGate& a_gate, const char** a_why) {
+    bool WouldWeigh(RE::SpellItem* a_spell, const ClassGate& a_gate, const char** a_why, Prune::Drop* a_drop) {
+        if (a_drop) *a_drop = Prune::Drop::Keep;
         const auto no = [&](const char* a_text) { if (a_why) *a_why = a_text; return false; };
         if (!a_spell) return no("no spell");
         const Static st = StaticOf(a_spell, Source::Spell, Actuation::ClassifyArchetype(a_spell));
-        if (st.drop != Prune::Drop::Keep) return no(Prune::DropName(st.drop));
+        if (st.drop != Prune::Drop::Keep) { if (a_drop) *a_drop = st.drop; return no(Prune::DropName(st.drop)); }
         // Ruling Q34, the SAME bits Generate reads (Casts): a casting class, or a mastered one, or no class known yet.
         if (a_gate.resolved && !a_gate.spellsOnClass && !a_gate.spellsFromMastered) return no("not a spell his class casts (Q34)");
         return true;

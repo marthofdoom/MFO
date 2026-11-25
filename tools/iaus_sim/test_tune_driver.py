@@ -279,11 +279,12 @@ class ChoiceBatch(unittest.TestCase):   # sim v4 batch C (iaus-sim-v4.md 15): th
             T.gapi_parse("", "evoker", 6001)
 
     def test_spell_worth_rows_cover_the_native_table(self):   # one knob = one native member (the NewTables rule), searched or listed with its reason
-        fields = NewTables.fields(None, "SpellWorth.h", "SpellWorth")
+        fields = NewTables.fields(None, "SpellWorthTable.h", "SpellWorth")
         self.assertEqual({n.split(".", 1)[1] for n, _, _ in T.SW_KNOBS} | {n.split(".", 1)[1] for n in T.SW_NOT_SEARCHED}, fields)
         self.assertFalse({n for n, _, _ in T.SW_KNOBS} & set(T.SW_NOT_SEARCHED))
         cpp = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../native/iaus/SpellWorth.cpp")).read()
         self.assertEqual(set(re.findall(r'"sw\.(\w+)"', cpp)), fields)                # Set / Get name every field
+        self.assertIn("SetSpellWorthKnob", open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "Tune.h")).read())   # --set sw.* reaches native's names
         self.assertIn("t.unmeasuredDamage", open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "Tune.h")).read())
 
     def test_the_fence_asks_j_not_to_fall_where_the_rule_asks_it_to_rise(self):
@@ -577,6 +578,13 @@ class NewTables(unittest.TestCase):   # tune 2.11.1: one knob = one native membe
             p = os.path.join(d, name)
             open(p, "w").write(text)
             self.assertEqual(T.stale_spawns(p), want, name)
+
+    def test_list_without_placed_rows_is_refused(self):   # placed-spells L1
+        d = tempfile.mkdtemp()
+        for name, text, want in (("old", '{"archetype":0}', True), ("new", '{"archetype":0,"placedSchema":2}', False), ("schema1", '{"archetype":0,"placedSchema":1}', True), ("none", '{}', False)):
+            p = os.path.join(d, name)
+            open(p, "w").write(text)
+            self.assertEqual(T.stale_placed(p), want, name)
 
     def test_loot_gate_constants_mirror_native(self):
         # three numbers the lab cannot include (they sit in engine-typed code): Loot.h Rules against native

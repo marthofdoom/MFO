@@ -3815,12 +3815,12 @@ Verbatim, choice review, raised on the batch C branch:
 
 ### MFO-B864 (OPEN, author's own list for `feat/sim-v4-pretune`, 2026-11-24; tools/iaus_sim only; MAP "SIM BUNDLE A")
 1. (SEV-4) A rune's damage lives in its own effect behind Target Location: no hazard road, so runes stay worth nothing in the lab and are dropped in the game.
-2. (SEV-4) The lab keeps Vanilla's Wall-shaped bolts that native drops (MFO-B865): the lab's Vanilla books are not the game's.
+2. **CLOSED on `feat/placed-l1m1` (L1).** (SEV-4) The lab keeps Vanilla's Wall-shaped bolts that native drops (MFO-B865): the lab's Vanilla books are not the game's.
 3. (SEV-5) Hazards hurt only the owner's enemies and nobody avoids them (the engine's can hit anyone). A summon appears at once (no Landing state).
 4. (SEV-5) The spell names the oracle picks are not printed, so "a wall among the picks" cannot be counted.
 
 ### MFO-B865 (OPEN, found by `feat/sim-v4-pretune`, 2026-11-24; NATIVE, not touched; needs marth's ruling on 1; iaus-sim-v4.md 16.6)
-1. `iaus/Prune.h:93` with `iaus/SpellBook.cpp:253`: a Target Location conjuration is dropped as Placement. Vanilla 14 of 14 taught conjurations, Tuxborn 307 of 311. A field log names one (Summon the Udefrykte Matron).
+1. **CLOSED 2026-11-24 on `feat/placed-l1m1` (M1).** Was: `iaus/Prune.h:93` with `iaus/SpellBook.cpp:253`: a Target Location conjuration is dropped as Placement. Vanilla 14 of 14 taught conjurations, Tuxborn 307 of 311. A field log names one (Summon the Udefrykte Matron).
 2. **CLOSED 2026-11-24 on `fix/impact-hazard-shape` (item 2 only; item 1 and the real-wall note stay OPEN).** Was: `cast/Archetype.cpp:214 HasImpactHazard`: any IPCT hazard makes shape Wall, so Vanilla's Firebolt, Flames, Fireball, Frostbite, Ice Spike, Ice Storm, Incinerate, Expel / Banish Daedra are dropped. Masked where the spell also has a Script effect (Tuxborn, most of LoreRim). Now: Wall = `Prune::IsWallShape` (concentration, non-Self, impact hazard with kDropToGround). Checked on Skyrim.esm: Firebolt / Flames / Frostbite impact hazards have flag 16 clear; only the Barrier* MGEFs (Fire, Frost, Shock walls) reach a flag-16 hazard.
 
 ## feat/sim-v4-pretune review (Opus 5.5, 2026-11-24, raised against 28c805e6; verbatim file)
@@ -3863,3 +3863,66 @@ Answers
 ## fix/impact-hazard-shape (MFO-B865), Opus review @753b93e5
 SEV-4 FF Aimed/Touch spells with a kDropToGround impact hazard are kept (LoreRim 6 Aimed + 6 Touch, Tuxborn 29 + 9; mostly enemy spells; REQ_Destruction2_Arcane_AimedHazard, _BL_OppressiveBarrier). Many EFIT area 0, so splash_safe has no radius for the ground hazard they leave at the foe: a melee ally beside the foe may stand in it. BlastUnits could include the dropped hazard's radius. Ordinary bolt hazards (flag clear: FireLg/FireSm 4, IceHazard 0) are the engine's normal impact effects, same as a gambit cast or an enemy's. Not shown to hurt allies (not verified in engine).
 SEV-5 harness rows for MFO-B865 test the pure rule and the drop only; nothing tests the record reader (impactHazardDrops in cast/Archetype.cpp).
+
+## feat/placed-l1m1 (Opus 5.5 author, 2026-11-24), author's own open list
+1. (SEV-4, pre-existing) A SELF buff claim, and so now every IAUS summon, is filed without the `HarbingerWouldRefuse` dry run its ally sibling makes (`cast/CastOn.cpp` self fork; the ally fork has it). A refused summon claim is transparent (the next IAUS pick runs) and logged once per throttle, but the incumbent was already displaced and `Loadout::Prepare` already put the spell in LEFT, every lap it is picked. A NEVER-FIRED claim does have its hold-off (`g_neverFired`, the rest of the fight) and is transparent before the preempt.
+2. **CLOSED by the review fix round (F1: `Prune::SummonRoadFor`, `SummonClaimUnservedWhy`).** (SEV-4, pre-existing) An IAUS summon picked while the follower has NO combat controller, or whose row is ambiguous, takes the unanimated one-shot (`cast/Fire.cpp` summon fork runs before A6's defer of self buffs). Loud (`UNANIMATED road`). A6's rule ("defer, never direct") does not cover summons; M1 makes it reachable for every conjurer.
+3. (SEV-4) Both-hands summons (thralls) are candidates; the claim prepares LEFT only and no both-hands cast under a claim was ever seen (S9 / C3).
+4. (SEV-4, lab) `Data.h` areaUnits still reads the EFIT area alone; native takes the larger of it and the explosion radius (`BlastOf`). The radius is now extracted (`placed.expl`); using it moves splash results, so it is its own change.
+5. (SEV-5) A Self hazard whose hazard spell has a hostile effect is blocked whatever the rest of the record says: list circles of the "harm foes inside, help friends" kind are blocked too (Tuxborn / LoreRim names in plan section 11).
+6. (SEV-5) `feat/placed-l1m1`: foes in the lab now cast Target Location summons they were denied before (same predicate, `foeDrop`); `BrainCast` never picks a Summon nature, so no fight changes today.
+7. (SEV-5, fix round) A self Control / Offense spell the narrowed block releases (Harmony, Hallowed Weapon, Vanish, Mass Inhibition) is cast by the direct self road (`CastSelfDirect`, unanimated), as on main before the block; M4 is the animated road.
+8. (SEV-4, lab, fix round) The "batch C" CLI check was a one-seed pin: with the new lists seed 1 gives evoker sp.tie% 1.9 and sp.unmTop% 5.8 (limits 0 and 5), and main's own build fails the same limits at seeds 3 and 6. It is now a six-seed mean (old tie > 0.5, today < a quarter of it). Why today's rules still tie now and then (evoker mean 0.3-0.4%) is not looked into.
+
+### Opus review of 562f6f4b (2026-11-24), deferred, verbatim (F1-F4, F8, F9 fixed in the fix round)
+- F5 SEV-4. book_census.py is a second DERIVATION by the same author with the same assumptions (cost proxy for effect cost, script shape, HEALTH any effect). Verified line by line against Archetype.cpp Compute, CasterConsent::ClassifySpell, SpellSupport.cpp: matches. Real outside evidence is only the 33 deck-log dropped spells, Tuxborn; natures of KEPT spells have no outside check.
+- F6 SEV-4. Both-hands summons (thralls; chargeTime>=2: Vanilla 3, Tuxborn 18, LoreRim 12) are candidates; LEFT-only claim. If never fired: ~kHoldLastSeenCapMs of a held left hand once per fight per spell (then g_neverFired, transparent before preempt). Bounded. Author listed it. Tuxborn conjurers may burn several in a row.
+- F7 SEV-4. Baseline explanation: builtin v2/v3/v4 compare 0 changed (proven). o-/b- old vs new per list differ widely because books and draws change (4 fights/cell = noise); outputs do not isolate "books alone" from the foe reclassification (ClassifyNature now also sets foes' nature, World reads it). Sim code otherwise untouched between the two binaries. Ok as a smoke, not a proof.
+
+## feat/move-s1 (Opus review @1dc002fe, verbatim; F1 to F7, B1, B4, B5, B6, B8 and the comment half of B7 are fixed on the branch)
+- B2 SEV-4 no distance-to-foe consideration at all (unless intended for S5): a firing spot may lie at a foe's feet.
+- B3 SEV-4 sort / dead triples, paths: 80 paths with 154-225 skipped a window for ten: each member gets about 8. Budget number, S5.
+- B7 SEV-5 Catalogue.cpp: the F7 review comment moved from heal_rate's line to the spot_cover line. Plan contract's TrustTable / Light::Field are not in the picture (S3 / S4 append; light keyed by SpotKey, known only after UnitPool, so a sampler must fill it after Phase1: document).
+(B7: the light half is documented at `PartyPicture.h LightAt`: keyed by the pool, filled after Phase1. TrustTable / Light::Field stay S3 / S4.)
+- SEV-5 (author of the fix round) `tools/tune_app/selftest.py` was not run to the end: it hangs headless (pre-existing, the reviewer met it too). The validator was called directly.
+
+## feat/move-s1 review round 2 (Opus 5.5, 2026-11-24, raised against fd1def9b; verbatim)
+
+# Opus re-check: feat/move-s1 1dc002fe..fd1def9b. VERDICT: MERGE. Nothing above SEV-4.
+Runs: move_rows standalone g++ -O2, 0 failed, golden 21/21 diff 0; rank_equiv 304732/0; test_tune_driver OK. No MSVC, no sim re-run.
+F1 closed: offers per (spot, member, action) by the row's own gen + check; Pairing/PairsAny gone from paths, asks, table. Kept spot: KeptHolds (retreat/kite direction). 72 picks, 0 toward.
+F2 closed: sight checked before the erase, kept ask at 1 s, Answer marks directly, FillStatic keeps the No.
+F3 closed: unanswered threat = 0.75, gap 8.6% < 15%; stays asked for every threatened ranked member.
+F4 closed: marks inbox / seen; Adopt clears only seen; an unadopted window keeps them. Re-marking costs one extra rescoring at worst.
+F5 closed: 2048, cut counted, kite uses the flood's bound.
+F6 closed: stamp + vert count, work dropped, Phase3 with no pairs = all stay; answers of the old mesh wiped at the next Freeze (stamp differs).
+F7 closed: late list (64, 5 s), t / viewerAt on the answer, Stale() is the one freshness rule, a late No only marks inside spotKeptAgeSec.
+COST measured (-O2, host), worst unit / total per window: 1508 tris n10 0.12 / 4.6 ms; 6032 tris n10 0.35 / 10.8; 15660 tris n10 0.44 / 13.7; pins on, same 0.73 / 21.8 ms.
+ Generator re-run (Offer) 0.02 ms a spot, 0.3 ms a window. Place (ExitsAt) 0.04 a spot. The 2048 gather makes Flood + Generate the bulk (5.5 + 6.3 ms). Every unit under the 3 ms slice;
+ 21.8 ms = 8 slices of 133 ms = over the 0.5 s window at worst case (counted unfinished: nobody moves). See R1.
+5 s OLD ANSWERS: never used as fresh without Stale() (viewer <= 128 u AND same tri, unless t given).
+INERT: no native file outside MovePass/Spots/MoveDump names MovePass/PartyPicture. Decide.cpp gains uncalled TopRanked; TuningFile adds spot.<kind> and the floor. Unchanged.
+R1 SEV-4 (S2/S3) a 10 member party, pins on, ~16k tris needs about 8 pump slices; a window holds about 3 to 4: unfinished every window = nobody re-decides. 4 members no-pins (7 ms) fits 3. Fix in S3: window ends when phase 1 ends (stretch), or gatherTris scaled by party size.
+R2 SEV-4 "first filing counts" also for a re-ask answered promptly with t < 0: the fresh ray is stamped with the OLD viewer place and dropped as Stale when he moved, so that question costs one more window. Fix: answer inside the window with t<0 and `now` found: use *now if the holder is synchronous, or make S2 always send t. Documented in the header, hence SEV-4.
+R3 SEV-5 ExitsAt and every foe flood allocate best(v.tris) (63 KB at 16k tris) per call, 60 to 80 a window; hold it in Scratch.
+R4 merge note: conflicts with feat/spellworth in tools/iaus_harness/run.sh (both edit the source list: keep both); then the MOVE_STANDALONE line in run.sh needs iaus/SpellWorth.cpp (Catalogue.cpp calls SetSpellWorthKnob).
+
+## feat/spellworth (Opus review @b3fa8ae1, 2026-11-24, verbatim; S1 to S6, the INERT row, the 0<live<1 pins, bestRaw, the sim's chargeSec and engineRow are fixed on the branch)
+Everything below matters only at `sw.live` > 0 (shipped 0).
+- SEV-4 AreaValue consideration already rewards foesInArea; AreaFactor at 1.0 counts it again in the rate; SplashSafe vetoes what areaFriendPenalty charges (penalty can never matter for a live candidate). AreaFactor(0 foes) = 1 (self blast with nobody in it).
+- SEV-4 MagickaShare is a step (x0.5 at one magicka) and assumes back to back casting for the whole fight (FightSec = sum of lives); regen counted 0 -> nearly every spell x0.5 in a long fight; on top of MpReserve.
+- SEV-5 conditional damage with a duration is put in directDamage. FoeLifeSec counts weapon Dps of all allies whomever they target. FightSec recomputed per (spell, foe): cache.
+- Author's note, SEV-5: buff / ward / summon worth has no Generate call site (S2: the readers run now, the families are not ranked by it); the sim does not fill ward power or the summoned body.
+
+## feat/anim-a1a2 (author notes, Sonnet 5.5, 2026-11-24; no review yet; recorded so the next edit of these files reads them)
+### MFO-B866 (SEV-5, OPEN, cast/PartyGap.cpp) -- `g_partyGapLast` is never cleared (raised against feat/anim-a1a2)
+Author: the rate-limit table (follower, spell, site) -> time is not cleared on ResetAllState or dismissal, the same shape as MFO-B272 for `g_unanimatedLast`. Bounded by distinct triples and small. Clear it from the cast reset path with that one.
+### MFO-B867 (SEV-4, OPEN, cast/BuffRoad.cpp) -- A2 adopts only the AMBIGUOUS-row refusal, not the single-row Restore / Offensive buff kinds (raised against feat/anim-a1a2)
+Author: the plan (section 2.2) also says the `kBuffRowElsewhere` default (L1: a Buff kind whose single row is Restore / Offensive) should claim fire-once. The brief names ambiguous rows only, and L1 has zero field lines, so `BuffRowOk` serves only a `BuffFireOnce` claim. To adopt L1: let `BuffFireOnce` answer true for a non-approx spell whose row is Restore or Offensive (same gate, same seat bit), nothing else changes.
+### MFO-B868 (SEV-5, OPEN, cast/BuffRoad.cpp) -- a Reanimate candidate in an ambiguous mask is never fire-once (raised against feat/anim-a1a2)
+Author: Harbinger serves a fire-once Reanimate spell only with kCastFlag_CorpseTarget, which the road chooser cannot promise (the corpse is chosen per rule). `SeatRows::FireOnceServed(..., a_corpseClaim=false)` therefore refuses it and the spell keeps the old refusal; `EnsureCastClaimLocked` also refuses a fire-once Reanimate claim without a corpse target (fail closed, warn once). A spell with a Reanimate effect AND a Restore / Offensive effect stays direct until the chooser knows the corpse.
+### Review of feat/anim-a1a2 @ 11fc22ad (Opus 5.5, 2026-11-24): findings deferred, verbatim
+- F3 SEV-4 (backlog) instant AUTO fan (authoredDur <= 0) is held in the gap although with a controller it still fans UNANIMATED (A4 pending), so "his controller is the only missing gate" and the `[cast-hold]` promise ("the animated claim needs one") are untrue there. Plan table wants hold, so behaviour stays; note it or pass authoredDur > 0 until A4.
+- F5 SEV-5 OffenseCastFired matches (hand, spell) not target. Not reachable wrongly today: the gate runs only inside handPlan.inFlight (same rule, spell, target). Add c.target to the test if a second caller appears.
+- F6 SEV-5 a spent claim that lapses (6 s TTL, unrenewable) is re-filed by EnsureCastClaimLocked's aged-out branch and its Fired reason is lost. Reachable only when the gate does not run for > 6 s with the replay running (ChooseBuffRoad != Claim, i.e. controller gone, under an in-flight lap). The duration up-read still bounds it.
+- F7 SEV-5 Substrate.cpp: fireOnce is decided again at filing (main for summons). A bApmfCast flip between the worker's choice and the filing files the pair without the bit. Bounded by Harbinger's close on the fire.

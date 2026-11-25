@@ -87,6 +87,16 @@ namespace Sim {
         e.measured = SpellMeasured(s);
         e.damage = e.measured ? (s.dmg + s.dot * s.dotDur) * per : 0.0f; e.heal = (s.heal + s.hot * s.hotDur) * per; e.controlSec = s.ctrl ? s.ctrlDur : 0.0f;
         e.levelCap = (g_spellRules == 0 && s.ctrl && !s.ctrlPar && s.ctrlMaxLevel < 1e8f && s.dmg + s.dot * s.dotDur <= 0.0f) ? (std::max)(1.0f, s.ctrlMaxLevel) : 0.0f;   // native iaus/Fills.cpp "if (damage > 0.0f) levelCap = 0.0f": a spell with a working health damage effect carries no cap (choice review, SEV-4)
+        // S11b (native/iaus/SpellWorth.h; read only while sw.live > 0): the same inputs as native iaus/Fills.cpp ReadSpellForm / MeasureSpell
+        const bool conc = s.e.concentration;
+        e.chargeSec = s.castSec;   // a stream's is never read (it holds, it does not charge)
+        if (!conc && e.measured) { e.dotPerSec = s.dot; e.dotSec = s.dotDur; e.directDamage = s.dmg; }
+        e.buffResists.clear(); e.buffArmor = e.buffSec = -1.0f;
+        if (s.e.nature == Prune::Nature::Buff) {
+            if (s.armor > 0.0f) e.buffArmor = s.armor;
+            if (s.resistBuff > 0.0f && s.resistBuffAv >= 0) e.buffResists.emplace_back(s.resistBuffAv, s.resistBuff);
+            if (e.buffArmor >= 0.0f || !e.buffResists.empty()) e.buffSec = s.buffDur;
+        }
     }
     // Generate, and under `--spell-rules old` the facts as the game of the 11-23 field run filled them: an unmeasured offense spell's damage did not apply
     // (expDamage < 0: DamageValue and Overkill off, so every such spell TIED), and the exploit term read the foe's resist for every spell (a measured one's

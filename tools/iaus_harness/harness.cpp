@@ -10,10 +10,12 @@
 #include "iaus/Estimate.h"
 #include "iaus/Reach.h"      // ruling Q68: the learned swing reach
 #include "iaus/ReachBook.h"  // marth 2026-11-17: the per-weapon / per-sequence reach book and its one reader
+#include "iaus/SpellWorth.h"  // S11b: the spell-worth reader
 #include "iaus/Generate.h"   // card I4: the pure candidate generator + the Snapshot it reads
 #include "iaus/Disengage.h"  // card G3: the pure questions the disengage gate asks
 #include "iaus/Reposition.h" // batch I: spell range, back-off, hidden step
 #include "iaus/ClassCurves.h" // per-class curve rows (ruling Q-class-curves)
+#include "cast/PartyGap.h"   // anim-residue A1: the party-fight hold rule
 #include "cast/SeatRows.h"   // ABI v46 adoption: the seated-row rule, the need of a target, the zero-effect reading rules
 #include "iaus/LootNeed.h"    // IAUS looting: category + consumable scores (ClickUp 1dfcuabd18f)
 
@@ -25,6 +27,8 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+
+int MoveRows(const char* a_golden, bool a_write);   // move_rows.cpp: the movement pass (S1)
 
 using namespace MFO::Iaus;
 
@@ -1372,6 +1376,187 @@ namespace {
 
 
 namespace {
+    // S11b: the spell-worth READER (iaus/SpellWorth.h), one pin per term, and the SHIPPED-INERT proof (sw.live = 0 changes no Facts field).
+    void SpellWorthReader() {
+        std::printf("\n== spell-worth reader (S11b): one pin per term, shipped inert ==\n");
+        const SpellWorth d{};   // the shipped table
+        const auto near = [](float a, float b) { return std::fabs(a - b) < 1e-3f; };
+        Check(d.live == 0.0f, "shipped: sw.live is 0");
+        // the names: Set / Get over one table, an unknown name or a non-finite value refused, SetTuningScalar routes sw.*
+        { SpellWorth t; float v = -1.0f;
+          Check(SetSpellWorthKnob(t, "sw.recoverSec", 0.25f) && GetSpellWorthKnob(t, "sw.recoverSec", v) && near(v, 0.25f) && near(t.recoverSec, 0.25f), "names: sw.recoverSec set and read back");
+          Check(!SetSpellWorthKnob(t, "sw.nope", 1.0f) && !GetSpellWorthKnob(t, "sw.nope", v), "names: an unknown knob is refused");
+          Check(!SetSpellWorthKnob(t, "sw.recoverSec", std::nanf("")), "names: a non-finite value is refused");
+          Tuning tt; std::string why;
+          Check(SetTuningScalar(tt, "sw.live", 0.5f, &why) && near(tt.spellWorth.live, 0.5f), "names: SetTuningScalar routes sw.live into Tuning::spellWorth");
+          Check(!SetTuningScalar(tt, "sw.live", -1.0f, &why) && !SetTuningScalar(tt, "sw.bogus", 1.0f, &why), "names: SetTuningScalar refuses a negative or unknown sw.*"); }
+        // cast seconds: fire-and-forget = land + charge + recover (+ failShare x failedStartSec); a stream = land + channel + recover; no charge read = not known
+        { SpellEntry e = Spell("Bolt", 1, Prune::Nature::Offense, 30);
+          Estimate::SpellIn in; in.chargeSec = 0.5f;
+          Check(near(Estimate::CastSeconds(e, d, in, 11.5f), 0.9f + 0.5f + 0.5f), "cast seconds: land 0.9 + charge 0.5 + recover 0.5");
+          in.failShare = 0.25f;
+          Check(near(Estimate::CastSeconds(e, d, in, 11.5f), 1.9f + 0.25f * 4.0f), "cast seconds: + failShare x failedStartSec");
+          Estimate::SpellIn none;
+          Check(Estimate::CastSeconds(e, d, none, 11.5f) < 0.0f, "cast seconds: charge time not read = NOT KNOWN");
+          e.concentration = true;
+          Check(near(Estimate::ChannelSeconds(d, 11.5f), 11.5f * 0.7f), "channel: concChannelSec x channelUptime");
+          Check(near(Estimate::CastSeconds(e, d, none, Estimate::ChannelSeconds(d, 11.5f)), 0.9f + 8.05f + 0.5f), "cast seconds: a stream = land + channel + recover, no charge needed");
+          Check(near(Estimate::ChannelSeconds(d, 0.1f), 0.5f), "channel: never shorter than channelMinSec"); }
+        // area: one foe = 1; each extra foe x areaFoesIntoDamage; each party member in it takes areaFriendPenalty off
+        Check(near(Estimate::AreaFactor(d, -1.0f, -1.0f), 1.0f) && near(Estimate::AreaFactor(d, 1.0f, 0.0f), 1.0f), "area: no area / one foe = 1");
+        Check(near(Estimate::AreaFactor(d, 3.0f, 0.0f), 3.0f), "area: three foes = 3 at areaFoesIntoDamage 1");
+        Check(near(Estimate::AreaFactor(d, 3.0f, 1.0f), 2.0f) && near(Estimate::AreaFactor(d, 1.0f, 5.0f), 0.0f), "area: a party member takes his share off, never below 0");
+        { SpellWorth t; t.areaFoesIntoDamage = 0.0f; Check(near(Estimate::AreaFactor(t, 4.0f, 0.0f), 1.0f), "area: areaFoesIntoDamage 0 = today (one foe's worth)"); }
+        // a DoT over the foe's expected life
+        Check(near(Estimate::DotOverLife(d, 10.0f, 8.0f, 3.0f), 30.0f), "dot: 10/s over 8 s against a foe that lives 3 s = 30");
+        Check(near(Estimate::DotOverLife(d, 10.0f, 8.0f, 30.0f), 80.0f) && near(Estimate::DotOverLife(d, 10.0f, 8.0f, -1.0f), 80.0f), "dot: a long-lived or unknown-life foe = the whole duration");
+        Check(near(Estimate::DotOverLife(d, 10.0f, 8.0f, 0.5f), 20.0f), "dot: the foe's life is floored at foeLifeFloorSec (2 s)");
+        Check(Estimate::DotOverLife(d, -1.0f, 8.0f, 3.0f) < 0.0f, "dot: no DoT read = NOT KNOWN");
+        // control: held seconds x the foe's damage rate, never past his life
+        { Combatant foe = Actor("Foe", 0x3B, 100, 100, 300, 0); foe.hit = 20.0f; foe.hitsPerSec = 1.0f;
+          Check(near(Estimate::ControlEffect(d, 5.0f, foe), 100.0f), "control: 5 s x 20 x 1/s = 100");
+          Check(near(Estimate::ControlHeldSec(d, 5.0f, 3.0f), 3.0f) && near(Estimate::ControlHeldSec(d, 5.0f, 60.0f), 5.0f) && near(Estimate::ControlHeldSec(d, 5.0f, -1.0f), 5.0f), "control: held seconds stop at the foe's expected life");
+          Combatant blind = Actor("Blind", 0x3C, 100, 100, 300, 0);
+          Check(Estimate::ControlEffect(d, 5.0f, blind) < 0.0f, "control: a foe whose damage was not measured = NOT KNOWN"); }
+        // buff / ward / summon in the same unit
+        { Estimate::SpellIn in; in.buffPerSec = 4.0f; in.buffSec = 60.0f; in.fightSec = 10.0f;
+          Check(near(Estimate::BuffEffect(d, in), 40.0f), "buff: damage prevented per second x the seconds it is up in THIS fight (capped by the fight)");
+          in.fightSec = -1.0f; Check(near(Estimate::BuffEffect(d, in), 240.0f), "buff: fight length unknown = its whole duration");
+          Estimate::SpellIn no; Check(Estimate::BuffEffect(d, no) < 0.0f, "buff: nothing read = NOT KNOWN");
+          Estimate::SpellIn w; w.wardPerSec = 5.0f; Check(near(Estimate::WardEffect(d, w, 6.0f), 30.0f) && Estimate::WardEffect(d, no, 6.0f) < 0.0f, "ward: absorbed per second x seconds up; nothing read = NOT KNOWN");
+          Estimate::SpellIn sm; sm.summonDps = 7.0f;
+          Check(near(Estimate::SummonEffect(d, sm, 60.0f), 7.0f * 20.0f) && near(Estimate::SummonEffect(d, sm, 8.0f), 56.0f), "summon: its damage rate x min(its duration, summonLifeSec)");
+          Check(Estimate::SummonEffect(d, no, 60.0f) < 0.0f, "summon: rate not read (the game leaves it so) = NOT KNOWN"); }
+        // magicka against the fight
+        Check(near(Estimate::MagickaShare(d, 0.0f, 2.0f, 0.0f, 0.0f, 30.0f), 1.0f), "magicka: a free spell = whole");
+        Check(near(Estimate::MagickaShare(d, 30.0f, 2.0f, 500.0f, 0.0f, 30.0f), 1.0f), "magicka: a pool that lasts the fight = whole");
+        Check(near(Estimate::MagickaShare(d, 30.0f, 2.0f, 100.0f, 0.0f, 30.0f), 0.5f), "magicka: a pool that runs dry = 1 - magickaDryPenalty");
+        Check(near(Estimate::MagickaShare(d, 30.0f, 2.0f, 100.0f, 20.0f, 30.0f), 1.0f), "magicka: regen counts against the horizon");
+        // the derived inputs: foe life and fight length from the party's weapon damage
+        { Snapshot s; s.self = Actor("Me", 0x14F00, 100, 100, 0, 0); s.self.hit = 10.0f; s.self.hitsPerSec = 1.0f;
+          Combatant ally = Actor("Ally", 0x14F01, 100, 100, 0, 0); ally.hit = 10.0f; ally.hitsPerSec = 1.0f; s.allies = { ally };
+          Combatant f1 = Actor("F1", 0x3B1, 100, 100, 300, 0), f2 = Actor("F2", 0x3B2, 40, 40, 300, 0); s.foes = { f1, f2 };
+          Check(near(Estimate::FoeLifeSec(s, s.foes[0]), 5.0f) && near(Estimate::FightSec(s), 7.0f), "foe life = hp / the party's damage on it (100 / 20 = 5 s); the fight = the lives added (5 + 2 = 7 s)");
+          Combatant blind = Actor("Blind", 0x3B3, 50, 50, 300, 0); blind.armor = 0.0f; s.foes.push_back(blind);
+          Check(near(Estimate::FoeLifeSec(s, s.foes[2]), 2.5f), "foe life: the party's damage on a third foe");
+          Snapshot none; none.self = Actor("Me", 1, 100, 100, 0, 0); none.foes = { f1 };
+          Check(Estimate::FoeLifeSec(none, none.foes[0]) < 0.0f && Estimate::FightSec(none) < 0.0f, "foe life / fight length: no damage measured = NOT KNOWN"); }
+        // THE READER, offense: a DoT over a short-lived foe is worth less than today's whole-duration estimate; a stream is its second x the channel; a measured 0 stays unknown
+        { Snapshot s; s.self = Actor("Me", 0x14F00, 100, 100, 0, 0); s.self.mp = 500; s.self.mpMax = 500; s.self.hit = 10.0f; s.self.hitsPerSec = 1.0f;
+          Combatant foe = Actor("Foe", 0x3B1, 20, 20, 300, 0); s.foes = { foe };   // lives 2 s
+          SpellEntry dot = Spell("Burn", 2, Prune::Nature::Offense, 40); dot.measured = true; dot.damage = 90.0f; dot.chargeSec = 0.5f;
+          dot.dotPerSec = 10.0f; dot.dotSec = 8.0f; dot.directDamage = 10.0f;
+          const Estimate::SpellIn in = Estimate::MakeSpellIn(dot, foe, s, d, -1.0f, -1.0f);
+          const Estimate::Worth w = Estimate::SpellWorthOn(dot, foe, s, d, in, 11.5f);
+          Check(w.known && near(w.effect, 10.0f + 10.0f * 2.0f) && near(w.seconds, 1.9f) && near(w.magicka, 40.0f), "offense: direct 10 + a DoT counted over the foe's 2 s life = 30 (today 90), 1.9 s, 40 magicka");
+          Check(near(w.onTarget, 30.0f), "offense: onTarget = one foe, the DoT over his life (what Overkill reads)");
+          Check(near(w.PerSecond(), 30.0f / 1.9f) && near(w.PerMagicka(), 0.75f), "offense: per second and per magicka");
+          SpellEntry st = Spell("Stream", 3, Prune::Nature::Offense, 10); st.measured = true; st.damage = 20.0f; st.concentration = true;
+          const Estimate::Worth ws = Estimate::SpellWorthOn(st, foe, s, d, Estimate::MakeSpellIn(st, foe, s, d, -1.0f, -1.0f), 11.5f);
+          Check(ws.known && near(ws.effect, 20.0f * 2.0f) && near(ws.magicka, 10.0f * 2.0f) && near(ws.seconds, 0.9f + 2.0f + 0.5f), "offense: a stream CUT SHORT: the foe lives 2 s, so 2 s of effect, magicka and cast time (not the whole 8.05)");
+          Check(near(ws.onTarget, 20.0f), "offense: a stream stops when the foe drops: onTarget 20 on a 20 hp foe, no overkill");
+          Combatant big = foe; big.hp = big.hpMax = 1000.0f;   // lives 100 s
+          const Estimate::Worth wb = Estimate::SpellWorthOn(st, big, s, d, Estimate::MakeSpellIn(st, big, s, d, -1.0f, -1.0f), 11.5f);
+          Check(near(wb.effect, 20.0f * 8.05f) && near(wb.magicka, 10.0f * 8.05f) && near(wb.onTarget, 161.0f), "offense: a stream on a foe that outlives it = its per-second effect x the whole channel");
+          SpellEntry nuke = Spell("Nuke", 9, Prune::Nature::Offense, 40); nuke.measured = true; nuke.damage = 50.0f; nuke.chargeSec = 0.5f; nuke.areaUnits = 300.0f;
+          Combatant hundred = foe; hundred.hp = hundred.hpMax = 100.0f;
+          SpellWorth kc = d; kc.killConfirmBonus = 1.0f;
+          const Estimate::Worth w3 = Estimate::SpellWorthOn(nuke, hundred, s, kc, Estimate::MakeSpellIn(nuke, hundred, s, kc, 3.0f, 0.0f), 11.5f);
+          Check(near(w3.effect, 150.0f) && near(w3.onTarget, 50.0f), "offense: a 50 blast on 3 foes = 150 effect, 50 on the target, and no kill bonus on a 100 hp foe");
+          hundred.hp = 50.0f;
+          Check(near(Estimate::SpellWorthOn(nuke, hundred, s, kc, Estimate::MakeSpellIn(nuke, hundred, s, kc, 1.0f, 0.0f), 11.5f).effect, 100.0f), "offense: the kill bonus on a foe this ONE cast finishes");
+          SpellEntry cheap = nuke; cheap.form = 10; cheap.cost = 10.0f; cheap.damage = 90.0f; cheap.dotPerSec = 10.0f; cheap.dotSec = 8.0f; cheap.directDamage = 10.0f;
+          s.book.entries = { cheap };   // 90 on paper, 10 + 10 x 5 s of the foe's life = 60
+          hundred.hp = 50.0f; Check(near(Estimate::SpellWorthOn(nuke, hundred, s, kc, Estimate::MakeSpellIn(nuke, hundred, s, kc, 1.0f, 0.0f), 11.5f).effect, 50.0f), "offense: a cheaper spell that finishes him takes the bonus");
+          s.book.entries[0].dotPerSec = 80.0f / 60.0f; s.book.entries[0].dotSec = 60.0f;   // the same 90 on paper, 10 + 1.33 x 5 = 16.7 in his life
+          Check(near(Estimate::SpellWorthOn(nuke, hundred, s, kc, Estimate::MakeSpellIn(nuke, hundred, s, kc, 1.0f, 0.0f), 11.5f).effect, 100.0f), "offense: a cheaper DoT that outlasts the foe does not finish him");
+          SpellEntry un = Spell("Unmeasured", 4, Prune::Nature::Offense, 10); un.chargeSec = 0.5f;
+          Check(!Estimate::SpellWorthOn(un, foe, s, d, Estimate::MakeSpellIn(un, foe, s, d, -1.0f, -1.0f), 11.5f).known, "offense: an unmeasured spell is NOT KNOWN (the caller keeps today's, never a 0)");
+          SpellEntry nocharge = Spell("NoCharge", 5, Prune::Nature::Offense, 10); nocharge.measured = true; nocharge.damage = 20.0f;
+          Check(!Estimate::SpellWorthOn(nocharge, foe, s, d, Estimate::MakeSpellIn(nocharge, foe, s, d, -1.0f, -1.0f), 11.5f).known, "offense: a spell whose charge time was not read is NOT KNOWN");
+          SpellEntry area = dot; area.areaUnits = 300.0f; area.dotPerSec = -1.0f; area.dotSec = -1.0f; area.directDamage = -1.0f;
+          Check(near(Estimate::SpellWorthOn(area, foe, s, d, Estimate::MakeSpellIn(area, foe, s, d, 3.0f, 1.0f), 11.5f).effect / Estimate::SpellWorthOn(area, foe, s, d, Estimate::MakeSpellIn(area, foe, s, d, 1.0f, 0.0f), 11.5f).effect, 2.0f), "offense: an area spell on 3 foes with 1 friend in it = 2 x the one-foe effect");
+          SpellEntry red = dot; Estimate::SpellIn rin = in; rin.redundant = true;
+          Check(near(Estimate::SpellWorthOn(red, foe, s, d, rin, 11.5f).effect, 0.0f), "offense: redundantEffectScale 0 zeroes an effect already live on the target (a table row, not a veto)"); }
+        // heal: never more than is missing
+        { Snapshot s; s.self = Actor("Me", 0x14F00, 100, 100, 0, 0); s.self.mp = 500; s.self.mpMax = 500;
+          Combatant hurt = Actor("Hurt", 0x14F01, 70, 100, 0, 0);
+          SpellEntry h = Spell("Heal", 6, Prune::Nature::Heal, 20); h.measured = true; h.heal = 100.0f; h.chargeSec = 0.4f;
+          const Estimate::Worth w = Estimate::SpellWorthOn(h, hurt, s, d, Estimate::MakeSpellIn(h, hurt, s, d, -1.0f, -1.0f), 11.5f);
+          Check(w.known && near(w.effect, 30.0f), "heal: a 100 heal on a recipient missing 30 is worth 30");
+          Check(near(w.onTarget, 100.0f) && near(w.PerSecond(), 30.0f / 1.8f), "heal: onTarget keeps the UNCAPPED 100 (HealFit 0.3 = overheal), the rate reads the 30");
+          SpellEntry hs = Spell("HealStream", 11, Prune::Nature::Heal, 10); hs.measured = true; hs.heal = 15.0f; hs.concentration = true;
+          const Estimate::Worth wh = Estimate::SpellWorthOn(hs, hurt, s, d, Estimate::MakeSpellIn(hs, hurt, s, d, -1.0f, -1.0f), 11.5f);
+          Check(near(wh.effect, 30.0f) && near(wh.seconds, 0.9f + 2.0f + 0.5f) && near(wh.magicka, 20.0f) && near(wh.onTarget, 30.0f), "heal: a stream stops when he is full: 2 s for 30 missing at 15/s, in effect, seconds and magicka"); }
+        // control and buff through the one reader
+        { Snapshot s; s.self = Actor("Me", 0x14F00, 100, 100, 0, 0); s.self.mp = 500; s.self.mpMax = 500; s.self.hit = 10.0f; s.self.hitsPerSec = 1.0f;
+          Combatant foe = Actor("Foe", 0x3B1, 100, 100, 300, 0); foe.hit = 20.0f; foe.hitsPerSec = 1.0f; s.foes = { foe };   // lives 10 s
+          SpellEntry c = Spell("Calm", 7, Prune::Nature::Control, 20); c.measured = true; c.controlSec = 30.0f; c.chargeSec = 0.5f;
+          const Estimate::Worth w = Estimate::SpellWorthOn(c, foe, s, d, Estimate::MakeSpellIn(c, foe, s, d, -1.0f, -1.0f), 11.5f);
+          Check(w.known && near(w.effect, 10.0f * 20.0f), "control: 30 s of hold counts the foe's 10 s life x 20 damage/s = 200");
+          Combatant me = s.self; Combatant hitter = foe; hitter.targetId = me.id; hitter.hit = 30.0f; hitter.hitsPerSec = 1.0f; hitter.x = 50.0f; hitter.dist = 50.0f; s.foes = { hitter };
+          SpellEntry b = Spell("Armor", 8, Prune::Nature::Buff, 20); b.measured = true; b.chargeSec = 0.5f; b.buffArmor = 100.0f; b.buffSec = 60.0f;
+          const Estimate::SpellIn bin = Estimate::MakeSpellIn(b, me, s, d, -1.0f, -1.0f);
+          Check(bin.buffPerSec >= 0.0f && near(bin.buffPerSec, 30.0f * 0.12f), "buff: 100 armor points x 0.12 percent = 12 percent of the 30/s coming in");
+          Check(Estimate::SpellWorthOn(b, me, s, d, bin, 11.5f).known, "buff: known once armor and duration were read");
+          // resist: Dps carries no resist for a magic hit, so each foe goes through the two resist terms before and after the buff
+          Combatant fire = hitter; fire.hitIsMagic = true; fire.incomingAv = 41; fire.hit = 20.0f; Combatant plain = fire; plain.incomingAv = -1; plain.hit = 10.0f;
+          s.foes = { fire, plain };
+          const auto perSec = [&](std::vector<std::pair<int, float>> res, const Combatant& who) { SpellEntry rb = Spell("Resist", 12, Prune::Nature::Buff, 20); rb.chargeSec = 0.5f; rb.buffSec = 60.0f; rb.buffResists = std::move(res);
+              return Estimate::MakeSpellIn(rb, who, s, d, -1.0f, -1.0f).buffPerSec; };
+          Check(near(perSec({ { 41, 50.0f } }, me), 10.0f), "buff: 50 fire resist stops half of the 20/s of fire and none of the other foe's 10/s");
+          Check(near(perSec({ { 44, 50.0f } }, me), 15.0f), "buff: 50 magic resist stops half of ALL the magic (30/s)");
+          Check(near(perSec({ { 41, 50.0f }, { 44, 50.0f } }, me), 20.0f), "buff: both elements of one spell count: 20 x 0.75 + 10 x 0.5");
+          Combatant warm = me; warm.resists = { { 41, 75.0f } };
+          Check(near(perSec({ { 41, 50.0f } }, warm), 2.0f), "buff: 75 fire resist already: only the 10 points below the cap count, of the raw 20/s");
+          Combatant proof = me; proof.magicResist = 50.0f;
+          Check(near(perSec({ { 44, 20.0f } }, proof), 6.0f), "buff: the magic resist he has is Combatant::magicResist: 20 points of the raw 30/s = 6, not divided by what he resists already");
+          SpellEntry wd = Spell("Ward", 13, Prune::Nature::Ward, 10); wd.concentration = true; wd.wardPower = 100.0f; wd.buffSec = 1.0f;
+          const Estimate::Worth ww = Estimate::SpellWorthOn(wd, me, s, d, Estimate::MakeSpellIn(wd, me, s, d, -1.0f, -1.0f), 11.5f);
+          Check(ww.known && near(ww.effect, 100.0f), "ward: a stream is up for its channel (8.05 s x 30/s), and breaks at its power (100)");
+          SpellEntry sm = Spell("Atronach", 14, Prune::Nature::Summon, 10); sm.chargeSec = 0.5f; sm.buffSec = 60.0f; sm.summonHit = 10.0f;
+          Check(!Estimate::SpellWorthOn(sm, me, s, d, Estimate::MakeSpellIn(sm, me, s, d, -1.0f, -1.0f), 11.5f).known, "summon: the body's rate not read (the game) = NOT KNOWN");
+          sm.summonHitsPerSec = 1.0f; sm.summonHp = 200.0f;
+          Check(near(Estimate::MakeSpellIn(sm, me, s, d, -1.0f, -1.0f).summonDps, 10.0f + 10.0f), "summon: its 10/s + the damage it draws (200 hp over 20 s = 10/s of the 30/s coming in)"); }
+        // INERT: at sw.live = 0 no other row of the table moves a Facts field, and the numbers are the plain estimates. LIVE: the call sites blend linearly.
+        { const Tuning off = DefaultTuning(); Tuning on = DefaultTuning(); on.spellWorth.live = 1.0f; Tuning half = on; half.spellWorth.live = 0.5f;
+          Tuning odd = DefaultTuning(); std::size_t knobs = 0;
+          for (std::size_t i = 0; !SpellWorthKnobName(i).empty(); ++i) { ++knobs; if (SpellWorthKnobName(i) != "sw.live") { float v = 0.0f; if (!GetSpellWorthKnob(odd.spellWorth, SpellWorthKnobName(i), v) || !SetSpellWorthKnob(odd.spellWorth, SpellWorthKnobName(i), v * 3.0f + 7.0f)) Check(false, "names: a listed knob sets and reads"); } }
+          Check(knobs == 27, "names: 27 knobs, listed one by one");
+          Snapshot s; s.self = Actor("Jesper", 0x14F00, 180, 200, 0, 0); s.self.mp = 400; s.self.mpMax = 400; s.self.hit = 10.0f; s.self.hitsPerSec = 1.0f;
+          s.playerId = 0x14; s.currentTargetId = 0x3B600; s.hasBook = true; s.combatSec = 3.0f;
+          s.foes = { Actor("Bandit", 0x3B600, 100, 100, 600, 0) };
+          s.allies = { Actor("Ally", 0x14F01, 40, 100, 100, 0) };
+          const auto add = [&](const char* n, std::uint32_t id, Prune::Nature nat, float cost, float dmg, float heal, float ctl) {
+              SpellEntry e = Spell(n, id, nat, cost); e.measured = true; e.damage = dmg; e.heal = heal; e.controlSec = ctl; e.school = kDestruction; e.chargeSec = 0.5f; s.book.entries.push_back(e); };
+          add("Firebolt", 0x12FCD, Prune::Nature::Offense, 40, 25.0f, 0.0f, 0.0f); add("Flare", 0x2FF01, Prune::Nature::Offense, 60, 69.0f, 0.0f, 0.0f);
+          add("Heal", 0x12FCC, Prune::Nature::Heal, 30, 0.0f, 80.0f, 0.0f); add("Calm", 0x12FC0, Prune::Nature::Control, 30, 0.0f, 0.0f, 30.0f);
+          ClassGate mage; mage.resolved = true; mage.spellsOnClass = true;
+          const Generated g0 = Generate(s, mage, off), g1 = Generate(s, mage, odd), gl = Generate(s, mage, on);
+          bool same = g0.actions.size() == g1.actions.size();
+          for (std::size_t i = 0; same && i < g0.actions.size(); ++i) {
+              const Facts& a = g0.actions[i].f; const Facts& b = g1.actions[i].f;
+              same = a.expDamage == b.expDamage && a.expRate == b.expRate && a.bestDamage == b.bestDamage && a.effectRate == b.effectRate && a.healRate == b.healRate && a.controlSec == b.controlSec && a.expHeal == b.expHeal && a.bestHealRate == b.bestHealRate;
+          }
+          Check(same && !g0.actions.empty(), "INERT: at sw.live = 0 every other sw.* changed leaves every Facts field the reader touches bit for bit");
+          const Generated gh = Generate(s, mage, half);
+          const auto find = [](const Generated& g, std::uint32_t form) -> const Facts* { for (const auto& a : g.actions) if (a.form == form) return &a.f; return nullptr; };
+          const auto mid = [&](float lo, float v, float hi) { return std::fabs(v - (lo + hi) * 0.5f) < 1e-3f; };
+          const Facts *b0 = find(g0, 0x2FF01), *bh = find(gh, 0x2FF01), *b1 = find(gl, 0x2FF01), *h0 = find(g0, 0x12FCC), *hh = find(gh, 0x12FCC), *h1 = find(gl, 0x12FCC), *c0 = find(g0, 0x12FC0), *ch = find(gh, 0x12FC0), *c1 = find(gl, 0x12FC0);
+          const bool all = b0 && bh && b1 && h0 && hh && h1 && c0 && ch && c1;
+          Check(all, "LIVE: the bolt, the heal and the control spell are candidates at 0, 0.5 and 1");
+          if (all) {
+              const float sec = off.spellCastSec;
+              Check(near(b0->expDamage, 69.0f) && near(b0->expRate, 69.0f / sec) && near(b0->bestDamage, 69.0f / sec) && near(b0->effectRate, 69.0f / sec) && near(h0->expHeal, 80.0f) && near(h0->healRate, 80.0f / sec) && near(c0->controlSec, 30.0f), "INERT: the plain numbers at 0 (69 damage, 80 heal, over spellCastSec, 30 s)");
+              Check(near(b1->expDamage, 69.0f) && near(b1->expRate, 69.0f / 1.9f) && near(b1->effectRate, 69.0f / 1.9f) && near(b1->bestDamage, 69.0f / 1.9f), "LIVE 1: the bolt = its damage over its own 1.9 s, one foe's damage for Overkill, the yardstick in the same unit");
+              Check(near(h1->expHeal, 80.0f) && near(h1->recipientMissing, 20.0f) && near(h1->healRate, 20.0f / 1.9f) && near(h1->bestHealRate, 20.0f / 1.9f), "LIVE 1: his own heal = the 20 missing over 1.9 s, and HealFit still sees the whole 80");
+              Check(near(c1->controlSec, 10.0f), "LIVE 1: the 30 s hold counts the foe's 10 s");
+              Check(mid(b0->expRate, bh->expRate, b1->expRate) && mid(b0->bestDamage, bh->bestDamage, b1->bestDamage) && mid(h0->healRate, hh->healRate, h1->healRate) && mid(h0->bestHealRate, hh->bestHealRate, h1->bestHealRate) && mid(c0->controlSec, ch->controlSec, c1->controlSec), "LIVE 0.5: every number stands halfway");
+          } }
+    }
+}
+
+namespace {
     // fix/spell-worth (field Jesper 11-23: IAUS had no damage number for ~62 of 74 offense spells, so they TIED and the cheapest won).
     void SpellWorthRules() {
         std::printf("\n== spell-worth: rider damage, resist once, unmeasured placeholder, level cap ==\n");
@@ -1737,13 +1922,76 @@ namespace {
             Check(Prune::StaticDrop(in) == Prune::Drop::Keep, "B865: a bolt with an impact hazard is kept");
             in.targetLocation = true;   // a rune: delivery TargetLocation, not read from the impact hazard
             Check(Prune::StaticDrop(in) == Prune::Drop::Placement, "B865: a rune is unchanged");
-            Check(Prune::IsSelfBlastPlacement(true, false, true, true), "B865 F1: a Self FF Offense spell with an impact hazard (Fire Storm) is still dropped (interim)");
-            Check(!Prune::IsSelfBlastPlacement(true, false, true, false), "B865 F1: a Self blast with no impact hazard is not covered by the interim drop");
-            Check(!Prune::IsSelfBlastPlacement(true, true, true, true), "B865 F1: a Self concentration spell is not covered");
-            Check(!Prune::IsSelfBlastPlacement(true, false, false, true), "B865 F1: a non-Offense Self spell is not dropped");
-            Check(!Prune::IsSelfBlastPlacement(false, false, true, true), "B865 F1: an aimed bolt with an impact hazard is kept");
-            in.targetLocation = Prune::IsSelfBlastPlacement(true, false, true, true);
-            Check(Prune::StaticDrop(in) == Prune::Drop::Placement, "B865 F1: the Self blast is dropped as Placement");
+            // the interim self-blast block (marth 11-24, D2; review F4: hostile by the engine, per effect). One effect = { hostile flag, EFIT area, impact hazard, payload }.
+            struct Fx { bool h, area, impact, payload; };
+            const auto blast = [](bool self, bool conc, Prune::Nature n, std::initializer_list<Fx> fx, bool hostileHazard) {
+                bool hot = false;
+                for (const Fx& e : fx) hot |= Prune::HostileAreaEffect(e.h, e.area, e.impact, e.payload);
+                return Prune::IsSelfBlastPlacement(self, conc, n == Prune::Nature::Offense || n == Prune::Nature::Control, hot, hostileHazard);
+            };
+            using N = Prune::Nature;
+            const Fx hurtArea{ true, true, false, false }, plainArea{ false, true, false, false }, hurtNoArea{ true, false, false, false }, plain{ false, false, false, false };
+            // blocked: the record says hostile
+            Check(blast(true, false, N::Control, { { true, true, true, true }, hurtArea }, false), "D2: Fire Storm is blocked");
+            Check(blast(true, false, N::Control, { hurtArea, hurtArea }, false), "D2: Frost Nova is blocked");
+            Check(blast(true, false, N::Control, { plain, hurtArea }, true), "D2: Blizzard is blocked");
+            Check(blast(true, false, N::Buff, { plain, plain, plain }, true), "D2: MAG_Blizzard (its own effects unflagged, the hazard's spell is hostile) is blocked");
+            Check(blast(true, false, N::Control, { hurtArea, hurtArea, plainArea }, false), "D2: Mass Paralysis / Hysteria / Mayhem (hostile flagged) are blocked");
+            Check(blast(true, false, N::Offense, { hurtArea, hurtArea, plain }, false), "D2: REQ_Illusion5_Calm (hostile flagged) is blocked");
+            Check(blast(true, false, N::Control, { hurtArea, hurtArea, hurtArea }, false), "D2: Bane of the Undead / Turn ritual (hostile area, undead-only conditions are not read) is blocked");
+            Check(blast(true, false, N::Offense, { plain, plain, hurtArea }, false), "D2: MAG_CircleofProtection (a hostile flagged area slow, conditions are not read) is blocked");
+            Check(blast(true, false, N::Offense, { { true, false, true, false } }, false), "D2: a hostile effect with an impact hazard and no EFIT area is blocked (B865 F1)");
+            Check(blast(true, false, N::Offense, { { true, false, false, true } }, false), "D2: a hostile effect with a payload explosion is blocked");
+            // the circles (review F9): their own effect is a benign Spawn Hazard, the hazard's SPELL is hostile by record (absorb or damage), so the one rule blocks them
+            Check(blast(true, false, N::Buff, { plain }, true), "D2: Circle of Strength / Glory / the Moons, Talons of Nirn, Sanctuary, Consecrated Ground: blocked by their hazard's hostile spell");
+            Check(!blast(true, false, N::Buff, { plain }, false), "D2: a circle whose hazard's spell is not hostile is a candidate");
+            // candidates: not hostile by the engine
+            Check(!blast(true, false, N::Control, { plainArea, plainArea }, false), "D2: Harmony (unflagged mass calm) is a candidate");
+            Check(!blast(true, false, N::Control, { plainArea, plainArea, { false, false, true, false } }, false), "D2: MAG_Harmony (an impact hazard on an unflagged effect) is a candidate");
+            Check(!blast(true, false, N::Offense, { plainArea, plain }, false), "D2: Vanish / Hallowed Weapon / Dispel Magic (detrimental, not hostile, area) are candidates");
+            Check(!blast(true, false, N::Offense, { plainArea, hurtNoArea }, false), "D2: LoreRim Dispel Magic (the hostile effect has no area) is a candidate");
+            Check(!blast(true, false, N::Offense, { hurtNoArea }, false), "D2: a self hostile spell with no area at all is not covered");
+            Check(!blast(true, true, N::Offense, { hurtArea }, true), "D2: a Self concentration spell is not covered");
+            Check(!blast(true, false, N::Buff, { hurtArea }, false), "D2: a self cloak (nature Buff) is kept whatever its flags");
+            Check(!blast(true, false, N::Ward, { hurtArea }, false) && !blast(true, false, N::Heal, { plainArea }, false), "D2: a ward and an area heal are kept");
+            Check(!blast(false, false, N::Offense, { hurtArea }, true), "D2: an aimed blast (Fireball) is kept");
+            // review F1: the road of a picked summon (IAUS pick, claim, degrade, bCastSelf)
+            using G = Prune::SummonGo;
+            Check(Prune::SummonRoadFor(true, true, false, true) == G::Claim && Prune::SummonRoadFor(false, true, false, true) == G::Claim, "summon road: a served claim is the claim for both");
+            Check(Prune::SummonRoadFor(true, false, false, true) == G::Defer, "summon road: an IAUS summon with no combat controller is deferred, never the one-shot");
+            Check(Prune::SummonRoadFor(true, true, false, false) == G::Defer, "summon road: an IAUS summon with self casts off is deferred");
+            Check(Prune::SummonRoadFor(true, false, true, true) == G::OneShot, "summon road: Harbinger absent keeps the documented direct degrade");
+            Check(Prune::SummonRoadFor(false, false, false, true) == G::OneShot && Prune::SummonRoadFor(false, true, false, false) == G::OneShot, "summon road: a gambit rule is unchanged (no claim = the one-shot)");
+            in.selfBlast = in.targetLocation = true;
+            Check(Prune::StaticDrop(in) == Prune::Drop::SelfBlast, "D2: the block names its own reason");
+            in.targetLocation = false;
+            Check(Prune::StaticDrop(in) == Prune::Drop::Keep, "D2: the reason bit never decides alone (a summon wins in IsPlacement)");
+            // natures: what must stay a candidate is never Offense / Control
+            Prune::NatureIn nat; nat.kind = Prune::Kind::Offense; nat.selfCloak = true;
+            Check(Prune::ClassifyNature(nat) == Prune::Nature::Buff, "D2: a hostile self cloak's nature is Buff (kept)");
+            nat = {}; nat.kind = Prune::Kind::Offense; nat.ward = true;
+            Check(Prune::ClassifyNature(nat) == Prune::Nature::Ward, "D2: a ward's nature is Ward (kept)");
+            nat = {}; nat.kind = Prune::Kind::Offense; nat.control = true;
+            Check(Prune::ClassifyNature(nat) == Prune::Nature::Control, "D2: a blast with a fear / paralysis rider (Fire Storm) is Control, which the block covers");
+        }
+        {   // placed-spells L1: the one placement rule, today's answers
+            using P = Prune::PlacementIn;
+            Check(!Prune::IsPlacement(P{}), "placed L1: nothing set = not a placement (an aimed bolt)");
+            { P p; p.targetLocationDelivery = true; Check(Prune::IsPlacement(p), "placed L1: target location delivery is a placement"); }
+            { P p; p.rune = p.targetLocationDelivery = true; Check(Prune::IsPlacement(p), "placed L1: a rune is a placement"); }
+            { P p; p.wall = true; Check(Prune::IsPlacement(p), "placed L1: a wall is a placement"); }
+            { P p; p.tlBurst = p.targetLocationDelivery = true; Check(Prune::IsPlacement(p), "placed L1: a location burst is a placement"); }
+            { P p; p.selfBlast = true; Check(Prune::IsPlacement(p), "placed L1: a self blast is a placement (interim)"); }
+            { P p; p.summon = true; Check(!Prune::IsPlacement(p), "placed L1: a Self summon is not a placement"); }
+            { P p; p.summon = p.targetLocationDelivery = true; Check(!Prune::IsPlacement(p), "placed M1: Conjure Familiar (target location summon) is kept"); }
+            { P p; p.summon = p.targetLocationDelivery = p.rune = p.wall = p.tlBurst = p.selfBlast = true; Check(!Prune::IsPlacement(p), "placed M1: summon wins over every placed kind"); }
+            {
+                Prune::StaticIn in; in.nature = Prune::Nature::Summon;
+                P p; p.summon = p.targetLocationDelivery = true; in.targetLocation = Prune::IsPlacement(p);
+                Check(Prune::StaticDrop(in) == Prune::Drop::Keep, "placed M1: a target location summon is an IAUS candidate");
+                in.roadUnsupported = true;
+                Check(Prune::StaticDrop(in) == Prune::Drop::Unanimated, "placed M1: the animation rule still goes first");
+            }
         }
         // ---- item 4: the block family ----
         ClassGate knight; knight.resolved = true; knight.treeOn = true; knight.block = true;
@@ -2867,6 +3115,46 @@ static void SeatRowRules() {
     Check(!h.Held(1, 2, 3) && h.Size(1) == 0, "zero-effect: the hold ends with the fight (the follower's pairs)");
 }
 
+// ABI v47 FIRE ONCE (cast/SeatRows.h FireOnceServed) and the A1 party-fight hold (cast/PartyGap.h Holds): the pure rules.
+static void FireOnceAndPartyGapRules() {
+    using namespace MFO::SeatRows;
+    // EngineRow ordinals: NoRow0 Unknown1 Offensive2 Restore3 Stagger4 Disarm5 TargetEffect6 Paralyze7 Script8 Ward9 Summon10 Cloak11
+    // Light12 Invisibility13 BoundItem14 Armor15 Reanimate16 (static_assert-ed against the enum in cast/BuffRoad.cpp).
+    const std::uint32_t kScript = 1u << 8, kRestore = 1u << 3, kOffensive = 1u << 2, kUnknown = 1u << 1, kNoRow = 1u << 0;
+    const std::uint32_t kReanimate = 1u << 16, kDisarm = 1u << 5;
+    const std::uint32_t covScriptRestore = (1u << 9) | (1u << 0) | kFireOnceBit;   // Script + Restore seats, FireOnce
+    Check(FireOnceServed(47, covScriptRestore, kScript | kRestore), "fire-once: Mystic Wind (Script + Restore) is served with both seat bits and the flag bit");
+    Check(!FireOnceServed(46, covScriptRestore, kScript | kRestore), "fire-once: below ABI 47 nothing is served, whatever the coverage says (an older Harbinger ignores the bit)");
+    Check(!FireOnceServed(47, covScriptRestore & ~kFireOnceBit, kScript | kRestore), "fire-once: without kCastSeat_FireOnce nothing is served");
+    Check(!FireOnceServed(47, (1u << 9) | kFireOnceBit, kScript | kRestore), "fire-once: a candidate row WITHOUT its own seat bit (Restore) is not served");
+    Check(!FireOnceServed(47, (1u << 0) | kFireOnceBit, kScript | kRestore), "fire-once: the other candidate (Script) missing is not served either");
+    Check(FireOnceServed(47, (1u << 1) | (1u << 0) | kFireOnceBit, kRestore | kOffensive), "fire-once: Restore + Offensive each on their own bit");
+    Check(!FireOnceServed(47, covScriptRestore, kUnknown | kScript), "fire-once: an Unknown row has no seat and is never served");
+    Check(FireOnceServed(47, covScriptRestore, kNoRow | kScript), "fire-once: a rowless effect is served as Script");
+    Check(!FireOnceServed(47, (1u << 11) | kFireOnceBit, kDisarm), "fire-once: a v46 hostile row needs TypeEquip too");
+    Check(FireOnceServed(47, (1u << 11) | kTypeEquipBit | kFireOnceBit, kDisarm), "fire-once: a v46 hostile row with its bit and TypeEquip is served");
+    Check(!FireOnceServed(47, (1u << 14) | (1u << 9) | kFireOnceBit, kReanimate | kScript), "fire-once: a Reanimate candidate needs a corpse claim (not promised by the chooser)");
+    Check(FireOnceServed(47, (1u << 14) | (1u << 9) | kFireOnceBit, kReanimate | kScript, /*a_corpseClaim=*/true), "fire-once: a Reanimate candidate with a corpse claim is served");
+    Check(!FireOnceServed(47, ~0u, 1u << 17), "fire-once: a row bit past the table is not served");
+    Check(FireOnceServed(47, kFireOnceBit, 0), "fire-once: no row to ask about = the support gate alone (the bridge's FireOnceSupported)");
+
+    using MFO::PartyGap::Holds;
+    Check(Holds(true, false, true, true),   "party gap: a buff on the combat table, no own controller, controller the only missing gate: HELD");
+    Check(!Holds(true, false, false, true), "party gap: a heal (not Buff-kind) is never held, it keeps the instant road (D1)");
+    Check(!Holds(true, true, true, true),   "party gap: with his own controller the claim road serves it, nothing is held");
+    Check(!Holds(false, false, true, true), "party gap: off the combat table (out of combat) nothing is held, the substrate road owns it");
+    Check(!Holds(true, false, true, false), "party gap: a shape no claim road serves (another gate missing) keeps the road it declares");
+    using MFO::PartyGap::OnlyGate;
+    // F1: concentration shapes ChooseBuffRoad answers DirectNoSeat (buff concentration at an ally; non-Self concentration at self;
+    // ambiguous-row concentration at self) are held in the gap when the concentration claim's gates are open
+    Check(Holds(true, false, true, OnlyGate(false, true, true)),  "party gap: a concentration buff at an ally, claim gates open, no controller: HELD");
+    Check(Holds(true, false, true, OnlyGate(false, true, true)),  "party gap: non-Self concentration at self, claim gates open, no controller: HELD");
+    Check(Holds(true, false, true, OnlyGate(false, true, true)),  "party gap: ambiguous-row concentration at self, claim gates open, no controller: HELD");
+    Check(!Holds(true, false, true, OnlyGate(false, true, false)), "party gap: a concentration cast with a claim gate closed (Harbinger absent) keeps its road");
+    Check(!Holds(true, false, true, OnlyGate(false, false, true)), "party gap: a non-concentration cast is not helped by the concentration gates");
+    Check(!Holds(true, true, true, OnlyGate(false, true, true)),   "party gap: concentration with his own controller: unchanged, not held");
+}
+
 int main() {
     std::printf("IAUS core harness (card I2). Curves and weights = DefaultTuning() (native/iaus/Catalogue.cpp).\n");
     MageLowMagickaFireWeak();
@@ -2883,6 +3171,7 @@ int main() {
     ReachSequences();
     EngineFillRules();
     SpellWorthRules();
+    SpellWorthReader();
     OcclusionHoldBound();
     HideHold();
     DisengageRules();
@@ -2897,6 +3186,8 @@ int main() {
     ConsumablesWorth();
     LootNeedScores();
     SeatRowRules();
+    FireOnceAndPartyGapRules();
+    g_failed += MoveRows(MOVE_GOLDEN, false);
     std::printf("\n%d check(s) failed\n", g_failed);
     return g_failed;
 }

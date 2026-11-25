@@ -134,7 +134,11 @@ namespace MFO::APMFBridge {
     // caster's own FormID for a self cast of a non-Self spell, else the recipient). false = REFUSED at the call
     // (logged loudly as an ERROR; the caller SKIPS the cast, never the direct road: principle 7). Requires
     // SubstrateAvailability() == Available (re-checked).
-    bool OpenSubstrateCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target, const char* a_site);
+    // a_fireOnce (ABI v47, anim-residue plan A2): the cast claim carries kCastFlag_FireOnce (the same decision a combat claim
+    // makes, cast/BuffRoad.cpp BuffFireOnce): a spell whose effects map to several caster rows is bounded by the claim, whatever
+    // caster the engine builds. The caller gates on FireOnceSupported(). Default false: the request is filed as before.
+    bool OpenSubstrateCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target, const char* a_site,
+                           bool a_fireOnce = false);
     // The SpellSink's hand-off (Diagnostics.cpp, on the AddTask worker): a_spell fired on a_follower. Marks the
     // pair FIRED when it is the pair's spell or Harbinger's minted proxy. Never releases anything by itself:
     // Harbinger's own fire close decides when the substrate ends (APMF-B93: the close must not cut the charge).
@@ -319,9 +323,27 @@ namespace MFO::APMFBridge {
     //   * false + supported      -> APMF is PRESENT and CAPABLE and said NO.
     //     That is a BUG TO FIX IN APMF, never a condition to degrade through:
     //     FAIL CLOSED, log loudly, do NOT route around it into the legacy path.
+    //
+    // a_fireOnce (ABI v47, anim-residue plan A2): file the claim with kCastFlag_FireOnce, so it casts AT MOST ONCE on any
+    // caster type (the bound belongs to the CLAIM, not the caster the engine builds). The caller decides (cast/BuffRoad.cpp
+    // BuffFireOnce, the one place) and gates on FireOnceSupported(); this call REFUSES (false, logged once, fail closed) a
+    // fire-once ask on a Harbinger that would ignore the bit, on a concentration claim, and on a Reanimate spell without a
+    // corpse target. Part of the claim's identity: a change releases and re-files. Default false: every other claim is
+    // filed byte for byte as before. Poll OffenseCastFired() for its one cast, then release (the caller's job).
     bool ClaimOffenseCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
                           std::int32_t a_hand = kApmfHandLeft, bool a_concentration = false,
-                          std::uint32_t a_stopPct = 0);
+                          std::uint32_t a_stopPct = 0, bool a_fireOnce = false);
+
+    // ABI v47 FIRE ONCE (kCastFlag_FireOnce). Does the resolved Harbinger serve it: abiVersion >= 47 AND Config::g_apmfCast AND
+    // castSeats carries kCastSeat_FireOnce (read through CastSeatCoverage, kept for the session)? The caller ALSO checks every
+    // candidate row's own seat bit (cast/SeatRows.h FireOnceServed). False = the bit would be ignored and the claim would repeat:
+    // the caller keeps today's road. Any thread.
+    bool FireOnceSupported();
+
+    // ABI v47: has the FIRE-ONCE claim this follower holds on `a_hand` for `a_spell` fired its one cast? GetClaimEndReason(handle)
+    // == kClaimEnd_Fired, readable WHILE the claim stands (the caller then releases it). False for no such claim, a claim that
+    // is not fire-once, or ABI < 47. Worker-safe (the bridge lock, then one lock-free Harbinger read).
+    bool OffenseCastFired(RE::FormID a_follower, std::int32_t a_hand, RE::FormID a_spell);
 
     // Worker-safe. Is the offense-cast CLAIM CHANNEL itself available right now --
     // i.e. would a `false` from ClaimOffenseCast above mean "APMF REFUSED" rather
@@ -350,7 +372,7 @@ namespace MFO::APMFBridge {
     enum class ServeAnswer : std::uint8_t { Unknown, Accepted, Refused };
     ServeAnswer CanServeCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
                              std::int32_t a_hand, bool a_concentration, std::uint32_t a_stopPct,
-                             bool a_heal, bool a_healDual, std::string* a_why);
+                             bool a_heal, bool a_healDual, std::string* a_why, bool a_fireOnce = false);
 
     // Does the resolved Harbinger carry the BUFF / SUMMON / ROWLESS cast seats (0x06 / 0x07 / 0x0A / 0x0D on
     // the Ward, Summon, Cloak, Light, Invisibility, BoundItem, Armor and Script casters; ally buff aim,

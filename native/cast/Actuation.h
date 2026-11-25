@@ -907,12 +907,15 @@ namespace MFO::Actuation {
         bool         impactHazard = false;   // any effect: impactDataSet (+0x90) has an entry whose BGSImpactData::hazard (+0x80) is set (log only since MFO-B865)
         bool         impactHazardDrops = false;   // ...and that hazard (BGSHazardData flags +0x14) has kDropToGround (16); the Wall shape needs it (Prune::IsWallShape)
         bool         spawnHazard  = false;   // any effect archetype kSpawnHazard (40)
+        bool         hostileImpact = false;  // an impact hazard on an effect whose OWN kHostile flag is set (Prune::HostileAreaEffect)
         bool         hazardHostile = false;  // ...and the spawned hazard's spell has a hostile effect (read off associatedForm)
         std::uint32_t effectCount = 0;
         std::int32_t  keyedEffect = -1;      // index into SpellItem::effects of the effect the predicted row keys by (the row's
                                              // costliest effect when several rows compete); -1 = none (NoRow / Unknown / no effects)
         const char*   kindName    = "?";    // CasterConsent::ClassifySpell: Offense / Buff / Heal (static literal)
     };
+    // THE ward test (one reader): a value-modifier-family effect on WardPower. Form data, any thread. Null -> false.
+    bool IsWardEffect(const RE::EffectSetting* a_base);
     // Cached per FormID under a leaf mutex (record data is static after load). Null -> default.
     // a_seat0 = model APMF seat 0 (STATUS.md:135, :186-188): the claim's driven form keys self=1, so a
     // heal-OTHER claim lands in the Restore row. Used for the HealClaim road only.
@@ -936,6 +939,13 @@ namespace MFO::Actuation {
     // cannot disagree. Each returns the reason literal, or nullptr when the case does not apply.
     bool        ExplicitSelfBuff(RE::SpellItem* a_spell);
     const char* BuffAmbiguousRowWhy(const SpellArchetype& a_arch);
+    // ABI v47 (anim-residue plan A2): THE one place that decides a buff claim is FIRE-ONCE (kCastFlag_FireOnce: the claim's own
+    // bound, so an ambiguous row Harbinger does not bound can be claimed). True only for a spell BuffAmbiguousRowWhy would have
+    // refused, fire-and-forget, with Harbinger serving the flag and every candidate row's own seat bit. See cast/BuffRoad.cpp.
+    bool BuffFireOnce(const SpellArchetype& a_arch);
+    // Why ChooseBuffRoad can NEVER answer Claim for this summon, by its record alone (nullptr = it can). Its own tests. IAUS drops such a summon
+    // (iaus/SpellBook.cpp, the animation rule); the gambit picker does not read it. a_arch = ClassifyArchetype(a_spell). Pure form data, any thread.
+    const char* SummonClaimUnservedWhy(RE::SpellItem* a_spell, const SpellArchetype& a_arch);
     const char* BuffAimedLightWhy(RE::SpellItem* a_spell, const SpellArchetype& a_arch);
     const char* BuffSelfRuneWhy(RE::SpellItem* a_spell, bool a_explicitSelf);
     const char* ShapeName(SpellShape a_shape);

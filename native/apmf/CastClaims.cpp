@@ -8,6 +8,7 @@
 #include "APMFBridge_internal.h"   // wave-1 split: the bridge's shared claim state
 #include "APMF_API.h"
 #include "ComposedCast.h"   // ObservedFiring (the idle-hand floor's unobserved gate) + ClearWatchHand
+#include "cast/SeatRows.h"      // ABI v47 FireOnceServed (FireOnceSupported)
 #include "cast/Actuation.h"     // CastInFlightOnHand -- THE one in-flight definition; the idle-hand
                            // floor's gate is armed on CHARGE, not on claim age alone (2026-09-22)
                             // (the expiry sweep drops the swept claim's [cfc] watch) -- both called
@@ -90,10 +91,20 @@ namespace MFO::APMFBridge {
     // EnsureCastClaimLocked helper, just applied to ONE of the two `offense[]`
     // slots (or BOTH, mirrored, for a DualCast ask).
     bool ClaimOffenseCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
-                         std::int32_t a_hand, bool a_concentration, std::uint32_t a_stopPct) {
+                         std::int32_t a_hand, bool a_concentration, std::uint32_t a_stopPct, bool a_fireOnce) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
         if (!api || a_follower == 0 || a_spell == 0 || !Config::g_apmfCast.load())
             return false;
+        // FIRE ONCE (ABI v47): never file the ask where the bit would be ignored (the claim would repeat: an unbounded wrong
+        // caster) or means nothing (a concentration stream). Fail closed and say so, once per session (principle 7).
+        if (a_fireOnce && (!FireOnceSupported() || a_concentration)) {
+            static std::atomic<bool> s_warnedFireOnce{ false };
+            if (!s_warnedFireOnce.exchange(true))
+                spdlog::warn("[apmf] fire-once claim of spell {:08X} for {:08X} refused here: {} -- not filed (never filed without "
+                             "its bound). Logged once per session.", a_spell, a_follower,
+                             a_concentration ? "a concentration claim cannot be fire-once" : "Harbinger does not serve kCastFlag_FireOnce (ABI < 47 or no coverage bit)");
+            return false;
+        }
         // RequestCast is a v5 slot; an APMF.dll built before it (ABI < 5) has no
         // such function pointer to call at all -- degrade cleanly to the legacy
         // AI-first-grace + force-on-miss hybrid rather than reading past the end
@@ -130,7 +141,7 @@ namespace MFO::APMFBridge {
             // result into slot 1 verbatim (same handle -- see ReleaseOffenseCast
             // for the matching dedup-on-release).
             EnsureCastClaimLocked(v5, a_follower, o.offense[0], a_spell, a_target, a_hand,
-                                  a_concentration, a_stopPct);
+                                  a_concentration, a_stopPct, /*wantDenyOnly=*/false, /*wantFullFloor=*/false, a_fireOnce);
             o.offense[0].refreshed = std::chrono::steady_clock::now();
             o.offense[1] = o.offense[0];
         } else {
@@ -145,7 +156,7 @@ namespace MFO::APMFBridge {
                 o.offense[idx].handle == o.offense[other].handle)
                 o.offense[other] = CastClaim{};
             EnsureCastClaimLocked(v5, a_follower, o.offense[idx], a_spell, a_target, a_hand,
-                                  a_concentration, a_stopPct);
+                                  a_concentration, a_stopPct, /*wantDenyOnly=*/false, /*wantFullFloor=*/false, a_fireOnce);
             o.offense[idx].refreshed = std::chrono::steady_clock::now();
         }
 
@@ -181,6 +192,33 @@ namespace MFO::APMFBridge {
     bool CorpseTargetSupported() {
         auto* api = g_apmf.load(std::memory_order_relaxed);
         return api && api->abiVersion >= kCorpseTargetAbi && Config::g_apmfCast.load();
+    }
+
+    // See APMFBridge.h. ABI v47: kCastFlag_FireOnce is served when Harbinger reports kCastSeat_FireOnce in castSeats. The
+    // literals below are the header's (static_assert-ed), the gate is SeatRows::FireOnceServed with no row to ask about.
+    static_assert(SeatRows::kFireOnceBit == APMF_API::kCastSeat_FireOnce);
+    static_assert(SeatRows::kMinAbiFireOnce == kFireOnceAbi);
+    bool FireOnceSupported() {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        return api && Config::g_apmfCast.load() &&
+               SeatRows::FireOnceServed(api->abiVersion, CastSeatCoverage(), /*a_rowMask=*/0);
+    }
+
+    // See APMFBridge.h. Only a claim this bridge filed fire-once is asked (a claim without the bit never reads Fired).
+    bool OffenseCastFired(RE::FormID a_follower, std::int32_t a_hand, RE::FormID a_spell) {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || api->abiVersion < kFireOnceAbi) return false;
+        APMF_API::Handle h = APMF_API::kInvalidHandle;
+        {
+            std::scoped_lock lock(g_mx);
+            const auto it = g_owned.find(a_follower);
+            if (it == g_owned.end()) return false;
+            const auto& c = it->second.offense[OffenseSlot(a_hand)];
+            if (c.handle == APMF_API::kInvalidHandle || !c.fireOnce || c.spell != a_spell) return false;
+            h = c.handle;
+        }
+        const auto* v31 = reinterpret_cast<const APMF_API::APMF_API_v31*>(api);
+        return v31->GetClaimEndReason && v31->GetClaimEndReason(h) == APMF_API::kClaimEnd_Fired;
     }
 
     // ── REFRESH A STANDING CAST CLAIM IN PLACE (F9, 2026-09-08) ─────────────────
@@ -271,7 +309,7 @@ namespace MFO::APMFBridge {
             // A hold names its spell; anything else on this hand is not its to feed.
             if (a_holdSpell != 0 && c.spell != a_holdSpell) return;
             EnsureCastClaimLocked(v5, a_follower, c, c.spell, c.target, c.hand,
-                                  c.conc, c.stopPct, c.denyOnly);
+                                  c.conc, c.stopPct, c.denyOnly, /*wantFullFloor=*/false, c.fireOnce);
             c.refreshed = now;
             if (c.handle != APMF_API::kInvalidHandle) any = true;
         };

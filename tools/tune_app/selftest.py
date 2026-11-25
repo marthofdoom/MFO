@@ -62,9 +62,11 @@ def main():
     def bad(fn, line):
         check("rejects %s: %s" % (fn, line), V(fn, line + "\n"))
     for ln in ("mage:8.35.b=0.27", "8.35.b=0.27", "equip.ranged_dist.b=0.2", "equip.trade.w=2", "mage : equip.crossover = 0.3", "family.attack=+2", "scalar.schoolPeak=3",
-               "attack.range.px5=0.5", "attack.0.zeroAbove=1", "--curve mage:8.35.floor=0.1", "--curve 'mage:8.35.floor=0.1'", "ATTACK.RANGE.a=1  # c", "mage:family.power_attack=2"):
+               "attack.range.px5=0.5", "attack.0.zeroAbove=1", "--curve mage:8.35.floor=0.1", "--curve 'mage:8.35.floor=0.1'", "ATTACK.RANGE.a=1  # c", "mage:family.power_attack=2",
+               "spot.high_ground=1.2", "cast_offense.spot_sight.w=2"):
         good("mage.txt", ln)
-    for ln in ("healer:8.35.b=0.27", "mage:8.35.px6=1", "mage:8.35.p=1", "mage:scalar.nope=1", "mage:family.nope=1", "mage:family.attack=0", "mage:8.35.w=0", "mage:8.97.a=1",
+    for ln in ("healer:8.35.b=0.27", "mage:8.35.px6=1", "mage:8.35.p=1", "mage:scalar.nope=1", "mage:family.nope=1", "mage:family.attack=0", "mage:8.35.w=0", "spot.nope=1", "spot.firing=0",
+               "mage:8.116.a=1",
                "mage:25.0.a=1", "mage:8.35.b=inf", "mage:8.35.b=nan", "mage:8.35.b=", "mage:8.35=1", "mage:8.35.b.c=1", "t.momentum=1", "mage:8.35.b=1,2", "mage:8.35.b=++1"):
         bad("mage.txt", ln)
     for ln in ("t.momentum=1", "t.emergencyHpHigh=0.9, w.8.35=2", "aw.8=1.5", "c.35.a=0.2", "c.35.floor=0.1,c.35.b=0.4", "--set t.kite=3", "t.kite=+3", "t.kite = 3"):

@@ -53,11 +53,49 @@ namespace MFO::Iaus::Prune {
         return a_hazardDropsToGround && a_concentration && !a_selfDelivery;
     }
 
-    // INTERIM (MFO-B865 review F1): a Self, non-concentration OFFENSE spell with an impact hazard (Fire Storm) was Wall -> Placement before the shape
-    // change; as SelfAoE it would be IAUS-kept and cast on the unanimated self-stream road (CastSelfDirect). Keep dropping exactly that set until the
-    // animated self-blast road exists (Docs/REVIEW-BACKLOG.md "self-delivered AoE OFFENSE spell", Frost Nova). Delete this rule when that road lands.
-    [[nodiscard]] inline bool IsSelfBlastPlacement(bool a_selfDelivery, bool a_concentration, bool a_offense, bool a_impactHazard) {
-        return a_selfDelivery && !a_concentration && a_offense && a_impactHazard;
+    // INTERIM BLOCK (marth 2026-11-24 "Block them for now", decision D2; review F4 narrowed it to his words, "caster-centered hostile area spell"): the sentient
+    // AI casts no Self, fire-and-forget spell whose AREA is HOSTILE by the engine (Frost Nova, Fire Storm, Blizzard). Their only road is the unanimated
+    // self-stream (CastSelfDirect) and nothing yet counts the townsfolk in the area. Gambit rules are unchanged. DELETE this rule when packages M2 (area
+    // census) and M4 (animated self-blast road) have landed (placed-spells-plan.md). PURE and shared: iaus/SpellBook.cpp and the lab (Data.h) both call these.
+    //   HostileAreaEffect  ONE effect: the kHostile flag (not kDetrimental) AND an area of ITS OWN: EFIT area, impact hazard, or an explosion with a payload
+    //                      (its own or its projectile's). A hostile effect with no area, or an area effect without the flag (Vanish, Hallowed Weapon, a Calm
+    //                      the record leaves unflagged), is not one.
+    //   harms              nature Offense or Control (a self cloak, ward, heal, buff stays whatever its flags). Control counts: Fire Storm and Frost Nova
+    //                      carry a Demoralize / Paralysis rider.
+    //   hostileHazard      it spawns a caster-centred hazard whose SPELL has a hostile effect (SpellArchetype::hazardHostile), whatever its own flags say.
+    //                      That holds for Blizzard and, by record, for every damage circle (Circle of Strength drains stamina, Talons of Nirn harms it).
+    // Conditions are NOT read: an undead-only hostile area (Bane of the Undead, Turn, Circle of Protection's slow) stays blocked.
+    [[nodiscard]] inline bool HostileAreaEffect(bool a_hostileFlag, bool a_efitArea, bool a_impactHazard, bool a_payloadExplosion) {
+        return a_hostileFlag && (a_efitArea || a_impactHazard || a_payloadExplosion);
+    }
+    [[nodiscard]] inline bool IsSelfBlastPlacement(bool a_selfDelivery, bool a_concentration, bool a_harms, bool a_hostileArea, bool a_hostileHazard) {
+        return a_selfDelivery && !a_concentration && ((a_harms && a_hostileArea) || a_hostileHazard);
+    }
+
+    // THE ROAD OF A PICKED SUMMON (placed-spells review F1; cast/Fire.cpp). An IAUS pick is never cast unanimated: no claim = transparent, asked again every
+    // lap. Only Harbinger absent / too old (the documented degrade) keeps the one-shot. A gambit rule is unchanged: the claim, else the one-shot.
+    enum class SummonGo : std::uint8_t { Claim, OneShot, Defer };
+    [[nodiscard]] inline SummonGo SummonRoadFor(bool a_iausPick, bool a_claim, bool a_degrade, bool a_selfCasts) {
+        if (a_claim && a_selfCasts) return SummonGo::Claim;
+        return (!a_iausPick || a_degrade) ? SummonGo::OneShot : SummonGo::Defer;
+    }
+
+    // ── Placed spells (placed-spells-plan.md L1) ─────────────────────────────────────────────────────────
+    // "Is this a placed spell IAUS does not offer?" THE ONE RULE: iaus/SpellBook.cpp fills the input from the engine's records, the lab
+    // (tools/iaus_sim/Data.h Classify) from the extracted ones. To keep a placed kind (a wall, a rune, a burst): edit IsPlacement.
+    struct PlacementIn {
+        bool targetLocationDelivery = false;   // Delivery::kTargetLocation
+        bool rune = false;                     // SpellShape::Rune (target location with an effect projectile)
+        bool wall = false;                     // SpellShape::Wall (IsWallShape, and no shape that outranks it in cast/Archetype.cpp)
+        bool tlBurst = false;                  // SpellShape::TLBurst
+        bool selfBlast = false;                // IsSelfBlastPlacement (interim)
+        bool summon = false;                   // any Summon Creature effect
+    };
+    // M1 (marth's end state: no static drop): a SUMMON is kept whatever its delivery. The engine places the creature itself (plan 2.2), so there is no
+    // point to choose, and the claim road (cast/BuffRoad.cpp, target 0) animates it.
+    [[nodiscard]] inline bool IsPlacement(const PlacementIn& a_in) {
+        if (a_in.summon) return false;
+        return a_in.targetLocationDelivery || a_in.rune || a_in.wall || a_in.tlBurst || a_in.selfBlast;
     }
 
     // Order matters: a summon / ward is its own family whatever ClassifySpell calls it; a control archetype is
@@ -81,7 +119,8 @@ namespace MFO::Iaus::Prune {
     struct StaticIn {
         bool castable = true;            // Vocab::IsCastableSpell (kSpell, not constant effect)
         bool roadUnsupported = false;    // Actuation::CastRoadUnsupported (the animation rule)
-        bool targetLocation = false;     // Delivery::kTargetLocation, or a Rune / Wall / TLBurst shape
+        bool targetLocation = false;     // IsPlacement's answer
+        bool selfBlast = false;          // PlacementIn::selfBlast: names the reason (Drop::SelfBlast), never decides alone
         Nature nature = Nature::Unknown;
         bool weighable = true;           // WeighableSpell: at least one effect IAUS can value
     };
@@ -100,11 +139,11 @@ namespace MFO::Iaus::Prune {
     }
     // Unweighted (batch I item 6, marth 11-12 on Q91: "MFO should hide spells we can't weight if we don't know what they do"):
     // the nature is stated but NO effect of the spell is one IAUS can value. APPENDED; the value is only logged, never saved.
-    enum class Drop : std::uint8_t { Keep = 0, NotCastable, Unanimated, Placement, UnknownNature, Unweighted };
+    enum class Drop : std::uint8_t { Keep = 0, NotCastable, Unanimated, Placement, UnknownNature, Unweighted, SelfBlast };   // SelfBlast: the interim block (IsSelfBlastPlacement)
     [[nodiscard]] inline Drop StaticDrop(const StaticIn& a_in) {
         if (!a_in.castable) return Drop::NotCastable;
         if (a_in.roadUnsupported) return Drop::Unanimated;
-        if (a_in.targetLocation) return Drop::Placement;
+        if (a_in.targetLocation) return a_in.selfBlast ? Drop::SelfBlast : Drop::Placement;
         if (a_in.nature == Nature::Unknown) return Drop::UnknownNature;
         if (!a_in.weighable) return Drop::Unweighted;
         return Drop::Keep;
@@ -115,6 +154,7 @@ namespace MFO::Iaus::Prune {
         case Drop::NotCastable:   return "not castable";
         case Drop::Unanimated:    return "unanimated road only";
         case Drop::Placement:     return "target location";
+        case Drop::SelfBlast:     return "hostile area around himself: blocked for now (no animated road, no bystander check)";
         case Drop::UnknownNature: return "nature unknown";
         case Drop::Unweighted:    return "its effects are script-only or unknown archetypes: IAUS cannot weight what it does";
         }

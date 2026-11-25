@@ -78,6 +78,7 @@ namespace MFO::SelfTest {
                 add("ch.32-aversion", 41, Installed(d), std::format("CanServe verdict {} refusal {} '{}'", d.verdict, d.refusal, d.why));
             }
             add("ch.8b-reanimate-corpse(G7)", 42, APMFBridge::CorpseTargetSupported(), {});
+            add("ch.8b-fire-once(A2)", 47, APMFBridge::FireOnceSupported(), "castSeats lacks kCastSeat_FireOnce, or [CastSeats] EnableFireOnce=0");
             {
                 // ch.33 REQUIRES a TESCombatStyle form (APMF_API.h kIntent_CombatStyle): ask with the follower's own base combat style, so a
                 // BadRequest cannot masquerade as "installed". No style on his base = not judged (INFO), never a pass.
@@ -384,10 +385,36 @@ namespace MFO::SelfTest {
                     auto*   dh = RE::TESDataHandler::GetSingleton();
                     if (!dh) { r.done = true; r.fail = true; r.text = "no data handler"; SetRes(key, r); return; }
                     int total = 0, scriptOnly = 0, wrong = 0;
+                    // placed-spells M1 / D2: a summon is never dropped as a placement; no Self fire-and-forget SelfAoE spell with a hostile area effect is a candidate.
+                    int summons = 0, summonsPlaced = 0, blastShapes = 0, blastsKept = 0, blocked = 0;
+                    std::string placedNames;
                     std::string names;
                     for (auto* sp : dh->GetFormArray<RE::SpellItem>()) {
                         if (!sp || sp->data.spellType != RE::MagicSystem::SpellType::kSpell || sp->effects.empty()) continue;
                         ++total;
+                        {
+                            auto drop = Iaus::Prune::Drop::Keep;
+                            const bool weighs = Iaus::SpellBook::WouldWeigh(sp, Iaus::ClassGate{}, nullptr, &drop);
+                            if (drop == Iaus::Prune::Drop::SelfBlast) ++blocked;
+                            const bool castable = sp->GetCastingType() != RE::MagicSystem::CastingType::kConstantEffect;
+                            bool summon = false, hostileArea = false;   // an effect hostile by its own flag with an area of its own
+                            for (auto* eff : sp->effects)
+                                if (eff && eff->baseEffect) {
+                                    summon |= eff->baseEffect->GetArchetype() == RE::EffectArchetypes::ArchetypeID::kSummonCreature;
+                                    hostileArea |= eff->baseEffect->IsHostile() && eff->effectItem.area > 0;
+                                }
+                            if (castable && summon) {
+                                ++summons;
+                                if (drop == Iaus::Prune::Drop::Placement || drop == Iaus::Prune::Drop::SelfBlast) {
+                                    if (++summonsPlaced <= 3) placedNames += std::format(" summon {:08X} '{}';", sp->GetFormID(), sp->GetName() ? sp->GetName() : "?");
+                                }
+                            }
+                            if (castable && !summon && hostileArea && sp->GetCastingType() != RE::MagicSystem::CastingType::kConcentration &&
+                                Actuation::ClassifyArchetype(sp).shape == Actuation::SpellShape::SelfAoE) {
+                                ++blastShapes;
+                                if (weighs && ++blastsKept <= 3) placedNames += std::format(" self blast {:08X} '{}';", sp->GetFormID(), sp->GetName() ? sp->GetName() : "?");
+                            }
+                        }
                         bool all = true;
                         for (auto* eff : sp->effects) {
                             auto* base = eff ? eff->baseEffect : nullptr;
@@ -403,7 +430,9 @@ namespace MFO::SelfTest {
                         }
                     }
                     r.text = std::format("{} castable spell record(s) scanned, {} are script-only, {} of those WOULD be weighed{}", total, scriptOnly, wrong, wrong ? names : std::string());
-                    r.fail = wrong > 0;
+                    r.text += std::format("; placed: {} summon(s), {} dropped as placement; {} self area shape(s), {} kept; {} blocked as a self blast{}", summons, summonsPlaced,
+                                          blastShapes, blastsKept, blocked, placedNames);
+                    r.fail = wrong > 0 || summonsPlaced > 0 || blastsKept > 0;
                     auto* hs = heal ? RE::TESForm::LookupByID<RE::SpellItem>(heal) : nullptr;
                     const char* hwhy = nullptr;
                     const bool  hw = hs && Iaus::SpellBook::WouldWeigh(hs, Iaus::ClassGate{}, &hwhy);

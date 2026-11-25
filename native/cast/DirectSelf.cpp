@@ -214,6 +214,9 @@ namespace MFO::Actuation {
 
         // EVERYTHING PAST HERE IS THE DIRECT SELF STREAM (CastSpellImmediate, no hand animation). On the combat
         // table that is the residue the field log must name (substrate S1, cast/Unanimated.cpp).
+        // anim-residue plan A1 backstop: CastOn holds first (same reader); any other combat-table caller is held here, Declined
+        // is the transparent no-cast. A heal is never held (D1) and falls on to the line below as before.
+        if (HoldOwnControllerOnlyGap(a_follower, a_spell, nullptr, "self-stream")) return SelfCast::Declined;
         NoteUnanimatedRoadWhy(a_follower, "self-stream", a_spell, nullptr);
 
         const auto now = SelfClock::now();

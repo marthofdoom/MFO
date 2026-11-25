@@ -42,6 +42,7 @@ namespace Sim {
             std::stringstream ss; ss << f.rdbuf(); const std::string txt = ss.str(); JP p{ txt }; parsed = p.val(); }
         const J& root = pre != PreloadedJson().end() ? pre->second : parsed;
         b.name = root["list"].s;
+        if (!root["spells"].a.empty() && root["placedSchema"].num(0) < 2) { std::fprintf(stderr, "%s was compiled before placed-spells L1 (placedSchema 2): no spell row says what native's book reads (impact hazard, projectile, explosion), so the lab's books would not be the game's. Run extract.py, extract_world.py and compile_world.py again\n", path); std::exit(2); }
         for (const auto& kv : root["gmst"].o) b.gmst[kv.first] = kv.second.num();
         ApplyRules(b);
         for (const J& s : root["foeSpells"].a) { SimSpell x; Classify(s, x); b.foeSpells.push_back(std::move(x)); }
@@ -56,7 +57,7 @@ namespace Sim {
             a.ar = static_cast<float>(s["ar"].num()); a.pieces = static_cast<int>(s["pieces"].num());
             const J& r = s["resist"]; a.rFire = static_cast<float>(r["fire"].num()); a.rFrost = static_cast<float>(r["frost"].num()); a.rShock = static_cast<float>(r["shock"].num());
             a.rMagic = static_cast<float>(r["magic"].num()); a.rPoison = static_cast<float>(r["poison"].num());
-            for (const J& si : s["spells"].a) { const int i = static_cast<int>(si.num(-1)); if (i >= 0 && i < static_cast<int>(b.foeSpells.size()) && b.foeSpells[static_cast<std::size_t>(i)].e.drop == Prune::Drop::Keep) a.spells.push_back(i); }
+            for (const J& si : s["spells"].a) { const int i = static_cast<int>(si.num(-1)); if (i >= 0 && i < static_cast<int>(b.foeSpells.size()) && b.foeSpells[static_cast<std::size_t>(i)].foeDrop == Prune::Drop::Keep) a.spells.push_back(i); }
             const J& st = s["style"];
             if (st.has()) { a.hasStyle = true; Style& y = a.st; const J& g = st["general"]; const J& m = st["melee"]; const J& c = st["close"];
                 auto fv = [](const J& arr, std::size_t i, float d) { return i < arr.a.size() ? static_cast<float>(arr.a[i].num(d)) : d; };
@@ -107,7 +108,9 @@ namespace Sim {
           for (const auto& kv : st["sneakAttack"].o) b.sneakAtk[kv.first] = rd(kv.second);
           b.sneakSkillRows = rd(st["sneakSkill"]); b.sneakNoiseRows = rd(st["sneakNoise"]); }
         bool anyTaught = false; for (const J& s : root["spells"].a) if (s["taught"].yes()) { anyTaught = true; break; }
-        for (const J& s : root["spells"].a) { ++b.rawSpells; if (anyTaught && !s["taught"].yes()) continue; ++b.taughtSpells; SimSpell x; Classify(s, x); AddPoolSpell(b, std::move(x)); }
+        for (const J& s : root["spells"].a) { ++b.rawSpells; if (anyTaught && !s["taught"].yes()) continue; ++b.taughtSpells; SimSpell x; Classify(s, x);
+            if (g_bookCensus) std::printf("CENSUS\t%s\t%s\t%d\t%s\n", s["key"].s.c_str(), s["edid"].s.c_str(), static_cast<int>(x.e.nature), Prune::DropName(x.e.drop));
+            AddPoolSpell(b, std::move(x)); }
         for (const J& s : root["scrolls"].a) { SimSpell x; Classify(s, x); if (x.e.drop == Prune::Drop::Keep && (x.dmg + x.dot + x.heal > 0 || x.ctrl || x.armor > 0)) { x.e.source = SpellSource::Scroll; x.e.cost = 0; x.cost0 = 0; b.scrolls.push_back(std::move(x)); } }
         TagRoles(b);
         LoadCombatMods(b, path);

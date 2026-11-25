@@ -1253,7 +1253,7 @@ Slices S7, S11a, S11b (the skeleton only) and S11c, with the mirror of `fix/spel
 | The fence form of the J rule | `tune_driver.py judge(fence=True)` | |
 | The cost cuts | `tune_driver.py table_slice` (3 and 4), the size loop in `follow_class` (2) | |
 | The tune's world | `tune_driver.py V4_TRAIN`, `HOLD_FLAGS`, `world_flags`, `--world v4` (the default) | |
-| The spell-worth reader, SKELETON | `native/iaus/SpellWorth.h`, `SpellWorth.cpp` | see 15.6 |
+| The spell-worth reader (S11b, inert) | `native/iaus/SpellWorth.h`, `SpellWorth.cpp`, `SpellWorthTable.h` | see 15.6 |
 
 ### 15.2 The mirror of fix/spell-worth
 
@@ -1352,13 +1352,21 @@ The closable gap is the gap times the (a) share of the divergence cost. It is an
 
 **Since bundle A**: an accepted SET is checked too, not only each value (`held_out_check`: start against final on held-out places and books, on seeds nothing else read), at the end of a class's follow values, of the spells values, and for the whole table at the joint gate, which now plays with the accepted shared values (`final_sets`). New auto-decision kinds `held-out set` and `loot gate`.
 
-### 15.6 The SpellWorth skeleton (S11b), and what filling it needs
+### 15.6 The SpellWorth reader (S11b), as built, SHIPPED INERT
 
-`native/iaus/SpellWorth.h` and `SpellWorth.cpp`: the named table `struct SpellWorth` (24 fields, each a labelled placeholder), `SetSpellWorthKnob` and `GetSpellWorthKnob` over one name table, and `Estimate::SpellWorthOn(entry, target, snapshot, table, in) -> {known, effect, seconds, magicka}` with one function per term (cast seconds, channel seconds, area, a DoT over the foe's expected life, control, buff, ward and summon in the same unit, magicka against the fight). Every body is a TODO that answers "not known". Nothing calls it. It is in `native/CMakeLists.txt` and in the sim's build. Engine-free: standard headers and `iaus/Snapshot.h`.
+`native/iaus/SpellWorthTable.h` holds `struct SpellWorth` (27 fields, `sw.<field>`, a member `Tuning::spellWorth`; the names go through `SetTuningScalar` / the tuning file, `SetSpellWorthKnob` / `GetSpellWorthKnob` in `SpellWorth.cpp`). `native/iaus/SpellWorth.h/.cpp`: `Estimate::SpellWorthOn(entry, target, snapshot, table, in, concChannelSec) -> {known, effect, onTarget, seconds, magicka}` with one function per term (cast seconds, channel seconds, held seconds, area, DoT over the foe's life, control, buff, ward, summon, magicka share) and the one builder `Estimate::MakeSpellIn`. Pure: standard headers and `iaus/Snapshot.h`.
 
-One departure from 7.5: the claim-to-fire seconds are per cast FAMILY, not per engine row, because the pure code does not hold the row. `SpellEntry::engineRow` is on the list below.
+**Inert.** `sw.live` ships 0. `Generate.cpp` (`WorthOf`, `LiveBlend`, the Casts call sites) never calls the reader at 0 and every Facts number is today's, bit for bit; between 0 and 1 the reader is blended in where it KNOWS the cast, a cast it does not know keeps today's estimate at any value. Proof: the harness batch `SpellWorthReader` (every term pinned) and a main-against-branch all-class `--no-json` sim compare.
 
-What the Sonnet brief needs, precisely (the header's own list, items 1 to 5): the table as a member of `Tuning` and its names in `SetTuningScalar`. The names in `tuningfiles.py`, `Tune.h` and `SW_KNOBS`. The inputs the Snapshot lacks, each with its own reader: charge time, the DoT part apart from the direct part, the engine row, the summoned actor's base, what a buff adds and for how long, a ward's power, a foe's expected life, the fight's expected length. The call sites, all in `Generate.cpp Casts`. A harness batch that pins each term.
+**Two figures.** `effect` is the whole cast in the unit (area, bonus, magicka share), read as a rate. `onTarget` is what ONE target gets (resists and the DoT over his life; a heal uncapped) and is what `Facts::expDamage` / `expHeal` carry, so Overkill, the kill bonus and HealFit (the overheal brake) keep their meaning. **A stream is cut short** (`HeldSeconds`): at the foe's expected life (never under `foeLifeFloorSec`) and when the recipient is full; the same seconds go into its effect, cast time and magicka.
+
+**The inputs** (`Snapshot.h SpellEntry`, form data only): `Fills.cpp ReadSpellForm`, every kept spell of any nature: charge time, buff armor, the resists a buff adds (one row per AV), ward power (`Actuation::IsWardEffect`, the one ward test), summon unarmed damage, the benefit seconds. `Fills.cpp MeasureSpell` (offense, control, heal): DoT rate and seconds, the direct part. The foe's expected life and the fight's length are derived from the party's weapon damage on the foe (`FoeLifeSec`, `FightSec`: no engine read).
+
+**Which natures are live at `sw.live` > 0:** offense and heal through `SpellWorthOn`, control only its held seconds (`ControlHeldSec`). The buff, ward and summon branches have no `Generate.cpp` caller yet.
+
+**NOT READ (neutral, the term does not apply):** the summoned body's hit rate and health (summon stays not-known in the game), a weapon buff's added damage, `redundant` (the archetype already live on the target), the failure share of a row's claims, the magicka regen rate (counted 0). Each needs a new reader of engine state or a per-row field log, so they wait.
+
+**The sim**: `--set sw.<field>=` reaches `Tuning::spellWorth` (`Tune.h`, native's own names); `Policy.h FillSpellEstimate` fills chargeSec, the DoT split and the buff fields, so bolts and streams are known alike; `tune_driver.py SW_KNOBS` searches `sw.live` only, every other field is in `SW_NOT_SEARCHED` with its reason (ward power and the summoned body are not filled).
 
 ### 15.7 The tune's world, the commands, the cost
 
@@ -1516,6 +1524,8 @@ Conjurations are nearly all `TargetLocation`, and native and the lab both drop t
 `--spell-rules old` against `today`, seeds 1, 2, 3, 18 natural fights each, `--world v3 --books field`: 16.54 (se 6.5) against 23.03 (se 13.3) U per fight, same fights' difference +6.5 (se 10.2). Under 2 se: NOISE by the rule written beforehand. One fight (seed 1 fight 1, 47 to 220) carries it, and seeds 2 and 3 go down (10.2 to 1.2, 16.0 to 15.6). Cause: gate 256.5 to 361.2, weight 20.7 to 53.2, fact 20.6 to 0.0 U over the 18. The weight part (heal against heal 16.6 to 29.1, heal against offense 0 to 9.4) is the one to look at if a larger run ever shows a difference. The spell facts are no longer a cause.
 
 ### 16.6 Found, not fixed (native questions)
+
+**2026-11-24 `feat/placed-l1m1`: both answered.** Summons are IAUS candidates (M1), bolts are no walls (`fix/impact-hazard-shape`), and the lab's books are the game's: `Classify` calls native's own `Prune` rules from the extracted `placed` bits (count test `book_census.py`; `placed-spells-plan.md` section 11). The text below is the state before it.
 
 - **Conjurations never reach IAUS** (`iaus/Prune.h:93`, filled at `iaus/SpellBook.cpp:253`). By data: Vanilla 14 of 14 taught, Tuxborn 307 of 311, LoreRim 204 dropped. The design rule (iaus-design.md section 2) names "runes and other Target Location spells", and a summon is caught by the delivery. It has its own cast road, so the reason for the rule (where to put it) does not hold.
 - **`HasImpactHazard` (`cast/Archetype.cpp:214`) calls a missed bolt's burn mark a wall.** In Vanilla: Firebolt, Flames, Frostbite, Fireball, Ice Spike, Ice Storm, Incinerate, the Icy Spear, Expel / Banish / Command Daedra read shape Wall, and IAUS drops Wall as Placement. In lists whose spells carry a Script effect (Tuxborn and most of LoreRim) the shape is ScriptRider, tested first, so they are kept. The lab does not model this: it drops `TargetLocation` only, so its VANILLA world offers spells the game's IAUS would drop.

@@ -8,6 +8,20 @@ ClickUp 1dfcuabe2d3, review P1 of `feat/sim-v4-pretune` (`_agentlogs/mfo/review-
 Tags used below. FACT = read in code or disassembly, the source is named. FIELD = seen in a deck log. PRED = follows
 from the code but nobody has watched it run (principle 5). NEW = read for this plan today.
 
+## 0. Status and rulings (2026-11-24, branch `feat/placed-l1m1`)
+
+- **L1 built.** `Prune::IsPlacement` (`iaus/Prune.h`) is the one rule, `SpellBook.cpp StaticOf` fills it. The lab (`Data.h Classify`) now calls
+  `Prune::ClassifyNature`, `IsPlacement`, `StaticDrop` and the Magelight rule from extracted record bits (`extract_world.py placed_row`, joined by
+  `compile_world.py` as `placed`, `placedSchema` 2). A list without it is refused by the sim and by `tune_driver.py check_world`. Count test:
+  `tools/list_balance/book_census.py` (an independent derivation) and the `[spellbook]` lines of deck log 1123. Numbers in section 11.
+- **M1 built.** A summon is never a placement drop. No road change. F1 (the field look) is still the proof the claim fires.
+- **D2 ruled (marth: "Block them for now") and built.** The AI picks no Self, fire-and-forget, hostile AREA spell until M2 and M4 land
+  (`Prune::IsSelfBlastPlacement`, own reason `Drop::SelfBlast`). Gambit roads unchanged. It covers nature Control as well as Offense: Fire Storm and Frost
+  Nova carry a fear / paralysis rider, so their nature is Control and the older rule never caught Fire Storm. It also covers a caster-centred hazard whose
+  spell is hostile (Blizzard). The Teach Spells page lists such a tome greyed, with the reason.
+- **D1 ruled: APPROVED, NOT BUILT.** A rune-only exception for a perform call at release (package H2, after the tune). It becomes a Harbinger
+  INVARIANTS #0 amendment when H2 is built, not before.
+
 ## 1. The problem in one paragraph
 
 `iaus/SpellBook.cpp:253` sets `StaticIn::targetLocation` for five different things and `Prune::StaticDrop` drops all
@@ -273,10 +287,10 @@ The lab book must equal the game book first (L1). On top of that, these rows are
 | Runes (Target Location with a projectile), every nature | nothing is placed, no lab model (MFO-B864) | H2 + M6 |
 | Location bursts | lands at the hand | H1 + M5 |
 | Walls (`IsWallShape`): Vanilla Wall of Flames, Frost, Storms. Tuxborn 6 and LoreRim 5 no-script impact rows | native drops them today, hazard value is untested in game | M3 field-run |
-| Self blasts with an impact hazard: Fire Storm 07A82B, LoreRim `REQ_Destruction5_Fire_RitualSelfExp`, `REQ_Destruction4_Fire_SelfExp`, `JRWeakFireStorm`, `NecroLichFireStorm` | no animated road | M4 |
-| Self blasts without an impact hazard (Frost Nova, Warstomp shapes) | kept by native today, unanimated and unguarded. Decision D2 drops them. If D2 is "keep", the tune still must not accept their rows | M2 + M4 |
-| Both-hands summons (thralls, Dead Thrall) and Reanimate | S9 / C3 and card C5, not this plan | their own cards |
-| `cast_summon` and the Summon family rows for conjurer and warlock, and Vanilla in `--worlds` for caster cells | only if M1 is not merged (and, under D3 option B, not field-seen) | M1 (+ F1) |
+| Self blasts: every Self, fire-and-forget hostile area spell (`Drop::SelfBlast`; counts in section 11) | blocked by ruling D2, so no book holds one. Nothing about them may be concluded | M2 + M4 |
+| Both-hands summons (the thralls) | CANDIDATES since M1, but the claim is filed on LEFT with one hand prepared (`BuffClaim`, `Loadout::Prepare`) and no both-hands cast under a claim was ever seen (S9 [pred]). Their rows stay out | S9 / C3 |
+| Reanimate (Dead Thrall) | card C5, not this plan | its own card |
+| `cast_summon` and the Summon family rows for conjurer and warlock, and Vanilla in `--worlds` for caster cells | M1 is built. Under D3 option B they stay excluded until F1 has seen a claimed summon fire | F1 |
 | Summon spawn point and any score that depends on where the creature stands | the lab's 150 units is a MODEL, the engine's rule is 2.2 | L1 item 7 |
 
 With M1 in, the claim-to-fire share for the Summon row comes from the generic delivery table. That is an ASSUMPTION and
@@ -296,11 +310,11 @@ is labelled so until F1 gives real windows.
 
 ## 9. Decisions for marth
 
-1. **D1, the rune amendment.** Runes can only land if Harbinger completes the AI's own animated cast at its release with
+1. **D1, the rune amendment. RULED: approved as a rune-only exception, not built (H2, after the tune).** Runes can only land if Harbinger completes the AI's own animated cast at its release with
    the engine's launcher and a ground pick. That is a perform call, outside INVARIANTS #0 as written. Recommendation:
    yes, as a narrow amendment (only on a cast the AI already chose and animated, only the declared point, once). It is
    the last package, so nothing waits on this today.
-2. **D2, Frost Nova until its road exists.** Today it is kept, goes out unanimated, and can hit townsfolk. Both break
+2. **D2, Frost Nova until its road exists. RULED: "Block them for now" (built, section 0).** Today it is kept, goes out unanimated, and can hit townsfolk. Both break
    standing rulings. Recommendation: widen the interim rule to every Self, FF, hostile area spell (drop it, labelled
    interim) until M2 and M4 land, then delete the rule. The other choice is to keep it and accept both defects for now.
 3. **D3, when the tune may start.** Option A: after L1 and M1 are merged and reviewed, with the summon delivery share
@@ -316,3 +330,29 @@ is labelled so until F1 gives real windows.
 section 2, Harbinger `native/APMF_API.h` (`kCastFlag_AtPosition`), `Docs/ADDRESS-TABLE-2026-09-15.md` addendum 09-23,
 `Docs/INVARIANTS.md` #0 (e), origin/main `MAP.md` placement entries, `_research/animated-point-cast-2026-09-23`, the two
 review logs, deck logs 1117f to 1123, and `binaries/1.6.1170` for 2.2.
+
+## 11. L1 / M1 / D2 counts (taught spells, `book_census.py`)
+
+| List | Taught | Summon kept (before -> after) | Placement dropped (before -> after) | of the rest: runes / bursts / walls (by shape; scripted ones are named for their script) | Self blast blocked (interim) | Offense / Control kept after |
+|---|---|---|---|---|---|---|
+| Vanilla | 110 | 0 -> 14 | 23 -> 9 | 6 / 0 / 3 | 7 (Blizzard, Fire Storm, Mass Paralysis, Hysteria, Harmony, Mayhem, Bane of the Undead) | 12 / 21 |
+| Tuxborn | 1242 | 4 -> 311 | 380 -> 67 | 45 / 4 / 0, scripted 18 | 49 | 371 / 34 |
+| LoreRim | 1065 | 20 -> 224 | 270 -> 60 | 3 / 7 / 1, scripted 49 | 62 | 321 / 61 |
+
+"Before" is main's rule (L1, behaviour identical). The lab kept Vanilla's 3 walls and Fire Storm before L1: that is the L1 change. 0 of 2417 verdicts and 0
+natures differ between `book_census.py` and the lab, after L1, after M1 and after D2. Deck log 1123 (Tuxborn): 36 dropped spells named, 33 resolve to one
+taught spell, 0 differ from L1's lab verdict. Blocked although their own flags say Buff (only the spawned hazard's spell is hostile): Tuxborn `MAG_Blizzard`,
+the Apocalypse circles, `WB_A100_TalonsOfNirn_Spell_PC`, `ArnimaCircleMaraSpellDark`. LoreRim: the same circles and Talons, `_LIP_Sanctuary`, `_K01_StormZone`,
+`TVR_Cleric_D050_Spell_ConsecratedGround`, `TVR_Cleric_D100_Spell_StormOfVengeance`, `TVR_Shadow_D100_Spell_DrainingMist`. A hostile effect on a townsman is a crime
+whatever the caster calls it. The hazard arm cannot tell a circle from Blizzard: both are a benign Spawn
+Hazard whose spell carries hostile effects; conditions are not read (Circle of Strength absorbs stamina, Glory and the Moons absorb, Talons of Nirn, Sanctuary and
+Consecrated Ground damage). A circle stays only if marth rules that a harm other than health is allowed, and Sanctuary / Consecrated Ground not even then.
+
+**Review F4 (2026-11-24, after the table above): the rule is per effect and reads the hostile FLAG** (`Prune::HostileAreaEffect`: hostile flag AND its own EFIT
+area, impact hazard or payload explosion; nature Offense / Control only, or a hostile hazard). Blocked: Vanilla 7 -> 6, Tuxborn 49 -> 42, LoreRim 62 -> 57.
+Released and candidates: Vanilla `Harmony`. Tuxborn `MAG_Harmony`, `XWB_R075_HallowedWeapon_Spell_PC`. LoreRim `WB_I000_DispelMagic_Spell_PC`,
+`WB_I075_Vanish_Spell_PC`, `XWB_R075_HallowedWeapon_Spell_PC`, `_BL_MassInhibition`. Released, then dropped as script-only: Tuxborn Dispel Magic, Vanish,
+Bone Storm, Entanglement, Devastating Corpse Explosion. LoreRim Bone Storm. Still blocked because conditions are not read: Bane of the Undead, Turn
+(undead only), `MAG_CircleofProtection` (a hostile flagged 50 ft effect beside the benign hazard).
+**Review F1:** a summon the claim road can never serve (`SummonClaimUnservedWhy`) is `Drop::Unanimated`: Tuxborn and Vanilla none, LoreRim 3 (FylgjaWind,
+FylgjaSun, Pride of Hirstaang), so LoreRim summons kept = 221. Conjure Staada is served (Spawn Scripted Ref has no caster row, so one row, Summon).
