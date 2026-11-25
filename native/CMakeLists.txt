@@ -87,6 +87,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/Hands.cpp
     cast/HealRoad.cpp
     cast/Unanimated.cpp
+    cast/PartyGap.cpp
     cast/SubstrateRoad.cpp
     Scheduler.cpp
     scheduler/CombatScan.cpp

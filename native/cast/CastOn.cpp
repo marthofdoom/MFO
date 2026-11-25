@@ -147,10 +147,11 @@ namespace MFO::Actuation {
         // standing, a dry run that could not answer) return false: the route runs exactly as before.
         bool HarbingerWouldRefuse(RE::FormID a_follower, const char* a_what, RE::FormID a_spell,
                                   RE::FormID a_target, std::int32_t a_apmfHand, bool a_conc,
-                                  std::uint32_t a_stopPct, bool a_heal, bool a_healDual, const char* a_hand) {
+                                  std::uint32_t a_stopPct, bool a_heal, bool a_healDual, const char* a_hand,
+                                  bool a_fireOnce = false) {
             std::string why;
             if (APMFBridge::CanServeCast(a_follower, a_spell, a_target, a_apmfHand, a_conc, a_stopPct,
-                                         a_heal, a_healDual, &why) != APMFBridge::ServeAnswer::Refused)
+                                         a_heal, a_healDual, &why, a_fireOnce) != APMFBridge::ServeAnswer::Refused)
                 return false;
             if (!ApmfRefusalThrottled(a_follower, a_spell, a_target, std::chrono::steady_clock::now(),
                                       g_lastServeRefusal))
@@ -979,24 +980,13 @@ namespace MFO::Actuation {
                 // no-op tick.
                 // A6 (field 1117, Jesper 10:25:03-08 and 10:27:43-50: 21 UNANIMATED self-stream buffs cast with his own combat
                 // off, 2000-5000 u from the fight). A Buff-kind spell in the combat table with NO combat controller would
-                // take CastSelfDirect's unanimated road (animations are required for ALL actions). It is DEFERRED instead:
-                // transparent, the rules below run, and the buff is asked again every lap until his own combat starts and
-                // the controller is live (the claim road then serves it). ONLY the DirectNoCombat answer defers: a shape
-                // the claim road can never serve (no seat / row, Harbinger absent) keeps its declared direct road.
-                if (buffKind && g_firingRule != kNoRule) {
-                    const char* roadWhy = nullptr;
-                    if (ChooseBuffRoad(a_follower, spell, /*a_log=*/false, nullptr, &roadWhy) == BuffRoad::DirectNoCombat) {
-                        static std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> s_deferLog;   // worker-serial
-                        const auto now = std::chrono::steady_clock::now();
-                        auto& at = s_deferLog[(static_cast<std::uint64_t>(id) << 32) | a_spellID];
-                        if (at == std::chrono::steady_clock::time_point{} || now - at >= std::chrono::seconds(15)) {
-                            at = now;
-                            spdlog::info("[buff] {:08X} self-buff {:08X} DEFERRED -- no combat controller yet (his own combat "
-                                         "is off): the animated claim road needs it, never the unanimated direct cast", id, a_spellID);
-                        }
-                        return { Result::NoOp, "self-buff deferred: no combat controller (animated road only)", true };
-                    }
-                }
+                // take CastSelfDirect's unanimated road (animations are required for ALL actions). It is HELD instead
+                // (anim-residue plan A1, cast/PartyGap.cpp: the one reader every direct site shares): transparent, the rules
+                // below run, and the buff is asked again every lap until his own combat starts and the controller is live (the
+                // claim road then serves it). ONLY the DirectNoCombat answer holds: a shape the claim road can never serve (no
+                // seat / row, Harbinger absent) keeps its declared direct road.
+                if (buffKind && HoldOwnControllerOnlyGap(a_follower, spell, nullptr, "cast-on self"))
+                    return { Result::NoOp, "self-buff held: party fight, no combat controller (animated road only)", true };
                 if (BuffUpTransparent(a_follower, spell))   // F2: BEFORE the preempt (cast/BuffRoad.cpp)
                     return { Result::NoOp, "self-buff already up (or its read is pending)", true };
                 // A LIVE FIRE-AND-FORGET STREAM OF THIS SPELL ALREADY HOLDS ITS CLAIM: this lap neither preempts nor locks unless the beat
@@ -1083,7 +1073,8 @@ namespace MFO::Actuation {
                                                    : BuffCorpseTarget(a_follower, spell, buffCorpse),
                                          APMFBridge::kApmfHandLeft,
                                          spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration,
-                                         /*stopPct=*/0, /*heal=*/false, /*healDual=*/false, "left"))
+                                         /*stopPct=*/0, /*heal=*/false, /*healDual=*/false, "left",
+                                         BuffClaimFireOnce(spell, buffRecip != nullptr)))
                     return { Result::FailedOther, "Harbinger would refuse the buff claim (incumbent kept)", true };
                 commitPreempt();   // the claim happens inside BuffClaim
                 if (BuffClaim(a_follower, spell, buffRecip, buffCorpse) == SelfCast::Applied) {
@@ -1092,6 +1083,13 @@ namespace MFO::Actuation {
                 }
                 return { Result::FailedOther, "buff claim could not be made", true };
             }
+
+            // THE PARTY-FIGHT GAP HOLD, ally fork (anim-residue plan A1, cast/PartyGap.cpp): a Buff-kind spell at an ally / the player
+            // whose only missing gate is his own controller is not cast on the direct stream below (target-stream, or the concentration claim's own
+            // road: PartyGap::OnlyGate holds a concentration cast whose claim gates are open). Transparent, asked again every lap. A heal never reaches this (buffKind excludes it: D1).
+            if (buffKind && a_target && a_target != a_follower && g_firingRule != kNoRule &&
+                HoldOwnControllerOnlyGap(a_follower, spell, buffRecip, "cast-on ally"))
+                return { Result::NoOp, "buff held: party fight, no combat controller (animated road only)", true };
 
             // CONCENTRATION forks off HERE -- after the range and competence
             // gates (a stream obeys §5.3 and #68 like any cast), BEFORE the

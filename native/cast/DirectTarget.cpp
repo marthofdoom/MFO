@@ -268,6 +268,9 @@ namespace MFO::Actuation {
         // EVERYTHING PAST HERE IS THE DIRECT TARGET STREAM (CastSpellImmediate onto the target, no hand animation),
         // which RestorationCastDirect and ConcentrationCast also end in. On the combat table that is the residue the
         // field log must name (substrate S1, cast/Unanimated.cpp).
+        // anim-residue plan A1 backstop (see CastSelfDirect's twin): a Buff-kind cast whose only missing gate is his own controller
+        // is held, never streamed unanimated. Declined is the transparent no-cast.
+        if (HoldOwnControllerOnlyGap(a_follower, a_spell, a_target, "target-stream")) return SelfCast::Declined;
         NoteUnanimatedRoadWhy(a_follower, "target-stream", a_spell, a_target);
 
         const auto now = SelfClock::now();

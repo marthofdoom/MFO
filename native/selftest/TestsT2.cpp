@@ -78,6 +78,7 @@ namespace MFO::SelfTest {
                 add("ch.32-aversion", 41, Installed(d), std::format("CanServe verdict {} refusal {} '{}'", d.verdict, d.refusal, d.why));
             }
             add("ch.8b-reanimate-corpse(G7)", 42, APMFBridge::CorpseTargetSupported(), {});
+            add("ch.8b-fire-once(A2)", 47, APMFBridge::FireOnceSupported(), "castSeats lacks kCastSeat_FireOnce, or [CastSeats] EnableFireOnce=0");
             {
                 // ch.33 REQUIRES a TESCombatStyle form (APMF_API.h kIntent_CombatStyle): ask with the follower's own base combat style, so a
                 // BadRequest cannot masquerade as "installed". No style on his base = not judged (INFO), never a pass.

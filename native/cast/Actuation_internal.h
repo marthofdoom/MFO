@@ -599,6 +599,17 @@ namespace MFO::Actuation {
         // the road choosers it asks must not run for an out-of-combat caller (MFO-B173).
         void NoteUnanimatedRoadWhy(RE::Actor* a_follower, const char* a_road, RE::SpellItem* a_spell,
                                    RE::Actor* a_recipient, const char* a_prefix = nullptr);
+        // THE PARTY-FIGHT GAP HOLD (anim-residue plan A1, cast/PartyGap.cpp). OwnControllerOnlyGap: a NON-HEAL (Buff-kind) cast on the
+        // combat table whose ONLY missing gate is his own CombatController (ChooseBuffRoad answers DirectNoCombat, its last test,
+        // or a concentration cast whose claim road needs only the controller: PartyGap::OnlyGate); log-free (no log; ChooseBuffRoad
+        // still erases g_neverFired on DirectNoCombat). HoldOwnControllerOnlyGap: the same, plus one rate-limited `[cast-hold]` line per (follower, spell, site);
+        // true = the caller makes NO direct cast this lap and returns a transparent no-op (asked again every lap, latches nothing).
+        // Heals are never held (they keep the instant road, plan decision D1). a_recipient: null / the follower = self.
+        bool OwnControllerOnlyGap(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient);
+        bool HoldOwnControllerOnlyGap(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient, const char* a_site);
+        // ABI v47: would the buff claim of a_spell at a_other (null / the follower = self) be filed fire-once? (BuffFireOnce on the
+        // archetype ChooseBuffRoad and BuffClaim classify; false for a non-Buff spell.) The substrate open and the dry run ask it too.
+        bool BuffClaimFireOnce(RE::SpellItem* a_spell, bool a_other);
         // a_corpse (CARD G7): the corpse a Reanimate rule's selector chose (cond.corpse_within), else null. With
         // Harbinger ABI >= 42 (APMFBridge::CorpseTargetSupported) the claim's target is that corpse (the bridge sets
         // kCastFlag_CorpseTarget) and the never-fired / fired sets are keyed by the CORPSE, so one corpse the engine

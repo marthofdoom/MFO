@@ -90,10 +90,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v46, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v47, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 46;
+    inline constexpr std::uint32_t kABIVersion = 47;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -1576,6 +1576,17 @@ namespace APMF_API {
                                              //   kCastFlag_DenyHandOnly. An APMF older than v42 IGNORES the bit
                                              //   and the engine picks its own corpse: gate on abiVersion >= 42.
                                              //   See "ABI v42: CORPSE TARGET" at the end of this header.
+
+        kCastFlag_FireOnce      = 1u << 17,  // ABI v47. This claim casts AT MOST ONCE, on any caster type. The
+                                             //   start seat answers NO while an effect of the claim's driven form
+                                             //   (the delivery proxy when one was minted) is on the claim's
+                                             //   target, while either hand is casting that form, and for good
+                                             //   once a cast the claim asked for has fired. RequestCast only.
+                                             //   REFUSED (kInvalidHandle, logged) when not installed, with
+                                             //   kCastFlag_DenyHandOnly, and on RequestEx. An APMF older than v47
+                                             //   IGNORES the bit and the claim repeats: gate on abiVersion >= 47
+                                             //   and kCastSeat_FireOnce. See "ABI v47: FIRE ONCE" at the end of
+                                             //   this header.
     };
 
     // Build the bits 8-15 stop-percent field for CastFlags (see above). `pct` is a
@@ -2959,7 +2970,8 @@ namespace APMF_API {
     // Why did Harbinger end a claim? A client that sees IsClaimLive go false reads this to tell an engagement
     // Harbinger dropped as NOT ENGAGED (out of the engage range, or no path progress: the actor's combat is
     // ended too, marth 2026-10-27, so the client gives that target up) from one the engine ended or refused.
-    // Only the ch.20 and ch.21 claims Harbinger ends ITSELF get a reason. A claim the client released, one an
+    // Only the ch.20 and ch.21 claims Harbinger ends ITSELF get a reason (and, from v47, a FIRED
+    // kCastFlag_FireOnce claim: kClaimEnd_Fired). A claim the client released, one an
     // unload or a load dropped, and every other intent read kClaimEnd_None. A save load or a new game drops
     // every record. Not saved. APPEND-ONLY: never renumber.
     // See Docs/APMF_API-REFERENCE.md#abi-v31-claim-end-reason
@@ -2981,6 +2993,9 @@ namespace APMF_API {
         kClaimEnd_TargetLost     = 10,  // ch.20, only with [EngagementHold] bEngagementHold=0 or no knowledge seats:
                                         //   the engine lost the target
         kClaimEnd_NotATarget     = 11,  // ch.20: the target left the actor's combat group targets after it was one
+        kClaimEnd_Fired          = 12,  // v47, ch.8b kCastFlag_FireOnce only: the claim's one cast has fired. Readable
+                                        //   as soon as it fires, WHILE the claim still stands (it ends by Release or
+                                        //   its deadline, which Repoint no longer moves)
     };
 
     // The v31 interface: APMF_API_v29's members verbatim (prefix EXTENSION; v30 added no slot), then ONE
@@ -3913,7 +3928,40 @@ namespace APMF_API {
         kCastSeat_Reanimate    = 1u << 14,   // the ABI v42 corpse seat is installed
         kCastSeat_TypeEquip    = 1u << 16,   // v46: the equip-condition admission for bits 10..13 is installed
         kCastSeat_SkillGate    = 1u << 17,   // v46: the minimum-skill admission is installed
+        kCastSeat_FireOnce     = 1u << 18,   // v47: kCastFlag_FireOnce is served (on the rows whose own bit is set)
     };
+
+    // ---- ABI v47: FIRE ONCE (kCastFlag_FireOnce, kIntent_Cast) ---------------------------------------------
+    // No new slot and no layout change: one cast flag, one CastSeatCoverage bit, one ClaimEndReason. The
+    // interface object stays an APMF_API_v38 and `abiVersion` reports 47.
+    // WHY. Some caster types bound themselves by an active effect (Armor, Light, Script ...), Restore, Offensive
+    // and Disarm do not: a claim there is repeated every hand cycle, which is right for a heal and wrong for a
+    // spell whose effects map to several rows (Script + Restore). With this bit the bound belongs to the CLAIM,
+    // whatever caster type the engine builds.
+    // THE START SEAT (0x06) answers NO for such a claim when any of these holds, and is otherwise unchanged:
+    //   * an effect of the claim's driven form (the delivery proxy when one was minted, else the spell) is active on
+    //     the claim's target (on the caster for Summon / BoundItem), on EVERY row (never read for a concentration
+    //     spell, as in the engine). An effect left by the original spell or by another proxy (the other hand's, or
+    //     an earlier one) is NOT seen;
+    //   * either hand of the actor is casting the claim's driven form right now;
+    //   * a cast the claim asked for has fired: the actor's TESSpellCastEvent for the driven form after a start
+    //     seat YES for this handle. FINAL for the handle. A concentration spell fires when its channel starts; its
+    //     running channel is not cut.
+    // An INTERRUPTED cast raises no event, so the claim may start again. A cast of the same spell the claim never
+    // asked for (one begun before the claim) is not the claim's fire. MagicCaster::CastSpellImmediate raises no
+    // event, so a client's direct cast by it never counts, before or after a YES.
+    // AFTER THE FIRE the claim still stands (its hand stays denied to other spells, its spell may stay equipped)
+    // until Release or its deadline. Repoint still updates it but no longer moves the deadline.
+    // GetClaimEndReason(handle) reads kClaimEnd_Fired from that moment (also when the claim's deadline passed while
+    // its cast was still in the hand). To cast again: Release, then a new
+    // RequestCast. The flags are fixed at RequestCast; Repoint cannot add or clear the bit.
+    // NOT FOR A REPEATING HEAL: the claim would cast it once (logged when a Restore caster meets the bit).
+    // Two FireOnce claims of one actor with the same DRIVEN form, one per hand, count as the better one. When
+    // proxies are minted each hand has its own, so the driven forms differ: the claims cast once EACH and the
+    // either-hand read does not see the other hand's proxy. A client that wants one cast files ONE claim.
+    // A Reanimate spell is served only with kCastFlag_CorpseTarget. A row whose coverage bit is clear, or a seat
+    // whose facet another source outranks, keeps the engine's own answers: the bit does nothing there.
+    // SERVED when APMF_ServeInfo::castSeats has kCastSeat_FireOnce ([CastSeats] EnableFireOnce, default 1).
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the
     // base type; a client that asked for ABI >= N checks p->abiVersion and casts up

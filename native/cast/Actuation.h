@@ -939,6 +939,10 @@ namespace MFO::Actuation {
     // cannot disagree. Each returns the reason literal, or nullptr when the case does not apply.
     bool        ExplicitSelfBuff(RE::SpellItem* a_spell);
     const char* BuffAmbiguousRowWhy(const SpellArchetype& a_arch);
+    // ABI v47 (anim-residue plan A2): THE one place that decides a buff claim is FIRE-ONCE (kCastFlag_FireOnce: the claim's own
+    // bound, so an ambiguous row Harbinger does not bound can be claimed). True only for a spell BuffAmbiguousRowWhy would have
+    // refused, fire-and-forget, with Harbinger serving the flag and every candidate row's own seat bit. See cast/BuffRoad.cpp.
+    bool BuffFireOnce(const SpellArchetype& a_arch);
     // Why ChooseBuffRoad can NEVER answer Claim for this summon, by its record alone (nullptr = it can). Its own tests. IAUS drops such a summon
     // (iaus/SpellBook.cpp, the animation rule); the gambit picker does not read it. a_arch = ClassifyArchetype(a_spell). Pure form data, any thread.
     const char* SummonClaimUnservedWhy(RE::SpellItem* a_spell, const SpellArchetype& a_arch);

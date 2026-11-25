@@ -273,7 +273,7 @@ namespace MFO::APMFBridge {
                                                           RE::FormID wantSpell, RE::FormID wantTarget,
                                                           std::int32_t wantHand, bool wantConc,
                                                           std::uint32_t wantStopPct, bool wantDenyOnly,
-                                                          bool wantFullFloor, bool& ownLos) {
+                                                          bool wantFullFloor, bool wantFireOnce, bool& ownLos) {
             APMF_API::APMF_CastRequest req{};
             req.spell  = wantSpell;
             req.proxy  = 0;   // APMF mints its own delivery-flip proxy for kSelf-delivery (core/CastProxy.h)
@@ -317,6 +317,11 @@ namespace MFO::APMFBridge {
             const bool corpse = !wantDenyOnly && wantTarget != 0 && wantTarget != follower &&
                                 api->abiVersion >= kCorpseTargetAbi && ReanimateSpell(wantSpell);
             if (corpse) req.flags |= APMF_API::kCastFlag_CorpseTarget;
+            // FIRE ONCE (ABI v47, APMF_API.h kCastFlag_FireOnce, anim-residue plan A2): the claim casts at most once on any caster
+            // type. RequestCast only (this builder is the RequestCast one), never a deny-only floor (Harbinger refuses the pair).
+            // The CALLER decides (cast/BuffRoad.cpp BuffFireOnce, the one place); this only writes the bit, and only on an
+            // APMF that reads it (an older one ignores it and the claim would repeat: ClaimOffenseCast refuses that case).
+            if (wantFireOnce && !wantDenyOnly && api->abiVersion >= kFireOnceAbi) req.flags |= APMF_API::kCastFlag_FireOnce;
             // Never with a corpse claim: the Reanimate caster's seats do not read it, and Harbinger would
             // measure rays at a corpse for nothing (and refuse the request while its service is disarmed).
             ownLos = !wantDenyOnly && !corpse && wantTarget != 0 && wantTarget != follower &&
@@ -359,7 +364,7 @@ namespace MFO::APMFBridge {
         void EnsureCastClaimLocked(const APMF_API::APMF_API_v5* api, RE::FormID follower,
                                    CastClaim& c, RE::FormID wantSpell, RE::FormID wantTarget,
                                    std::int32_t wantHand, bool wantConc, std::uint32_t wantStopPct,
-                                   bool wantDenyOnly, bool wantFullFloor) {
+                                   bool wantDenyOnly, bool wantFullFloor, bool wantFireOnce) {
             // Which of the two per-follower log-throttle slots this claim uses --
             // see g_lastNeverLiveWarn's comment for why a floor and a driving
             // claim must never share one.
@@ -371,7 +376,7 @@ namespace MFO::APMFBridge {
             if (c.handle != APMF_API::kInvalidHandle && c.spell == wantSpell &&
                 c.target == wantTarget && c.hand == wantHand &&
                 c.conc == wantConc && c.stopPct == wantStopPct &&
-                c.denyOnly == wantDenyOnly && c.fullFloor == wantFullFloor) {
+                c.denyOnly == wantDenyOnly && c.fullFloor == wantFullFloor && c.fireOnce == wantFireOnce) {
                 // ABI v6 (cast-claim observability, 2026-09-06): do NOT trust a
                 // stored handle blindly on the unchanged fast path -- APMF
                 // auto-expires a claim at its own TTL with no notice to the
@@ -587,10 +592,22 @@ namespace MFO::APMFBridge {
             if (c.handle != APMF_API::kInvalidHandle) { api->Release(c.handle); c.handle = APMF_API::kInvalidHandle; }
             // The request is built by BuildCastRequestLocked (above), the ONE builder the ABI v35 dry run
             // (CanServeCast, MFO-B2) shares, so the shape it asks about is the shape filed here.
+            // A FIRE-ONCE claim on a Reanimate spell needs kCastFlag_CorpseTarget too (APMF_API.h "ABI v47"): without it
+            // Harbinger keeps the engine's own answers and the claim would repeat. The chooser never asks for it
+            // (SeatRows::FireOnceServed with no corpse claim); this is the net under it, fail closed, loudly.
+            if (wantFireOnce && ReanimateSpell(wantSpell) &&
+                !(wantTarget != 0 && wantTarget != follower && api->abiVersion >= kCorpseTargetAbi)) {
+                static std::atomic<bool> s_warnedReanimate{ false };
+                if (!s_warnedReanimate.exchange(true))
+                    spdlog::warn("[apmf] {:08X} fire-once claim of Reanimate spell {:08X} without a corpse target: refused here "
+                                 "(Harbinger serves it only with kCastFlag_CorpseTarget). Logged once per session.", follower, wantSpell);
+                c = CastClaim{};
+                return;
+            }
             bool ownLos = false;
             APMF_API::APMF_CastRequest req = BuildCastRequestLocked(api, follower, wantSpell, wantTarget, wantHand,
                                                                     wantConc, wantStopPct, wantDenyOnly,
-                                                                    wantFullFloor, ownLos);
+                                                                    wantFullFloor, wantFireOnce, ownLos);
             const bool wantDual = (wantHand == kApmfHandDualCast);   // the [cfc] log below
             c.handle = api->RequestCast(follower, kOwnBasis, &req);
             if (ownLos && c.handle == APMF_API::kInvalidHandle) {
@@ -630,6 +647,7 @@ namespace MFO::APMFBridge {
                 c.conc  = wantConc;  c.stopPct = wantStopPct;
                 c.denyOnly = wantDenyOnly;
                 c.fullFloor = wantFullFloor;
+                c.fireOnce  = wantFireOnce;
                 // Fable SEV-1 (2026-09-06): the claim's AGE clock, stamped HERE
                 // and only here -- this is the single point where a NEW handle
                 // comes into existence. The unchanged-and-still-live fast path
@@ -688,7 +706,7 @@ namespace MFO::APMFBridge {
     // refusal (Unknown: the caller proceeds as it did before v35).
     ServeAnswer CanServeCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
                              std::int32_t a_hand, bool a_concentration, std::uint32_t a_stopPct,
-                             bool a_heal, bool a_healDual, std::string* a_why) {
+                             bool a_heal, bool a_healDual, std::string* a_why, bool a_fireOnce) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
         // The claim calls' own non-arbitration early returns (ClaimOffenseCast / ClaimHealCast): a claim that
         // would not be asked for at all is not Harbinger's answer to give.
@@ -710,14 +728,14 @@ namespace MFO::APMFBridge {
             const CastClaim& c = a_heal ? it->second.heal[slot] : it->second.offense[slot];
             if (c.handle != APMF_API::kInvalidHandle && c.spell == a_spell && c.target == a_target &&
                 c.hand == hand && c.conc == a_concentration && c.stopPct == a_stopPct &&
-                !c.denyOnly && !c.fullFloor)
+                !c.denyOnly && !c.fullFloor && c.fireOnce == (a_fireOnce && !a_heal))
                 return ServeAnswer::Unknown;
         }
         bool ownLos = false;
         APMF_API::APMF_CastRequest req = BuildCastRequestLocked(v5, a_follower, a_spell, a_target, hand,
                                                                 a_concentration, a_stopPct,
                                                                 /*wantDenyOnly=*/false, /*wantFullFloor=*/false,
-                                                                ownLos);
+                                                                a_fireOnce && !a_heal, ownLos);
         const auto ask = [&](APMF_API::APMF_ServeInfo& a_info) {
             APMF_API::APMF_ServeQuery q{};
             q.size  = sizeof(APMF_API::APMF_ServeQuery);
