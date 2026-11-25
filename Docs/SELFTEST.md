@@ -206,3 +206,10 @@ The same dev DLL can put a follower into a class by hand: `[Debug] sDevClassEqui
 * Runs on the pump worker from `SelfTest::Tick` (`Runner.cpp`, `DevClassEquipTick`), once per entry per game load, as soon as the follower is a live managed follower and `Classes::Active()`. `ClearAll` (every load) re-arms it.
 * It unlocks with `SetUnlocked`, equips through `Classes::EquipClass` (card C12, the road the board card C10 will use, so the class's default or remembered gambit tables are laid down too and `[classes] ... -> <class> -- combat table ...` lines follow), and levels with `ApplyLevel`. Several entries for ONE follower apply in order in the same tick, which walks a class switch (for example `Lydia|...:knight:1,Lydia|...:warrior:1,Lydia|...:knight:1`). Log lines (all WARN): `[classes] DEV equip ...`.
 * A release DLL has no `sDevClassEquip`, no `DevClassEquipTick` and no `[classes] DEV equip` string.
+
+## Animation tests and runner bounds (2026-11-24)
+* `selftest/TestsAnim.cpp`: `anim.summon_iaus`, `anim.fire_once`, `anim.party_gap`, `anim.party_gap_conc`, `anim.blocked_blast`, `anim.summon_gambit`, `anim.session` (last). Line: `[anim] RESULT <id>: PASS|FAIL|SKIP|INFO`. They read MFO's own log lines through a dev log tap installed in `SetupLog`.
+* A test that RETRYs 3 times in a session is closed as SKIP (kept as INFO). Town and already-fighting refusals never count. Spawned foe health on try 1 / 2 / 3: 1500 / 6000 / 20000.
+* A run with temp rows switches the follower's Sentient AI OFF for the run (an IAUS follower reads no row); a mid-run save writes his own value (`SavedIaus`).
+* A hostile that cannot be deleted for 30 s (100 s after a load): one ERROR, a corner message, no new test until a load. Never force-deleted.
+* `selftest/NavSpots.cpp` `WalkPoints`: navmesh points by walked distance (main thread), for the cover and flank legs.
