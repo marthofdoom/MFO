@@ -79,6 +79,10 @@ namespace MFO::Iaus::Prune {
         if (a_claim && a_selfCasts) return SummonGo::Claim;
         return (!a_iausPick || a_degrade) ? SummonGo::OneShot : SummonGo::Defer;
     }
+    // DOES A SUMMON RULE HOLD A CAST CHANNEL THIS LAP (field 11-24c, fix/summon-claim)? Only on the claim road (a hand, a claim, a lock): the scan's isCast
+    // and the IAUS cast family count it then, so the claim is not released the millisecond it is filed. The one-shot road (Harbinger absent) and a deferred
+    // pick hold nothing and stay out, exactly as before.
+    [[nodiscard]] inline bool SummonHoldsCastChannel(bool a_claim, bool a_selfCasts) { return SummonRoadFor(false, a_claim, false, a_selfCasts) == SummonGo::Claim; }
 
     // ── Placed spells (placed-spells-plan.md L1) ─────────────────────────────────────────────────────────
     // "Is this a placed spell IAUS does not offer?" THE ONE RULE: iaus/SpellBook.cpp fills the input from the engine's records, the lab
