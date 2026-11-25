@@ -3026,6 +3026,7 @@ namespace {
             // THE BYSTANDERS (townsfolk, guards ...): radius + body + margin, centred on HIM, not on the foe
             Snapshot b = s; b.areaPicture = AreaPicture::Ready;
             const float edge = 700.0f + Estimate::kFireBodyPad + kAreaGuard.safetyMargin;
+            Check(kAreaGuard.safetyMargin > 0.0f && Estimate::kFireBodyPad > 0.0f, "M4: the cast moment's margin and the body term are positive (a body past the nominal radius is hit; mutation: margin 0)");
             b.areaActors = { person(-(edge - 1.0f), 0.0f) };
             const Candidate by = find(b);
             Check(!by.f.areaGuardOk && score(by) == 0.0f && by.f.hasArea, "M4: a bystander just inside radius + body + margin of HIM closes the blast (the spell stays a candidate)");
