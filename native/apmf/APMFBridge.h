@@ -344,6 +344,10 @@ namespace MFO::APMFBridge {
     // == kClaimEnd_Fired, readable WHILE the claim stands (the caller then releases it). False for no such claim, a claim that
     // is not fire-once, or ABI < 47. Worker-safe (the bridge lock, then one lock-free Harbinger read).
     bool OffenseCastFired(RE::FormID a_follower, std::int32_t a_hand, RE::FormID a_spell);
+    // 11-25 deck-strict: the bridge reads GetClaimEndReason BEFORE it releases or supersedes a fire-once claim, so a Fired end is
+    // never lost with the claim. TakeFireOnceSpent: true ONCE if that follower's fire-once claim for a_spell was found Fired at its
+    // release (the caller then treats it as a fire observed). Cleared when a new fire-once claim is filed and at the load boundary.
+    bool TakeFireOnceSpent(RE::FormID a_follower, RE::FormID a_spell);
 
     // Worker-safe. Is the offense-cast CLAIM CHANNEL itself available right now --
     // i.e. would a `false` from ClaimOffenseCast above mean "APMF REFUSED" rather
@@ -1945,6 +1949,11 @@ namespace MFO::APMFBridge {
     void          ResetCombatMoveServed();
     bool          PowerAttackRoadSupported();
     std::uint32_t RequestPowerAttack(RE::FormID a_follower, RE::FormID a_foe);
+    // 11-25 deck-strict: StrictOrderMoving = a strict order of ours stands on him and he is Travelling or Returning (ABI >= 48,
+    // GetMoveOrderState, any thread, lock-free); Harbinger refuses attacks then, so MFO does not ask. PowerAttackBackedOff: a power
+    // attack was refused / failed less than 5 s ago (logs once per 5 s). Both worker road.
+    bool          StrictOrderMoving(RE::FormID a_follower);
+    bool          PowerAttackBackedOff(RE::FormID a_follower);
     void          PollCombatMove(RE::FormID a_follower);
     void          CombatMoveProbeTick(RE::Actor* a_follower);
     // ── BLOCK (Harbinger ch.31, ABI v43, kCombatMove_Block / kCombatMove_BlockEnd) -- apmf/BlockClaims.cpp ────────────

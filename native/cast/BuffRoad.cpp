@@ -619,6 +619,15 @@ namespace MFO::Actuation {
         // ends or the load reverts (the latch is cleared there). Never the direct road.
         if (const auto nf = g_neverFired.find(id); nf != g_neverFired.end() && nf->second.count(sk))
             return SelfCast::Declined;
+        // 11-25 deck-strict: the claim was released (or replaced) by another road after Harbinger said Fired, before this gate read it.
+        // The bridge read the Fired end at the release; it counts as the fire the refresh gate would have seen (never a second cast).
+        if (!conc && !instant && APMFBridge::TakeFireOnceSpent(id, spellID)) {
+            g_fired[id].insert(sk);
+            g_fireReleased[id][sk] = { rid, spellID, placement, std::chrono::steady_clock::now() };
+            spdlog::info("[buff] {:08X} {} ({:08X}): his fire-once claim had FIRED before it was released -- counted as fired, not cast again",
+                         id, a_spell->GetName() ? a_spell->GetName() : "?", spellID);
+            return SelfCast::Declined;
+        }
         // Released after its fire (BuffRefreshGate) and the window still open (TickBuffLanded judges it): not cast a second time on a guess.
         if (const auto fr = g_fireReleased.find(id); fr != g_fireReleased.end() && fr->second.count(sk)) return SelfCast::Declined;
         // The up-read is made on the main thread and latched (F6); no verdict yet is a transparent
@@ -750,6 +759,7 @@ namespace MFO::Actuation {
                     spdlog::info("[buff] {:08X} {} ({:08X}): instant cast fired -- claim released (one cast per "
                                  "claim)", id, a_spell->GetName() ? a_spell->GetName() : "?", spellID);
                     EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
+                    APMFBridge::TakeFireOnceSpent(id, spellID);   // this gate saw the fire itself: drop the release-time latch
                     return Outcome{ Result::NoOp, "instant buff cast fired: claim released", true };
                 }
             }
@@ -772,6 +782,7 @@ namespace MFO::Actuation {
                                  "equipped now){}", id, a_spell->GetName() ? a_spell->GetName() : "?", spellID,
                                  g_autoBuffSeries ? " (fan series: the spell stays in hand)" : "");
                     EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/!g_autoBuffSeries);
+                    APMFBridge::TakeFireOnceSpent(id, spellID);   // this gate saw the fire itself: drop the release-time latch
                     return Outcome{ Result::NoOp, "buff cast fired: left hand released", true };
                 }
             }
