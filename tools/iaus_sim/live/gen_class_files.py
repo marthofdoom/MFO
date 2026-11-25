@@ -115,12 +115,13 @@ def log_accepted_knobs(out):
     return acc
 
 
-def shared_not_written(S):
-    """Accepted SHARED values the round holds that no class file carries (worth / loot tables, Tuning globals): named in the manifest."""
+def shared_not_written(S, ship):
+    """Accepted SHARED values the round holds that no class file carries (worth / loot tables, Tuning globals): named in the manifest.
+    A spells / worth value that is not in ship.sets (the joint gate failed, or graded other shared values) says so beside its name."""
     st, out = S.get("stages", {}), []
     for stage in ("spells", "worth", "loot"):   # spells: sim v4 batch C (shared spell-worth numbers, tune_driver.py stage_spells)
         v = st.get(stage, {})
-        out += ["%s: %s" % (stage, k) for k in (v.get("kept", []) if isinstance(v, dict) else [])]
+        out += ["%s: %s%s" % (stage, k, "" if stage == "loot" or k in ship["sets"] else " (NOT JOINT-GATED: %s)" % ship["needs_joint_rerun"]) for k in (v.get("kept", []) if isinstance(v, dict) else [])]
     for r in st.get("globals", []) if isinstance(st.get("globals"), list) else []:
         if str(r.get("verdict", "")).startswith(("PASSES RULE", "PASS", "ACCEPT")) or r.get("accepted"):
             out.append("globals: %s" % r.get("set"))
@@ -211,7 +212,7 @@ def plan(out, unshipped=False, accept_log_mismatch=False, smoke_ok=False):
             raise Refused("progress.log and summary.json disagree on %d accepted value(s): %s. The summary is not the round the log describes (a seeded or overwritten summary?). "
                           "Resume the round so the summary is rebuilt from its cache, or pass --accept-log-mismatch." % (len(mismatch), "; ".join(mismatch[:12]) + (" ..." if len(mismatch) > 12 else "")))
         notes.append("LOG MISMATCH ACCEPTED: " + "; ".join(mismatch))
-    shared = shared_not_written(S)
+    shared = shared_not_written(S, ship)
     if shared:
         notes.append("SHARED VALUES NOT IN ANY FILE (this tool writes class files only; shared.txt / potions.txt / looting.txt are the coordinator's): " + "; ".join(shared))
     return {"cells": searched, "unsearched": unsearched, "per_class": per, "withheld": [w for w in withheld if w in full], "notes": notes, "joint": joint, "sha": sha, "src": src,

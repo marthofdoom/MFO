@@ -56,7 +56,7 @@ class World(unittest.TestCase):   # the driver always names the world (v4 by def
         self.assertEqual(T.world_flags("v4", ""), ["--world", "v4", "--env-set", "all", "--env-hold", "train", "--books", "field"])
         self.assertEqual(T.world_flags("v4", "--books lab")[-2:], ["--books", "lab"])   # the simulator takes the last of a repeated switch
         self.assertEqual(T.HOLD_FLAGS, ["--env-hold", "heldout", "--books", "heldout"])
-        self.assertEqual(T.DEFAULT_STAGES.split(",")[2:7], ["classes", "edge", "follow", "spells", "joint"])   # the gap is the score BEFORE the joint gate judges the table
+        self.assertEqual(T.DEFAULT_STAGES.split(",")[2:8], ["classes", "edge", "follow", "spells", "worth", "joint"])   # the gap is the score BEFORE the joint gate judges the table
 
 
 class ChoiceBatch(unittest.TestCase):   # sim v4 batch C (iaus-sim-v4.md 15): the follow stage, the spells stage, their readers
@@ -91,6 +91,23 @@ class ChoiceBatch(unittest.TestCase):   # sim v4 batch C (iaus-sim-v4.md 15): th
         ho = T.held_out_check([], [], ["evoker", "knight"], None, "t.x=1")                 # a shared table alone can fail it
         self.assertFalse(ho["ok"])
         self.assertIn("-2.00", ho["why"])
+        self.setgain, good = {}, T.gapi_runs                                               # driver E1: an empty or partial pairing is not a pass
+        def drop(pick):
+            def runs(tasks):
+                return [({} if pick(t) == "all" else {k: v for k, v in x.items() if not (pick(t) and k[1] == 0)}) for t, x in zip(tasks, good(tasks))]
+            return runs
+        for pick in (lambda t: "all", lambda t: "all" if t[1] == "knight" else False, lambda t: "all" if t[1] == "knight" and t[2] else False, lambda t: t[1] == "knight" and bool(t[2]), lambda t: t[1] == "knight" and not t[2]):
+            T.gapi_runs = drop(pick)
+            ho = T.held_out_check([], ["evoker:9.1.a=2.0"], ["evoker", "knight"])
+            self.assertFalse(ho["ok"])
+            self.assertIn("no complete pairing", ho["why"])
+            self.assertIn("knight/builtin", ho["why"])
+        T.gapi_runs = good
+        self.assertTrue(T.held_out_check([], ["evoker:9.1.a=2.0"], ["evoker", "knight"])["ok"])
+        self.assertFalse(T.held_out_check([], [], [])["ok"])                               # nothing to check is not a pass
+        T.A.worlds = ["builtin", "Tuxborn"]
+        T.gapi_runs = lambda tasks: [({} if t[0] == "Tuxborn" else x) for t, x in zip(tasks, good(tasks))]
+        self.assertIn("knight/Tuxborn", T.held_out_check([], [], ["knight"])["why"])       # one world of a cell empty
 
     def test_joint_grades_the_whole_table_and_fails_on_the_held_out_check(self):   # choice review R2, R3
         saved = {k: getattr(T, k) for k in ("jmany", "held_out_check", "final_sets")}
@@ -598,19 +615,54 @@ class NewTables(unittest.TestCase):   # tune 2.11.1: one knob = one native membe
             self.assertEqual(float(a[0]), float(b[0]), nat)
 
     def test_loot_episode_command_and_key(self):
+        saved = (T.A, T.CFG, T.CACHE_DIR, os.environ.get("MFO_ENV_CACHE"), dict(T.TEXT), dict(T._ENV_IDENT))
+        try:
+            self.loot_episode_command_and_key()
+        finally:
+            T.A, T.CFG, T.CACHE_DIR = saved[:3]
+            os.environ.pop("MFO_ENV_CACHE")
+            if saved[3] is not None:
+                os.environ["MFO_ENV_CACHE"] = saved[3]
+            T.TEXT.clear(); T.TEXT.update(saved[4]); T._ENV_IDENT.clear(); T._ENV_IDENT.update(saved[5])
+
+    def loot_episode_command_and_key(self):
         d = tempfile.mkdtemp()
-        T.A = types.SimpleNamespace(bin=os.path.join(d, "sim"), out=d, builtin_worth=None, loot_places="")
-        open(T.A.bin, "w").write("x")
+        T.CACHE_DIR = d + "/"
+        os.environ["MFO_ENV_CACHE"] = d
+        for f, t in (("index.json", "{}"), ("Tuxborn.loot.json", "one"), ("Vanilla.loot.json", "one")):
+            open(os.path.join(d, f), "w").write(t)
+        T.A = types.SimpleNamespace(bin=os.path.join(d, "sim"), out=d, builtin_worth=None, loot_places="", world="v3")
+        open(T.A.bin, "w").write("#!/bin/sh\necho ran >> %s/runs\necho out\n" % d)
+        os.chmod(T.A.bin, 0o755)
         T.CFG = dict(T.FULL)
         self.assertEqual(T.sim_cmd("builtin", "epi:melee,mage", "g3", [], "loot.batchHoldMinSec=6.0", None)[1:],
                          ["--no-json", "--threads", "1", "--loot-report", "6", "--loot-score", "--classes", "melee,mage", "--set", "loot.batchHoldMinSec=6.0"])
-        k0 = T.key_of("builtin", "epi:melee", "g3", [], None, None)
+        k0, c0 = T.key_of("builtin", "epi:melee", "g3", [], None, None), T.key_of("builtin", "melee", "g3", [], None, None)
         T.A.loot_places = "Tuxborn"
         cmd = T.sim_cmd("builtin", "epi:melee", "g3", [], None, None)
         self.assertEqual(cmd[cmd.index("--env-set") + 1], "Tuxborn")
         self.assertTrue(cmd[cmd.index("--loot-list") + 1].endswith("Tuxborn.loot.json"))
         self.assertEqual(T.loot_world_args(True)[1], "Tuxborn/heldout")
-        self.assertNotEqual(k0, T.key_of("builtin", "epi:melee", "g3", [], None, None))   # another set of places is another cache key
+        k1 = T.key_of("builtin", "epi:melee", "g3", [], None, None)
+        self.assertNotEqual(k0, k1)   # another set of places is another cache key
+        # driver E1: the loot table is part of the key of every loot-world run, and of no other
+        runs = lambda: len(open(os.path.join(d, "runs")).read().split()) if os.path.exists(os.path.join(d, "runs")) else 0
+        T.text_run("lootrep:x", [T.A.bin], "builtin"); T.text_run("lootrep:x", [T.A.bin], "builtin"); T.text_run("gap:x", [T.A.bin], "builtin")
+        self.assertEqual(runs(), 2)
+        open(os.path.join(d, "Tuxborn.loot.json"), "w").write("re-extracted")
+        self.assertNotEqual(k1, T.key_of("builtin", "epi:melee", "g3", [], None, None))
+        self.assertEqual(c0, T.key_of("builtin", "melee", "g3", [], None, None))          # a combat run does not read it
+        T.text_run("lootrep:x", [T.A.bin], "builtin"); T.text_run("gap:x", [T.A.bin], "builtin")
+        self.assertEqual(runs(), 3)                                                        # the report ran again, the gap run replayed
+        k2 = T.key_of("builtin", "epi:melee", "g3", [], None, None)
+        open(os.path.join(d, "Vanilla.loot.json"), "w").write("another set's")
+        self.assertEqual(k2, T.key_of("builtin", "epi:melee", "g3", [], None, None))
+        T._ENV_IDENT.clear()
+        open(os.path.join(d, "a.mfoenv"), "w").write("a place")                            # the places are read in every --world
+        self.assertNotEqual(k2, T.key_of("builtin", "epi:melee", "g3", [], None, None))
+        os.remove(os.path.join(d, "Tuxborn.loot.json"))
+        with self.assertRaises(SystemExit):
+            T.key_of("builtin", "epi:melee", "g3", [], None, None)                         # a missing table is never an empty hash
 
     def test_loot_gate_check(self):   # loot review R2: paired per seed, beyond noise, and the "takes less" rows reject
         notes, saved = [], T.open_decision
@@ -699,6 +751,272 @@ class ShipState(unittest.TestCase):   # backlog 2026-11-19: needs_joint_rerun st
         T.SUMMARY["stages"]["joint"] = {"verdict": "PASS", "table": self.full[:1]}   # the gap search moved the table after the joint
         self.assertIn("different table", T.ship_state()["needs_joint_rerun"])
 
+    def test_the_joint_verdict_binds_the_shared_values(self):   # driver P4
+        T.SUMMARY["stages"]["spells"] = {"kept": ["t.unmeasuredDamage=0.35"]}
+        T.SUMMARY["stages"]["joint"] = {"verdict": "PASS", "table": T.final_curves(), "sets": T.final_sets()}
+        sh = T.ship_state()
+        self.assertEqual((sh["needs_joint_rerun"], sh["table"], sh["sets"]), ("", self.full, ["t.unmeasuredDamage=0.35"]))
+        T.SUMMARY["stages"]["worth"] = {"kept": ["worth.floor=0.1"]}    # accepted after the PASS
+        sh = T.ship_state()
+        self.assertIn("other shared values", sh["needs_joint_rerun"])
+        self.assertEqual((sh["table"], sh["sets"]), ([], []))
+        T.SUMMARY["stages"]["joint"]["sets"] = T.final_sets()           # graded again
+        self.assertEqual(T.ship_state()["sets"], ["t.unmeasuredDamage=0.35", "worth.floor=0.1"])
+        T.SUMMARY["stages"]["spells"]["kept"] = []                      # the reverse: the joint graded a set that is no longer accepted
+        self.assertEqual((T.ship_state()["table"], T.ship_state()["sets"]), ([], []))
+        T.SUMMARY["stages"]["joint"] = {"verdict": "FAIL: x", "table": T.final_curves(), "sets": T.final_sets()}
+        sh = T.ship_state()
+        self.assertEqual((sh["table"], sh["sets"]), ([], []))           # a failed joint ships no shared value either
+        self.assertEqual(T.final_sets(), "worth.floor=0.1")
+        T.SUMMARY["stages"].pop("joint")
+        self.assertEqual(T.ship_state()["sets"], [])
+
+
+class StartChecks(unittest.TestCase):   # review E2 of 2d6948a4: what a stage needs is said before any work
+    def ns(self, stages, flags="--consumables on", places="Tuxborn", world="episodes"):
+        return types.SimpleNamespace(stages=stages, sim_flags=flags, loot_places=places, loot_world=world)
+
+    def setUp(self):
+        self.keep = T.loot_table
+        self.asked = []
+        T.loot_table = lambda p: self.asked.append(p) or "/x/%s.loot.json" % p
+
+    def tearDown(self):
+        T.loot_table = self.keep
+
+    def test_worth_and_loot_need_the_consumables_flag(self):
+        for st in ("worth", "loot"):
+            with self.assertRaises(SystemExit) as e:
+                T.check_start(self.ns("prep,classes,%s,summary" % st, flags=""))
+            self.assertIn("--consumables on", str(e.exception))
+            T.check_start(self.ns("prep,%s,summary" % st))
+        T.check_start(self.ns("prep,classes,joint,summary", flags="", places=""))   # neither stage: nothing to say
+
+    def test_the_loot_episodes_need_places_and_their_table(self):
+        with self.assertRaises(SystemExit) as e:
+            T.check_start(self.ns("loot", places=""))
+        self.assertIn("--loot-places", str(e.exception))
+        self.assertEqual(self.asked, [])
+        T.check_start(self.ns("loot"))
+        self.assertEqual(self.asked, ["Tuxborn"])                                    # its .loot.json is looked up now
+        T.loot_table = self.keep
+        with self.assertRaises(SystemExit) as e:
+            T.check_start(self.ns("loot", places="NoSuchSet"))
+        self.assertIn("NoSuchSet.loot.json", str(e.exception))
+        T.check_start(self.ns("loot", places="", world="stops"))                    # the stops lab has no places
+        T.loot_table = lambda p: self.asked.append(p)
+        T.check_start(self.ns("worth,summary", places=""))                          # worth alone needs no places
+
+    def test_main_refuses_before_any_work(self):
+        out = tempfile.mkdtemp()
+        old = sys.argv
+        sys.argv = ["tune_driver.py", "--bin", "/nonexistent/sim", "--out", os.path.join(out, "o"), "--stages", "prep,worth"]
+        try:
+            with self.assertRaises(SystemExit) as e:
+                T.main()
+        finally:
+            sys.argv = old
+        self.assertIn("--consumables on", str(e.exception))
+        self.assertFalse(os.path.exists(os.path.join(out, "o")))                    # nothing was created, nothing hashed
+
+
+class LootGates(unittest.TestCase):   # driver P2, P3: the loot stage judges each candidate on the gate rows and its table on held-out places
+    NAMES = ("A", "CFG", "log", "save_summary", "jmany", "race", "final_curves", "loot_report", "loot_values", "LOOT_KNOBS", "LOOT_EPISODE_KNOBS", "LOOT_NOT_SEARCHED", "LOOT_PREFIX", "POOL", "text_run", "loot_gate_check")
+    ROWS = ("leftRR/ep", "goldLeftRR/ep", "roadLeft%", "dibsNear/ep", "crimes", "guardSeenTakes", "restart%")
+
+    def setUp(self):
+        self.saved, self.sum = {k: getattr(T, k) for k in self.NAMES}, dict(T.SUMMARY)
+        T.SUMMARY.clear()
+        T.SUMMARY.update({"stages": {}, "open_decisions": [], "auto_decisions": []})
+        T.A = types.SimpleNamespace(decisions="auto", loot_places="Tuxborn", loot_world="episodes", bin="/sim")
+        T.CFG = dict(T.SMOKE, force=False, passes=2)
+        self.logged = []
+        T.log, T.save_summary, T.final_curves = self.logged.append, lambda: None, lambda: []
+        T.LOOT_KNOBS, T.LOOT_EPISODE_KNOBS, T.LOOT_NOT_SEARCHED = [("loot.buffScale", 0.95, [0.475]), ("loot.healthTarget", 6, [8])], [], {}
+        self.value = {"loot.buffScale=0.475": 2.0, "loot.healthTarget=8": 1.0}      # what the search's objective adds: the bad step is the better one
+        self.bad = {"loot.buffScale=0.475": {"leftRR/ep": 1.5}}                     # ... and leaves more of what is wanted on every seed (train)
+        self.held, self.heldrows, self.reports = {}, {}, []
+        noise = [0.0, 0.05, -0.05, 0.02]
+        parts = lambda sets: (sets or "").split(",") if sets else []
+        T.jmany = lambda reqs: [[(50.0 + noise[s % 4] + sum(self.value.get(k, 0.0) * (1.0 + 0.01 * (s % 3)) for k in parts(st)), 0.0, 1.0) for s in seeds] for _, _, _, _, st, _, seeds in reqs]
+        T.race = lambda base, cands, seeds: (T.jmany([base])[0], [(T.jmany([c])[0], len(seeds)) for c in cands])
+
+        def report(sets, heldout):
+            self.reports.append((sets, heldout))
+            add = {}
+            for k in parts(sets):
+                for row, v in (self.heldrows if heldout else self.bad).get(k, {}).items():
+                    add[row] = add.get(row, 0.0) + v
+            seeds = {r: {s: (0.0 if r in T.LOOT_HARD_ROWS else 10.0 + noise[s % 4]) + add.get(r, 0.0) for s in range(9501, 9505)} for r in self.ROWS}
+            return {"value": 0.0, "gate": {r: [sum(v.values()) / 4, False] for r, v in seeds.items()}, "gate_failing": [], "seeds": seeds, "sets": sets, "held": heldout}
+        T.loot_report = report
+        self.checks, real = [], T.loot_gate_check
+        T.loot_gate_check = lambda name, a, b, note=True: (self.checks.append((name, a.get("sets"), a.get("held"), b.get("sets"), b.get("held"), note)), real(name, a, b, note))[1]
+        T.loot_values = lambda sets, heldout: {s: 100.0 + noise[s % 4] + sum(self.held.get(k, 0.5) * (1.0 + 0.1 * (s % 3)) for k in parts(sets)) for s in range(9501, 9505)}
+
+    def tearDown(self):
+        for k, v in self.saved.items():
+            setattr(T, k, v)
+        T.SUMMARY.clear()
+        T.SUMMARY.update(self.sum)
+
+    def run_stage(self):
+        T.SUMMARY.update({"stages": {}, "open_decisions": [], "auto_decisions": []})
+        T.stage_loot()
+        return T.SUMMARY["stages"]["loot"], T.SUMMARY["stages"]["loot_world"]
+
+    def rejected(self):
+        return [d for d in T.SUMMARY["auto_decisions"] if d["verdict"] == "rejected"]
+
+    def test_a_bad_step_is_refused_as_a_candidate_and_the_good_one_kept(self):   # P2
+        L, w = self.run_stage()
+        self.assertEqual(L["kept"], ["loot.healthTarget=8"])                       # before: buffScale was carried and the whole table rejected at the end
+        row = [r for r in L["rows"] if r["knob"] == "loot.buffScale"][0]
+        self.assertFalse(row["accepted"])
+        self.assertIn("loot gate: train places: leftRR/ep", row["why"])
+        self.assertEqual(row["steps"]["gate_rows"]["leftRR/ep"][4], "REJECT")
+        self.assertTrue(any("loot.buffScale" in m and "loot gate" in m for m in self.logged))   # the log says why
+        self.assertNotIn("rejected", w)
+        self.assertEqual(self.rejected(), [])
+
+    def test_the_candidate_gate_is_the_whole_table_against_the_shipped_one_on_the_train_places(self):   # review E6 of 2d6948a4 (two surviving mutations)
+        self.run_stage()
+        cand = [c for c in self.checks if not c[5]]
+        self.assertTrue(cand)
+        for name, a_sets, a_held, b_sets, b_held, note in cand:
+            self.assertEqual((name, a_sets, a_held, b_held), ("train", None, False, False))   # NOT against the table before the step (bs), NOT on the held-out places
+            self.assertTrue(b_sets)
+        self.assertTrue(any(len(c[3].split(",")) > 1 for c in cand))                         # a second candidate is judged as the whole table with the first
+        final = [c for c in self.checks if c[5]]
+        self.assertEqual([(c[0], c[2], c[4]) for c in final], [("train", False, False), ("heldout", True, True)])   # the final checks: both places, notes filed
+
+    def test_a_refused_candidate_files_no_note(self):   # review E6: the candidate check runs with note=False
+        self.bad = {"loot.buffScale=0.475": {"leftRR/ep": 1.5, "restart%": 1.5}}
+        L, w = self.run_stage()
+        self.assertEqual(L["kept"], ["loot.healthTarget=8"])
+        self.assertFalse([d for d in T.SUMMARY["open_decisions"] + T.SUMMARY["auto_decisions"] if "makes gate rows worse" in d["what"]])
+
+    def test_the_summary_neither_keeps_nor_completes_the_table_before_the_final_checks(self):   # review E5
+        seen = []
+        real = T.loot_report
+        def spy(sets, held):
+            if held:
+                seen.append({k: v for k, v in T.SUMMARY["stages"]["loot"].items() if k in ("kept", "complete", "final_check", "searched")})
+            return real(sets, held)
+        T.loot_report = spy
+        saved = []   # what a kill right now would leave on disk: summary.json is written when the search ends, before the checks
+        T.save_summary = lambda: saved.append(dict(T.SUMMARY["stages"].get("loot", {})))
+        L, w = self.run_stage()
+        self.assertTrue([x for x in saved if x.get("final_check") == "pending" and x["kept"] == [] and x["complete"] is False])
+        self.assertFalse([x for x in saved if x.get("complete") and x.get("final_check")])
+        self.assertTrue(seen)
+        for x in seen:
+            self.assertEqual((x["kept"], x["complete"], x["final_check"], x["searched"]), ([], False, "pending", ["loot.healthTarget=8"]))
+        self.assertEqual((L["kept"], L["complete"], "final_check" in L), (["loot.healthTarget=8"], True, False))
+        self.held = {"loot.healthTarget=8": -3.0}                                  # rejected at the end: complete, nothing kept, what was searched is named
+        L, w = self.run_stage()
+        self.assertEqual((L["kept"], L["complete"], L["kept_before_reject"]), ([], True, ["loot.healthTarget=8"]))
+
+    def test_each_reject_and_hard_row_refuses_a_candidate_and_another_row_does_not(self):
+        for r in T.LOOT_REJECT_ROWS + T.LOOT_HARD_ROWS:
+            self.bad = {"loot.buffScale=0.475": {r: 1.5}}
+            self.assertEqual(self.run_stage()[0]["kept"], ["loot.healthTarget=8"], r)
+        self.bad = {"loot.buffScale=0.475": {"restart%": 1.5}}
+        self.assertEqual(self.run_stage()[0]["kept"], ["loot.buffScale=0.475", "loot.healthTarget=8"])
+
+    def test_the_final_check_still_rejects_the_whole_table(self):
+        self.heldrows = {"loot.healthTarget=8": {"roadLeft%": 5.0}}                # held out only
+        L, w = self.run_stage()
+        self.assertEqual(L["kept"], [])
+        self.assertIn("heldout places: roadLeft%", L["rejected"])
+        self.assertFalse(any(r["accepted"] for r in L["rows"]))
+
+    def test_a_held_out_value_loss_rejects_under_auto(self):   # P3
+        self.held = {"loot.healthTarget=8": -3.0}
+        L, w = self.run_stage()
+        self.assertEqual((L["kept"], L["kept_before_reject"]), ([], ["loot.healthTarget=8"]))
+        self.assertIn("heldout places: value per episode -3", L["rejected"])
+        self.assertEqual([d["kind"] for d in self.rejected()], ["loot gate"])
+        self.assertIn("DROPPED", [r for r in L["rows"] if r["knob"] == "loot.healthTarget"][0]["why"])
+        T.A.decisions = "ask"                                                      # ask: still marth's to decide, and filed as one
+        L, w = self.run_stage()
+        self.assertEqual(L["kept"], ["loot.healthTarget=8"])
+        self.assertTrue(any("loses value" in d["what"] for d in T.SUMMARY["open_decisions"]))
+
+    def test_the_held_out_value_check_is_paired_and_fails_closed(self):
+        ship = {1: 10.0, 2: 90.0, 3: 50.0}
+        self.assertIsNone(T.loot_value_check(ship, {1: 10.2, 2: 89.8, 3: 50.0})[0])          # within noise
+        self.assertIsNone(T.loot_value_check(ship, dict(ship))[0])                             # the same table
+        self.assertIn("-1.0", T.loot_value_check(ship, {1: 9.0, 2: 89.1, 3: 48.9})[0])        # a small loss on every seed, far under the spread of the seeds
+        self.assertIsNone(T.loot_value_check({1: 0.0, 2: 0.0}, {1: -2.0, 2: -0.2})[0])        # -1.1 at se 0.9: 1.22 se
+        self.assertIsNotNone(T.loot_value_check({1: 0.0, 2: 0.0}, {1: -2.0, 2: -0.5})[0])     # -1.25 at se 0.75: 1.67 se
+        for a, b in (({}, {}), (ship, {1: 1.0, 2: 1.0}), (ship, {})):
+            with self.assertRaises(RuntimeError):
+                T.loot_value_check(a, b)
+
+    def test_no_held_out_places_no_table(self):   # P3
+        T.A.loot_places = ""
+        L, w = self.run_stage()
+        self.assertEqual(L["kept"], [])
+        self.assertIn("no --loot-places", L["rejected"])
+        self.assertTrue(any("no table is kept" in m or "no --loot-places" in m for m in self.logged))
+        T.A.loot_world = "stops"
+        T.A.out = tempfile.mkdtemp(); T.A.builtin_worth = None
+        T.POOL = types.SimpleNamespace(map=lambda f, xs: [f(x) for x in xs])
+        T.text_run = lambda key, cmd, world=None, check=None: "CONSUSE 1 48 1 2"
+        T.SUMMARY.update({"stages": {}})
+        T.stage_loot()
+        L = T.SUMMARY["stages"]["loot"]
+        self.assertEqual((L["kept"], bool(L["kept_before_reject"])), ([], True))
+        self.assertIn("stops lab", L["rejected"])
+
+    @staticmethod
+    def text(seeds=(9501, 9502), drop=None, value="12.500"):
+        rows = LootGates.ROWS
+        out = ["LOOTGATE %-22s %-20s %9.3f  <= %-7.2f %s" % ("ALL", r, 1.0, 2.0, "ok") for r in rows if r != drop]
+        out += ["LOOTSEED %d %.6f %s" % (s, 1.0, r) for s in seeds for r in rows]
+        return "\n".join(out + ["LOOT-REPORT 8 episodes, 1 places, 1 classes: value/ep with gold %s, without 1.0 (fights 1 + x); gate rows failing: ALL 0, per class 0; wall 1 s" % value]) + "\n"
+
+    def test_the_report_reader_fails_closed(self):
+        asked = [9501, 9502]
+        self.assertEqual(T.loot_report_parse(self.text(), asked)["value"], 12.5)
+        cut = lambda t, bad: "\n".join(x for x in t.splitlines() if not bad(x)) + "\n"
+        for t in (cut(self.text(), lambda x: x.startswith("LOOTSEED") and x.endswith("restart%")),           # a row with no LOOTSEED line
+                  cut(self.text(), lambda x: x == "LOOTSEED 9502 1.000000 leftRR/ep"),                       # ... with none for one seed
+                  cut(self.text(), lambda x: x.startswith("LOOTSEED")), self.text(drop="crimes"), self.text(drop="roadLeft%"), self.text(seeds=(9501, 9503)),
+                  cut(self.text(), lambda x: x.startswith("LOOT-REPORT")), self.text(value="nan"), ""):
+            with self.assertRaises(RuntimeError):
+                T.loot_report_parse(t, asked)
+
+    def test_the_gate_check_refuses_rows_and_seeds_that_do_not_pair(self):
+        rep = lambda: T.loot_report_parse(self.text(), [9501, 9502])
+        self.assertIsNone(T.loot_gate_check("train", rep(), rep())[0])
+        for side in (0, 1):
+            for spoil in (lambda x: x["seeds"].pop("leftRR/ep"), lambda x: x["seeds"]["restart%"].pop(9501), lambda x: x["gate"].pop("crimes")):
+                two = [rep(), rep()]
+                spoil(two[side])
+                with self.assertRaises(RuntimeError):
+                    T.loot_gate_check("train", *two)
+        two = [rep(), rep()]
+        two[0]["seeds"]["leftRR/ep"] = {}; two[1]["seeds"]["leftRR/ep"] = {}
+        with self.assertRaises(RuntimeError):
+            T.loot_gate_check("train", *two)
+
+    def test_the_reports_check_their_text_before_it_is_cached(self):
+        seen = []
+        T.text_run = lambda key, cmd, world=None, check=None: (seen.append((key, cmd)), check(self.text()), self.text())[2]
+        T.loot_report = self.saved["loot_report"]
+        T.CFG = dict(T.SMOKE)
+        keep, T.loot_table = T.loot_table, lambda s: "/x/%s.loot.json" % s
+        try:
+            T.loot_report("loot.gold=0.5", True)
+            T.POOL = types.SimpleNamespace(map=lambda f, xs: [f(x) for x in xs])
+            T.text_run = lambda key, cmd, world=None, check=None: (seen.append((key, cmd)), check(self.text(seeds=(int(cmd[cmd.index("--seeds") + 1]),))), self.text(seeds=(int(cmd[cmd.index("--seeds") + 1]),)))[2]
+            self.assertEqual(self.saved["loot_values"]("loot.gold=0.5", True), {9501: 12.5, 9502: 12.5})
+        finally:
+            T.loot_table = keep
+        self.assertTrue(all(k.startswith("lootrep:") and "Tuxborn/heldout" in c and "loot.gold=0.5" in c for k, c in seen))   # one key family, the held-out places
+
 
 class OneValuePerKnob(unittest.TestCase):   # Opus review of 1874f81e: the default rejudge spec (warrior:6.32.b) is also a classes knob
     def setUp(self):
@@ -735,9 +1053,46 @@ class RerunAfter(unittest.TestCase):   # the joint gate runs again, in the same 
         self.assertEqual(T.rerun_after("recalib", ["classes", "recalib"], ["summary"])[0], [])                         # a run without the joint stage
         self.assertEqual(T.rerun_after("joint", ["classes", "joint", "recalib", "joint"], ["summary"])[0], [])          # and it does not loop
 
+    def test_joint_again_after_moved_shared_values(self):   # driver P4
+        for stage, kept in (("worth", "worth.floor=0.1"), ("spells", "t.unmeasuredDamage=0.35")):
+            T.SUMMARY["stages"] = {"joint": {"verdict": "PASS", "table": [], "sets": None}, stage: {"kept": []}}
+            self.assertEqual(T.rerun_after(stage, ["joint", stage], ["summary"])[0], [])            # nothing moved
+            T.SUMMARY["stages"][stage]["kept"] = [kept]
+            again, why = T.rerun_after(stage, ["joint", stage], ["summary"])
+            self.assertEqual(again, ["joint"]); self.assertIn(stage, why)
+            self.assertEqual(T.rerun_after(stage, ["joint", stage], ["joint", "summary"])[0], [])   # still to come
+            self.assertEqual(T.rerun_after(stage, [stage], ["summary"])[0], [])                     # a run without the joint stage
+            T.SUMMARY["stages"]["joint"]["sets"] = kept
+            self.assertEqual(T.rerun_after(stage, ["joint", stage, "joint"], ["summary"])[0], [])   # it does not loop
+            T.SUMMARY["stages"][stage]["kept"] = []                                                 # a re-run that DROPPED what was graded
+            self.assertEqual(T.rerun_after(stage, ["joint", stage], ["summary"])[0], ["joint"])
+
     def test_gap_rule_unchanged(self):
         T.SUMMARY["stages"]["gap"] = {"search_changed": True}
         self.assertEqual(T.rerun_after("gap", ["floor", "rating", "gap"], ["summary"])[0], ["floor", "rating"])
+
+    def test_the_gap_search_reruns_joint_first(self):   # review E1 of 2d6948a4: the default order is joint -> gap, so ship.table stayed empty at the end
+        T.SUMMARY["stages"]["gap"] = {"search_changed": True}
+        dflt = T.DEFAULT_STAGES.split(",")
+        done = dflt[:dflt.index("gap") + 1]
+        self.assertIn("joint", done)
+        self.assertEqual(T.rerun_after("gap", done, dflt[dflt.index("gap") + 1:])[0], ["joint"])                      # floor / rating / recalib are still to come
+        self.assertEqual(T.rerun_after("gap", ["joint", "floor", "rating", "recalib", "gap"], ["summary"])[0], ["joint", "floor", "rating", "recalib"])
+        self.assertEqual(T.rerun_after("gap", ["joint", "gap"], ["joint", "summary"])[0], [])                         # joint still to come
+        T.SUMMARY["stages"]["gap"] = {"search_changed": False}
+        self.assertEqual(T.rerun_after("gap", done, ["summary"])[0], [])
+
+    def test_the_default_order_ends_with_a_joint_verdict_on_the_final_table(self):   # the whole loop, as main() runs it
+        T.SUMMARY["stages"] = {"joint": {"verdict": "PASS", "table": []}, "gap": {"search_changed": True}}
+        order, done, i = T.DEFAULT_STAGES.split(","), [], 0
+        ran = []
+        while i < len(order):
+            n = order[i]; i += 1
+            ran.append(n); done.append(n)
+            again, _ = T.rerun_after(n, done, order[i:])
+            order[i:i] = again
+        self.assertEqual(ran[ran.index("gap") + 1], "joint")
+        self.assertEqual(ran.count("joint"), 2)
 
 
 class CarryOverBinary(unittest.TestCase):   # a summary made by another simulator binary is not carried over
