@@ -297,6 +297,10 @@ namespace MFO::Actuation {
     // A CONCENTRATION Self buff at another recipient answers true where MFO's ConcProxy can be minted (CastOn's concentration
     // fork serves it: Harbinger's concentration claim in combat, else the ConcProxy stream), 1dfcuabd309.
     bool BuffServedAtAlly(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient);
+    // WORKER. Does a SUMMON of a_spell, cast by a_follower now, take the ANIMATED claim road (Fire.cpp's SummonGo::Claim: the claim road answers Claim
+    // and bCastSelf is on)? Then the summon holds a hand, a claim and a lock like any cast, so the combat scan counts it as a cast rule and the IAUS
+    // cast family keeps it (field 11-24c: it was released the same millisecond it was filed). False for a non-summon, the one-shot road and a deferred pick.
+    bool SummonHoldsCastChannel(RE::Actor* a_follower, RE::SpellItem* a_spell);
     // WORKER (cast/HealRoad.cpp, 1dfcuabd309). The heal twin: would a Self-delivery HEAL of a_spell cast at a_recipient (any
     // actor other than a_follower) be served by a proxy road? True when the heal claim road is open
     // (ComposedCast::HealClaimRoadOpen: Harbinger's delivery-flip proxy), or for a CONCENTRATION heal where MFO's ConcProxy can

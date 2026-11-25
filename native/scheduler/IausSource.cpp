@@ -64,9 +64,9 @@ namespace MFO::Scheduler {
         }
 
         [[nodiscard]] bool IsCastFamily(Family a_f) {
-            // The families that hold a hand and a claim. A summon is a one-shot (the scan's own isCast excludes it).
+            // The families that hold a hand and a claim. A summon holds them only on the claim road (AmendScan asks Actuation::SummonHoldsCastChannel).
             return a_f == Family::CastOffense || a_f == Family::CastControl || a_f == Family::CastHeal ||
-                   a_f == Family::CastBuff || a_f == Family::CastWard;
+                   a_f == Family::CastBuff || a_f == Family::CastWard || a_f == Family::CastSummon;
         }
 
         [[nodiscard]] RE::ActorHandle HandleOf(RE::FormID a_actor) {
@@ -611,6 +611,7 @@ namespace MFO::Scheduler {
         for (const auto& r : m_d.ranked) {
             if (r.idx >= m_set.gen.actions.size()) continue;
             if (!(Iaus::KeyOf(m_set.gen.actions[r.idx]) == m.running)) continue;
+            if (m.running.family == Family::CastSummon && !Actuation::SummonHoldsCastChannel(RE::TESForm::LookupByID<RE::Actor>(m_id), RE::TESForm::LookupByID<RE::SpellItem>(m_set.gen.actions[r.idx].form))) break;
             const int rank = Iaus::RankOf(m.epoch);
             a_castSeen = true;
             // A RUNNING HEAL IS NOT "ASKED FOR" BY BEING RANKED (field 11-17f, review F4): the candidate appearing anywhere in the ranked list does not

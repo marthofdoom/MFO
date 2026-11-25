@@ -310,13 +310,14 @@ namespace MFO::Scheduler {
                 if (!Rank::IsChoice(choice.rank)) break;  // nothing (more) matched
 
                 const auto& op = choice.actionOpcode;
-                // A SUMMON rule is not a cast channel (fix/mfo-summon-oneshot): it holds
-                // no hand and no claim, so it must not keep the H3 cast loan alive
-                // (castSeen) or be passed as castFacetHeld to the OOC service.
-                const bool isCast  = (op == Vocab::kActCastSelf || op == Vocab::kActCastTarget ||
-                                      op == Vocab::kActCastPlayer) &&
-                                     !Actuation::IsSummonSpell(
-                                         RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam));
+                // A SUMMON rule is a cast channel only on the animated CLAIM road (Actuation::SummonHoldsCastChannel: a hand, a claim, a lock). The
+                // one-shot road (fix/mfo-summon-oneshot) holds none of them, so it must not keep the H3 cast loan alive (castSeen) or be passed as
+                // castFacetHeld to the OOC service. Counted off the claim road it was released the millisecond it was filed (field 11-24c).
+                const bool isCastOp = op == Vocab::kActCastSelf || op == Vocab::kActCastTarget || op == Vocab::kActCastPlayer;
+                const bool isCast  = isCastOp && [&] {
+                    auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam);
+                    return !Actuation::IsSummonSpell(sp) || Actuation::SummonHoldsCastChannel(f, sp);
+                }();
                 const bool isSilver = op == Vocab::kActEquipSilver;   // a melee equip (category 1) everywhere below
                 const bool isEquip = op == Vocab::kActEquipMelee || op == Vocab::kActEquipRanged || isSilver;
                 // act.sneak (card G1): its condition held, so the rule stands this lap even when the row is passed
