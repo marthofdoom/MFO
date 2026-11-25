@@ -175,6 +175,8 @@ namespace Sim {
         return q.on;
     }
 
+    inline bool MoveHeld(const Fight& F, const Body& x) { const MoveClaim& q = F.move->claim[static_cast<std::size_t>(x.ctl)]; return q.on && q.arrived && !MoveBodyTaken(F, x); }
+
     inline bool MoveBounds(const Fight& F, const Body& x, float tx, float ty, bool away) {
         const MoveClaim& q = F.move->claim[static_cast<std::size_t>(x.ctl)]; if (!q.on || MoveBodyTaken(F, x)) return false;
         const Ctl& c = F.ctl[static_cast<std::size_t>(x.ctl)]; if (c.leash > 0.0f && std::hypot(q.p.x - F.b[0].c.x, q.p.y - F.b[0].c.y) > c.leash + kLeashStandU) return false;

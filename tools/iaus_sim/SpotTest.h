@@ -47,7 +47,8 @@ namespace Sim {
         }
         inline void WatchHit(Fight& F, SpotProbe& p) { if (F.t.firstHitN > 0 && !p.v.count("hit")) p["hit"] = F.t.firstHitSum; p["holdUn"] = F.t.pathHoldUnreachSec; p["stuck"] = F.t.pathStuckSec; }
         inline MFO::Iaus::RankedAction Want(Family f, std::uint32_t target, float score, float reach, Sight s, bool melee) { MFO::Iaus::RankedAction a; a.family = f; a.target = target; a.score = score; a.reach = reach; a.sight = s; a.melee = melee; a.form = 1; return a; }
-        inline void Script(Fight& F, std::size_t ci, std::initializer_list<MFO::Iaus::RankedAction> as) { if (!F.move || F.move->claim.size() <= ci) return; MoveClaim& q = F.move->claim[ci]; q.nTop = 0; for (const auto& a : as) if (q.nTop < 3) q.top[q.nTop++] = a; q.topAt = F.now; }
+        inline void Script(Fight& F, std::size_t ci, std::initializer_list<MFO::Iaus::RankedAction> as) { Ctl& c = F.ctl[ci]; Body& x = F.b[static_cast<std::size_t>(c.body)]; c.runPhase = 0; c.moveUntil = 0.0; x.holdUntil = x.retreatUntil = 0.0;   // a scripted row is about the claim: no other mover
+            if (!F.move || F.move->claim.size() <= ci) return; MoveClaim& q = F.move->claim[ci]; q.nTop = 0; for (const auto& a : as) if (q.nTop < 3) q.top[q.nTop++] = a; q.topAt = F.now; }
     }
 
     inline std::vector<SpotCase> SpotCases() {
@@ -71,7 +72,7 @@ namespace Sim {
           c.rule = [=](const std::vector<SpotProbe>& r, std::string& o) { const bool k = seesOnPlaces(r, 15.0, o); const int up = Count(r, [](const SpotProbe& p) { return Get(p, "z", 0) > 330.0; }); o += Fmt(", on the top in %d", up); return k && up == 0; }; v.push_back(c); }
         { SpotCase c{ "above-through-wall", "env-above-wall", "reach" }; c.what = "a blade is never given the foe no road leads to while another can be reached (scripted: he ranks the unreachable one 1.15 times higher)"; c.scripted = true;
           c.setup = [](Fight& F) { AllStatues(F); F.ctl[0].drawn = PostureKind::Melee; auto spec = std::make_shared<ActorSpec>(*Foes(F)[0]->spec); Body& n = F.Add(Role::Foe, spec, F.b[0].c.x + 100.0f, F.b[0].c.y - 100.0f); Statue(n, true); n.c.targetId = F.b[0].c.id; n.retargetAt = 1e9; Put(F, n, At(F, 2, 6, 8)); Statue(Sub(F), true); Put(F, Sub(F), At(F, 10, 4, 8)); Put(F, F.b[0], At(F, 4, 2, 8)); };
-          c.script = [](Fight& F) { F.ctl[0].runPhase = 0; Sub(F).holdUntil = 0.0; const auto f = Foes(F); Script(F, 0, { Want(Family::Attack, f[0]->c.id, 0.80f, 150.0f, Sight::Visible, true), Want(Family::PowerAttack, f[1]->c.id, 0.70f, 150.0f, Sight::Visible, true) }); };
+          c.script = [](Fight& F) { const auto f = Foes(F); Script(F, 0, { Want(Family::Attack, f[0]->c.id, 0.80f, 150.0f, Sight::Visible, true), Want(Family::PowerAttack, f[1]->c.id, 0.70f, 150.0f, Sight::Visible, true) }); };
           c.watch = [](Fight& F, SpotProbe& p) { if (F.move->pic.window == static_cast<std::uint32_t>(p["_w"])) return; p["_w"] = F.move->pic.window; for (const auto& a : F.move->last) if (a.who == Sub(F).c.id && a.act.family != Family::kCount) { p["n"] += 1; if (a.target == Foes(F)[0]->c.id) p["un"] += 1; } };
           c.rule = [](const std::vector<SpotProbe>& r, std::string& o) { o = Fmt("windows decided %.0f, on the unreachable foe %.0f", Sum(r, "n"), Sum(r, "un")); return Sum(r, "n") > 0 && Sum(r, "un") == 0; }; v.push_back(c); }
         { SpotCase c{ "doorway-block", "env-doorway-block", "portals" }; c.road = Road::Pinned; c.pin = 1.0f; c.scripted = true; c.what = "two blades who both want the chokepoint: one place in the doorway at a time (pinned road, pin kinds on)";

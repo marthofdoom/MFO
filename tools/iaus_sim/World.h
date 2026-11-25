@@ -35,6 +35,7 @@ namespace Sim {
     inline void EnvStep(Fight& F);
     inline void MoveStep(Fight& F);                                  // S2 (iaus_sim/MoveWorld.h): the pass, its rays, its meters
     inline bool MoveWalk(Fight& F, Body& x);                         // ... true = the spot claim moved his body this step and nothing else does
+    inline bool MoveHeld(const Fight& F, const Body& x);              // ... true = he stands on the place he was given
     inline bool MoveBounds(const Fight& F, const Body& x, float tx, float ty, bool away);   // ... true = the claim he holds does not let this move out of its radius
     inline bool EnvMeleeClear(const Fight& F, const Body& a, const Body& o);
     inline bool EnvInBlast(const Fight& F, float cx, float cy, float cz, float r, const Body& o);
@@ -1640,7 +1641,7 @@ namespace Sim {
             if (c && c->drawn == PostureKind::Staff && now >= x.think) {   // a drawn staff is fired by the engine AI while it has a charge
                 for (std::size_t i = 0; i < c->book.entries.size(); ++i) { const SpellEntry& e = c->book.entries[i];
                     if (e.source != SpellSource::Staff || !e.charged) continue;
-                    if (!los || d > 2000.0f) { Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); return; }
+                    if (!los || (d > 2000.0f && !(move && MoveHeld(*this, x)))) { Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); return; }
                     if (LofGuarded(x, c->build->spells[i])) if (const Body* blocker = LofBlocker(x, *tg, c->build->spells[i].e.areaUnits)) { StrafeFrom(x, *tg, *blocker); break; }   // SIM V3: the staff's start is refused too
                     StartCast(x, static_cast<int>(i), c->build->spells[i], tg->c.id, 0.0f, false); x.think = x.actEnd + RU(x, 28, TM::thinkMin, TM::thinkMax); return; }
             }
@@ -1666,7 +1667,8 @@ namespace Sim {
                 // distance the pick allowed (Tuning::bowWeaponRange); without one he waits.
                 const bool far = g_v3.chase && c && c->steerNoApproach && c->steer == tg->c.id;
                 if (far && !los) return;
-                if (!far && (SightWalk(x, *tg, los) || d > r.rangedDist * 1.6f)) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); return; }
+                const bool held = c && move && los && MoveHeld(*this, x);   // S2: he holds a place and sees the foe: he cannot close, so he shoots from there (the A3 rule above)
+                if (!far && !held && (SightWalk(x, *tg, los) || d > r.rangedDist * 1.6f)) { if (g_t2.c8 && LeashTurn(x, c, *tg)) return; Move(x, tg->c.x, tg->c.y, x.spec->run, false, tg); return; }
                 if (BackOff(x, d, r.rangedMin, los) && st.fallback > 0.05f) { Move(x, x.c.x + (x.c.x - tg->c.x), x.c.y + (x.c.y - tg->c.y), x.spec->run * 0.55f, true, tg); }
                 if (now >= x.think) {
                     const Weapon& w = x.spec->ranged; float draw = w.anim == 9 ? TM::crossbowReload : TM::bowNock + r.bowDraw / std::max(0.3f, w.speed) * 0.6f + RU(x, 30, TM::bowHoldMin, TM::bowHoldMax) * 0.5f;
