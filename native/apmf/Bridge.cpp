@@ -56,6 +56,7 @@ namespace MFO::APMFBridge {
 
         std::mutex                             g_mx;
         std::unordered_map<RE::FormID, Owned>  g_owned;
+        std::unordered_map<std::uint64_t, FireOnceSpent> g_fireOnceSpent;
         // ch.17 claim-refusal error throttle (once per refusal streak, per
         // follower). Outside Owned on purpose: a refused claim leaves no handle,
         // so its Owned entry is erased and could not carry the latch. Under g_mx.
@@ -203,8 +204,21 @@ namespace MFO::APMFBridge {
 
         // Release ONE CastClaim's handle (if live) and reset it to default.
         // Caller holds g_mx. Safe to call on an already-empty claim (no-op).
+        bool NoteFireOnceEnd(const CastClaim& a_c) {
+            if (!a_c.fireOnce || a_c.handle == APMF_API::kInvalidHandle || a_c.owner == 0) return false;
+            auto* api = g_apmf.load(std::memory_order_relaxed);
+            if (!api || api->abiVersion < kFireOnceAbi) return false;
+            const auto* v31 = reinterpret_cast<const APMF_API::APMF_API_v31*>(api);
+            if (!v31->GetClaimEndReason || v31->GetClaimEndReason(a_c.handle) != APMF_API::kClaimEnd_Fired) return false;
+            g_fireOnceSpent[(static_cast<std::uint64_t>(a_c.owner) << 32) | a_c.spell] = { a_c.target, std::chrono::steady_clock::now() };
+            spdlog::info("[apmf] {:08X} fire-once claim h={} for spell {:08X} at {:08X} had FIRED (read before its release)", a_c.owner,
+                         a_c.handle, a_c.spell, a_c.target);
+            return true;
+        }
+
         void ReleaseClaimLocked(CastClaim& c) {
             auto* api = g_apmf.load(std::memory_order_relaxed);
+            NoteFireOnceEnd(c);   // the Fired end is read before the claim is released (a gone claim answers nothing)
             if (api && c.handle != APMF_API::kInvalidHandle) api->Release(c.handle);
             c = CastClaim{};
         }
@@ -526,7 +540,13 @@ namespace MFO::APMFBridge {
                 // failure this work exists to remove (principle 7).
                 if (c.everLive) {
                     // AGED OUT: this claim WAS in force and hit APMF's own TTL. Normal
-                    // and expected -- re-request, exactly as before this split.
+                    // and expected -- re-request, exactly as before this split. EXCEPT a fire-once claim that had FIRED (review A3):
+                    // its one cast is spent, so it is latched and NOT re-requested here (the mint below would erase the latch and
+                    // cast a second time). The claim is left empty; the caller declines this lap and takes the latch on its next.
+                    if (NoteFireOnceEnd(c)) {
+                        c = CastClaim{};
+                        return;
+                    }
                     spdlog::info("[apmf] {:08X} kIntent_Cast claim (spell {:08X}) already auto-expired "
                                  "at APMF's own TTL -- re-requesting instead of trusting a dead handle",
                                  follower, wantSpell);
@@ -589,6 +609,7 @@ namespace MFO::APMFBridge {
                     return;
                 }
             }
+            NoteFireOnceEnd(c);   // superseded: a fire-once claim that had fired is read before it is replaced
             if (c.handle != APMF_API::kInvalidHandle) { api->Release(c.handle); c.handle = APMF_API::kInvalidHandle; }
             // The request is built by BuildCastRequestLocked (above), the ONE builder the ABI v35 dry run
             // (CanServeCast, MFO-B2) shares, so the shape it asks about is the shape filed here.
@@ -648,6 +669,11 @@ namespace MFO::APMFBridge {
                 c.denyOnly = wantDenyOnly;
                 c.fullFloor = wantFullFloor;
                 c.fireOnce  = wantFireOnce;
+                c.owner     = follower;
+                if (wantFireOnce)   // a NEW claim at that target: its own fire counts
+                    if (const auto fs = g_fireOnceSpent.find((static_cast<std::uint64_t>(follower) << 32) | wantSpell);
+                        fs != g_fireOnceSpent.end() && fs->second.target == wantTarget)
+                        g_fireOnceSpent.erase(fs);
                 // Fable SEV-1 (2026-09-06): the claim's AGE clock, stamped HERE
                 // and only here -- this is the single point where a NEW handle
                 // comes into existence. The unchanged-and-still-live fast path
@@ -1454,6 +1480,7 @@ namespace MFO::APMFBridge {
             o.selectList.clear();
         }
         g_owned.clear();
+        g_fireOnceSpent.clear();
         ClearTargetPinsLocked();   // ch.20 pins: APMF drops them at its own kPreLoadGame; stale Release is a no-op
         ClearCombatEntriesLocked();   // ch.21 entries: same (never saved on APMF's side either)
         ClearEngageGiveUps();         // v31 not-engaged give-ups: not saved, a load drops Harbinger's end records too
