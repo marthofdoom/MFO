@@ -71,8 +71,8 @@ namespace MFO::SelfTest {
             if (!base) { a_note = std::format("Skyrim.esm base {:06X} does not resolve", a_spec.baseLocal); return false; }
             auto        pos = a_follower->GetPosition();
             const float ang = a_follower->GetAngleZ();
-            pos.x += std::sin(ang) * 700.0f;
-            pos.y += std::cos(ang) * 700.0f;
+            pos.x += std::sin(ang) * a_spec.distance;
+            pos.y += std::cos(ang) * a_spec.distance;
             if (a_spec.clearSpot && !ClearSpot(a_follower, pos)) { a_note = "no standable ground around the follower"; return false; }
             auto ref = a_follower->PlaceObjectAtMe(base, false);
             auto* foe = ref ? ref->As<RE::Actor>() : nullptr;

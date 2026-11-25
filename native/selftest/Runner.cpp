@@ -137,6 +137,7 @@ namespace MFO::SelfTest {
                 std::lock_guard lk(g_mx);
                 results = g_results;
             }
+            std::erase_if(results, [](const auto& kv) { return kv.first.starts_with('_'); });   // bookkeeping markers (ApplyCodeRetest) are not results
             int pass = 0, fail = 0, info = 0;
             const auto toast = [&](std::string t) {
                 if (g_doneToast || pass + fail + info == 0) return;
@@ -411,6 +412,22 @@ namespace MFO::SelfTest {
             spdlog::info("[selftest] {}: reset generation {} -> {}: cleared {} result(s) ({})", kIniPath,
                          g_resetGeneration, gen, cleared, only.empty() ? "all" : "sResetOnly");
             g_resetGeneration = gen;
+        }
+
+        // CODE RETEST (field 11-24c): the tests whose RESULT a fix of this branch makes stale run again on the next load, with no INI edit. A bare
+        // marker result "_retest.<tag>" (the 'MFST' record already round-trips any result id, so no layout change) says it was applied to this save;
+        // while it is absent the ids below are cleared once. To retest a test again after a later fix: add its id here and bump the tag.
+        constexpr const char*      kRetestMarker = "_retest.1124c";
+        constexpr std::string_view kRetestIds[]  = { "anim.summon_iaus", "anim.summon_gambit", "anim.fire_once", "anim.party_gap_conc", "buff.animated_claim_road",
+                                                     "bound_bow.fires", "costparity.fireforget", "costparity.concentration", "g0b.cover", "g0b.doorway" };
+        void ApplyCodeRetest() {
+            std::lock_guard lk(g_mx);
+            if (g_results.contains(kRetestMarker)) return;
+            std::size_t cleared = 0;
+            for (const auto id : kRetestIds) cleared += g_results.erase(std::string(id));
+            g_results[kRetestMarker] = { true, 0, "the tests changed by the 11-24c diagnosis fixes were cleared once so they run again", true };
+            spdlog::info("[selftest] code retest {}: cleared {} stale result(s) of {} listed test(s); they run again on this load", kRetestMarker, cleared,
+                         std::size(kRetestIds));
         }
 
         // One end for every way a run stops. a_complete = PASS / FAIL / INFO (persisted); else RETRY / ABORT.
@@ -741,6 +758,7 @@ namespace MFO::SelfTest {
         }
         if (afterLoad) {
             ApplyResetIni();
+            ApplyCodeRetest();
             LogPending("after load", true);
         }
         if (postOrphans) {

@@ -38,6 +38,7 @@ namespace MFO::SelfTest {
         constexpr RE::FormID kCourage     = 0x0004DEE8;   // SPEL Courage (aimed influence)
         constexpr RE::FormID kHuntingBow  = 0x00013985;   // WEAP HuntingBow
         constexpr RE::FormID kIronArrow   = 0x0001397D;   // AMMO IronArrow
+        constexpr RE::FormID kAbMagicka   = 0x00105F16;   // SPEL AbHighElfMagicka (constant ability, +50 magicka): the same lent pool TestsAnim's Lend() uses
 
         double NowMs() {
             return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -103,23 +104,53 @@ namespace MFO::SelfTest {
         // whichever road cast it. The follower is hurt and a temp row (self HP < 95% -> cast the heal on himself, highest priority) makes him
         // cast while the spawned hostile keeps him in combat. Judged from the CostParity billing events (the road, P, E of every bill) AND the
         // measured magicka drop: Fire-and-forget: drop == sum of P over the casts; concentration: drain rate == P per second.
-        const char* CostPre(Ctx& c, RE::FormID a_local, double a_minPool) {
+        // ANY FOLLOWER (field 11-24c: the old gate demanded a fixed pool of 80 / 100 and both followers peak at 64 to 67, so it could never qualify).
+        // The test LENDS magicka like TestsAnim's Lend(): a refill and, when the pool cannot hold the casts, the +50 ability (taken back by the
+        // runner). The need is the spell's REAL player cost P: the larger of the player's own price and the follower's, times the casts
+        // (fire-and-forget) or the seconds (concentration) the judging reads. set[0] = { spell }.
+        float MaxMag(RE::Actor* a) {
+            auto* avo = a ? a->AsActorValueOwner() : nullptr;
+            return avo ? avo->GetPermanentActorValue(RE::ActorValue::kMagicka) +
+                             a->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary, RE::ActorValue::kMagicka)
+                       : 0.0f;
+        }
+        float RealCost(RE::SpellItem* a_sp, RE::Actor* a_who) {
+            auto* pc = RE::PlayerCharacter::GetSingleton();
+            return std::max(pc ? a_sp->CalculateMagickaCost(pc) : 0.0f, a_sp->CalculateMagickaCost(a_who));
+        }
+        constexpr float kCostFFCasts = 3.0f, kCostConcSeconds = 8.0f;   // the pool the judging needs: two heals and a top-up, a channel of >= 3 s plus the settle
+        const char* CostPre(Ctx& c, RE::FormID a_local) {
             if (!CostParity::Active()) return "bFollowerSpellCostParity on and the six cost GMSTs read ([costparity] ACTIVE at startup)";
             RE::FormID sp = 0;
             if (!V(a_local, sp)) return "the Skyrim.esm heal spell resolvable";
             if (c.inCombat) return "out of combat (the runner starts its own fight)";
-            if (Mag(c.follower) < a_minPool) return "the follower's magicka above the spell's cost (wait for it to regenerate)";
             c.s->set[0] = { sp };
             return nullptr;
         }
-        const char* CostFFPre(Ctx& c) { return CostPre(c, kHealing, 80.0); }
-        const char* CostConcPre(Ctx& c) { return CostPre(c, kFastHealing, 100.0); }
+        const char* CostFFPre(Ctx& c) { return CostPre(c, kHealing); }
+        const char* CostConcPre(Ctx& c) { return CostPre(c, kFastHealing); }
+        // The pool this test needs on this follower (0 = the spell is not resolvable). Worker read.
+        float CostNeed(Ctx& c) {
+            auto* sp = c.s->set[0].empty() ? nullptr : RE::TESForm::LookupByID<RE::SpellItem>(c.s->set[0][0]);
+            if (!sp) return 0.0f;
+            const bool conc = sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
+            return RealCost(sp, c.follower) * (conc ? kCostConcSeconds : kCostFFCasts) + 2.0f;
+        }
         void CostFix(Ctx& c, FixtureRequest& r) {
             r.spells.push_back(c.s->set[0][0]);
+            r.fillMagicka = true;
+            if (CostNeed(c) > MaxMag(c.follower))
+                if (const auto ab = VanillaForm(kAbMagicka)) r.spells.push_back(ab);
             r.rows.push_back(Row(Vocab::kCondSelfHpBelow, Vocab::kActCastSelf, c.s->set[0][0], 0.95f));
             AddFightRows(r);
             r.spawn.on = true;
             r.spawn.hurtPct = 45.0f;
+        }
+        // The first step: a pool that even the lent ability cannot make enough is a SKIP with the numbers, never a silent wait.
+        std::string CostPoolShort(Ctx& c) {
+            const float need = CostNeed(c);
+            if (MaxMag(c.follower) >= need) return {};
+            return std::format("his magicka pool {:.0f} (the lent ability included) is below the {:.0f} the judging needs", MaxMag(c.follower), need);
         }
         std::string RoadsSeen(unsigned a_mask) {
             std::string o;
@@ -136,6 +167,7 @@ namespace MFO::SelfTest {
             const double     pool = Mag(c.follower);
             const auto       ev = CostParity::DevEvents();
             if (!s.b[0]) {
+                if (const auto why = CostPoolShort(c); !why.empty()) return Step::Skip(why);
                 s.b[0] = true;
                 for (const auto& e : ev) s.n[1] = std::max<double>(s.n[1], e.seq);
                 s.n[0] = pool;
@@ -198,6 +230,7 @@ namespace MFO::SelfTest {
             const double     pool = Mag(c.follower);
             const auto       ev = CostParity::DevEvents();
             if (!s.b[0]) {
+                if (const auto why = CostPoolShort(c); !why.empty()) return Step::Skip(why);
                 s.b[0] = true;
                 g_cs.clear();
                 for (const auto& e : ev) s.n[1] = std::max<double>(s.n[1], e.seq);
@@ -296,10 +329,19 @@ namespace MFO::SelfTest {
             if (!V(kOakflesh, o) || !V(kWardLesser, w)) return "the Skyrim.esm Oakflesh / Lesser Ward resolvable";
             return nullptr;
         }
-        void BuffFix(Ctx&, FixtureRequest& r) {
+        void BuffFix(Ctx& c, FixtureRequest& r) {
             const RE::FormID o = VanillaForm(kOakflesh), w = VanillaForm(kWardLesser);
+            {   // THE BASELINE IS TAKEN HERE, before the fixture and the temp rows apply (field 11-24c: a claim filed between the rows and the first step
+                // was in the baseline, so the verdict said "filed 0" while one was filed). b[4] = taken; the step re-takes it only when this did not run.
+                auto& s = *c.s;
+                const RE::FormID sp[2] = { o, w };
+                for (int i = 0; i < 2; ++i) { s.n[i] = Actuation::DevBuffClaimCount(sp[i]); s.n[2 + i] = Actuation::DevBuffLandedCount(sp[i]); }
+                s.b[4] = true;
+            }
             r.spells.push_back(o);
             r.spells.push_back(w);
+            // LISTED ORDER IS THE TABLE ORDER (Setup.cpp keeps it): Oakflesh above the ward, so a ward claim that stands never starves it (the
+            // reversed rows put the ward first and it held LEFT for 15 s). Both are fire-and-forget / bounded claims; the second is reached once the first is up.
             r.rows.push_back(Row(Vocab::kCondAlways, Vocab::kActCastSelf, o));
             r.rows.push_back(Row(Vocab::kCondAlways, Vocab::kActCastSelf, w));
             AddFightRows(r);
@@ -320,7 +362,8 @@ namespace MFO::SelfTest {
             const RE::FormID sp[2] = { VanillaForm(kOakflesh), VanillaForm(kWardLesser) };
             if (!s.b[0]) {
                 s.b[0] = true;
-                for (int i = 0; i < 2; ++i) { s.n[i] = Actuation::DevBuffClaimCount(sp[i]); s.n[2 + i] = Actuation::DevBuffLandedCount(sp[i]); }
+                if (!s.b[4])
+                    for (int i = 0; i < 2; ++i) { s.n[i] = Actuation::DevBuffClaimCount(sp[i]); s.n[2 + i] = Actuation::DevBuffLandedCount(sp[i]); }
                 if (!APMFBridge::CastSeatsSupported())
                     return Step::Info("Harbinger is absent or older than ABI 19: the animated claim road is not served and these buffs take the direct road by design "
                                       "(a documented degrade, nothing to verify)");

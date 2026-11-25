@@ -70,6 +70,7 @@ namespace MFO::SelfTest {
         bool        clearSpot = false;        // place it on standable ground in the follower's clear view (Harbinger's FindEmptySpace); none = refused, RETRY
         bool        onPlayer = false;         // the hostile is set on the PLAYER, not on the follower (the party-fight gap)
         int         respawns = 3;             // re-spawned when the hostile dies while the test still runs
+        float       distance = 700.0f;        // units in front of the follower the hostile is placed (the cover test places it well away)
     };
     // Log-only probe flags switched on IN MEMORY for the run (never the INI file) and put back.
     enum ProbeBit : unsigned { kProbeAim = 1u << 0, kProbeStorageMove = 1u << 1 };   // kProbeStorageMove: storage.chest_roundtrip (86e3t212u)

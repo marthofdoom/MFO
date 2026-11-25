@@ -6,7 +6,7 @@
 // own rays through Sightline::PointSeenNow), file ONE claim (apmf/DevHold.cpp, the Disengage.cpp road), sample him every pump tick
 // (~133 ms), release, print ONE line:
 //   [hold] RESULT <test> leg n/m <what> R=<r>: PASS|FAIL|MEASURED|SKIP ...
-// PASS = arrived, and inside R for >= 90% of the time after arrival (gate P2). FAIL = he was held by our claim and did not.
+// PASS = arrived, and inside R + 25 u (kT.margin) for >= 90% of the time after arrival (gate P2; inside R itself is reported beside it). FAIL = he was held by our claim and did not.
 // SKIP = the leg could not be measured (no such place here, another MFO claim owned the channel, combat ended).
 // A TEST's own verdict: INFO (complete, the numbers are in the evidence); FAIL only when the claim was refused or never carried by the
 // engine in every leg; RETRY when nothing could be measured.
@@ -42,6 +42,7 @@ namespace MFO::SelfTest {
         // ── tunables of the exerciser, one table ─────────────────────────────────────────────────
         struct Tuning {
             float passInside   = 0.90f;   // gate P2
+            float margin       = 25.0f;   // a spot is scored with this margin (field 11-24c: he stops AT the circle edge, avg dist 0.9 to 1.0 R, so "inside R" punishes the edge); R itself is reported too
             float coverWalk    = 1400.0f; // how far he may walk to a cover / flank point
             float coverGap     = 250.0f;  // a cover point stays this far from the foe
             int   coverPerFrame = 10;     // engine sight answers (3 rays each) per frame
@@ -81,6 +82,7 @@ namespace MFO::SelfTest {
             Who         who;
             RE::FormID  foe;              // Skyrim.esm base, 0 = no foe (out of combat)
             std::vector<Leg> legs;
+            float       foeAt = 700.0f;   // where the foe is placed, units in front of him (the cover test: well away, never in contact, field 11-24c)
         };
         // Skyrim.esm bases, read in the master 2026-11-24: skeleton warrior / skeleton archer / novice fire mage.
         constexpr RE::FormID kMelee = 0x0002D1DE, kArcher = 0x0002D1FC, kMage = 0x00044CE5;
@@ -92,7 +94,7 @@ namespace MFO::SelfTest {
             };
             static const std::vector<HoldTest> k = {
                 { "g0b.cover", "(any follower, any place) a point hidden from the foe that he can walk to; none = SKIP with the counts", Who::Any, kArcher,
-                  { { "cover", Where::Cover, 100, 15 }, { "cover", Where::Cover, 64, 15 } } },
+                  { { "cover", Where::Cover, 100, 15 }, { "cover", Where::Cover, 64, 15 } }, 1100.0f },
                 { "g0b.doorway", "(any follower, any place) a doorway within 1200 units, else open ground (PROXY)", Who::Any, kMelee,
                   { { "doorway", Where::Doorway, 150, 15 }, { "doorway", Where::Doorway, 100, 15 } } },
                 { "g0b.hold_idle", "out of combat, nobody near", Who::Any, 0, sweep(5) },
@@ -107,9 +109,9 @@ namespace MFO::SelfTest {
                     { "corner 3", Where::Corner, 100, 9 } } },
                 { "g0b.flank", "(any follower) a point to the foe's side", Who::Any, kMelee,
                   { { "flank", Where::Flank, 100, 15 }, { "flank", Where::Flank, 64, 15 } } },
-                { "g0b.quiet_melee", "(any follower) the same hold with and without the calm ch.33 style", Who::Any, kMelee,
+                { "g0b.quiet_melee", "(any follower) the same hold with and without the calm ch.33 style, against a MELEE foe (the result is labelled by HIS role)", Who::Any, kMelee,
                   { { "normal", Where::Near, 150, 13 }, { "CALM", Where::Same, 150, 13, true }, { "normal", Where::Same, 150, 13 }, { "CALM", Where::Same, 150, 13, true } } },
-                { "g0b.quiet_mage", "(any follower) the same hold with and without the calm ch.33 style", Who::Any, kMage,
+                { "g0b.quiet_mage", "(any follower) the same hold with and without the calm ch.33 style, against a MAGE foe (the result is labelled by HIS role)", Who::Any, kMage,
                   { { "normal", Where::Near, 150, 13 }, { "CALM", Where::Same, 150, 13, true }, { "normal", Where::Same, 150, 13 }, { "CALM", Where::Same, 150, 13, true } } },
             };
             return k;
@@ -335,7 +337,7 @@ namespace MFO::SelfTest {
         // ── the runs (WORKER ONLY) ───────────────────────────────────────────────────────────────
         enum class Phase : std::uint8_t { Start, Planning, Filing, Active, Done };
         struct Stats {
-            float t = 0, afterT = 0, insideT = 0;       // leg seconds / after arrival / inside after arrival
+            float t = 0, afterT = 0, insideT = 0, insideMT = 0;       // leg seconds / after arrival / inside R after arrival / inside R + margin after arrival
             float arriveAt = -1, startD = 0, walkedTo = 0, walkedIn = 0, maxD = 0, sumD = 0, lastD = 0, sightT = 0, sightN = 0;
             int   samples = 0, escapes = 0, attacks = 0, shots = 0, casts = 0;
             float face[3]{};                                     // facing the foe: front / side / back, seconds
@@ -365,7 +367,7 @@ namespace MFO::SelfTest {
             std::string   endWhy;
             std::string   summary, hands;
             Stats st;
-            float qWalk[2]{}, qSec[2]{}, qAtk[2]{}, qCast[2]{}, qIn[2]{}, qAfter[2]{};   // [0] normal, [1] CALM
+            float qWalk[2]{}, qSec[2]{}, qAtk[2]{}, qCast[2]{}, qIn[2]{}, qInM[2]{}, qAfter[2]{};   // [0] normal, [1] CALM
         };
         std::unordered_map<RE::FormID, HRun> g_hruns;
 
@@ -438,6 +440,7 @@ namespace MFO::SelfTest {
                 else {
                     s.afterT += dt;
                     if (in) s.insideT += dt;
+                    if (d <= leg.radius + kT.margin) s.insideMT += dt;
                     s.walkedIn += walked;
                     s.gait[v < 25.0f ? 0 : v < 160.0f ? 1 : 2] += dt;
                 }
@@ -529,7 +532,8 @@ namespace MFO::SelfTest {
                 r.phase = Phase::Start;
                 return;
             }
-            const float inside = s.afterT > 0.2f ? s.insideT / s.afterT : 0.0f;
+            const float inside  = s.afterT > 0.2f ? s.insideT / s.afterT : 0.0f;
+            const float insideM = s.afterT > 0.2f ? s.insideMT / s.afterT : 0.0f;   // inside R + margin: the number the verdict reads
             const float avgD   = s.samples ? s.sumD / static_cast<float>(s.samples) : -1.0f;
             const float drift  = s.afterT > 0.2f ? s.walkedIn / s.afterT : 0.0f;
             const char* v      = "MEASURED";
@@ -547,31 +551,31 @@ namespace MFO::SelfTest {
             } else if (s.arriveAt < 0) {
                 v = "FAIL(never arrived)";
             } else {
-                v = inside >= kT.passInside ? "PASS" : "FAIL(left the radius)";
+                v = insideM >= kT.passInside ? "PASS" : "FAIL(left the radius)";
             }
             if (v[0] != 'S') ++r.measured;
             if (leg.quiet || std::string_view(leg.what) == "normal") {
                 const int q = leg.quiet ? 1 : 0;
                 r.qWalk[q] += s.walkedIn; r.qSec[q] += s.t; r.qAtk[q] += static_cast<float>(s.attacks); r.qCast[q] += static_cast<float>(s.casts);
-                r.qIn[q] += s.insideT; r.qAfter[q] += s.afterT;
+                r.qIn[q] += s.insideT; r.qInM[q] += s.insideMT; r.qAfter[q] += s.afterT;
             }
             const auto foeDist = [&] {
                 auto* f = r.foe ? RE::TESForm::LookupByID<RE::Actor>(r.foe) : nullptr;
                 return f ? f->GetPosition().GetDistance(s.prev) : -1.0f;
             }();
-            spdlog::info("[hold] RESULT {} leg {}/{} '{}' R={:.0f}: {} | {:08X} {} | start {:.0f}u, arrived {:.1f}s after walking {:.0f}u, inside {:.0f}% of {:.1f}s, "
+            spdlog::info("[hold] RESULT {} leg {}/{} '{}' R={:.0f}: {} | {:08X} {} | start {:.0f}u, arrived {:.1f}s after walking {:.0f}u, inside R {:.0f}% / inside R+{:.0f}u {:.0f}% of {:.1f}s, "
                          "escapes {}, dist avg {:.0f} max {:.0f} last {:.0f}, drift {:.0f} u/s | attacks {} shots {} casts {} | facing foe front/side/back "
                          "{:.1f}/{:.1f}/{:.1f}s, moving fwd/strafe/back {:.1f}/{:.1f}/{:.1f}s, gait still/walk/run {:.1f}/{:.1f}/{:.1f}s, top {:.0f} u/s | "
                          "sees foe {:.0f}%, foe at {:.0f}u | state {} applied {} calm-style {} | MFO asked: {} | end: {} | role {}, engine inside {:.0f}% of {:.1f}s, leashed {:.1f}s, role lost {:.1f}s, player at most {:.0f}u",
-                         t.id, r.leg + 1, t.legs.size(), leg.what, leg.radius, v, a_id, r.hands, s.startD, s.arriveAt, s.walkedTo, inside * 100.0f, s.afterT,
+                         t.id, r.leg + 1, t.legs.size(), leg.what, leg.radius, v, a_id, r.hands, s.startD, s.arriveAt, s.walkedTo, inside * 100.0f, kT.margin, insideM * 100.0f, s.afterT,
                          s.escapes, avgD, s.maxD, s.lastD, drift, s.attacks, s.shots, s.casts, s.face[0], s.face[1], s.face[2], s.move[0], s.move[1],
                          s.move[2], s.gait[0], s.gait[1], s.gait[2], s.sprintV, s.sightN > 0.2f ? 100.0f * s.sightT / s.sightN : -1.0f, foeDist, s.state,
                          s.applied, leg.quiet ? (s.styleLive ? "LIVE" : "NOT LIVE") : "no", AskText(s.asked), r.endWhy,
                          t.foe ? RoleName(r.role) : "-", s.engineT > 0.2f ? 100.0f * s.engineInT / s.engineT : -1.0f, s.engineT, s.leashT, s.roleLostT, s.playerD);
-            Toast(std::format("MFO {} {}/{} {} R{:.0f}: {} ({:.0f}% inside, {} atk, {} cast)", t.id, r.leg + 1, t.legs.size(), leg.what, leg.radius,
-                              std::string_view(v).substr(0, 4) == "MEAS" ? "measured" : v, inside * 100.0f, s.attacks, s.casts));
-            r.summary += std::format("{}{} R{:.0f} {:.4} in {:.0f}% arr {:.1f}s drift {:.0f} atk {} shot {} cast {}", r.summary.empty() ? "" : "; ", leg.what,
-                                     leg.radius, std::string_view(v), inside * 100.0f, s.arriveAt, drift, s.attacks, s.shots, s.casts);
+            Toast(std::format("MFO {} {}/{} {} R{:.0f}: {} ({:.0f}% inside R, {:.0f}% inside R+{:.0f}, {} atk, {} cast)", t.id, r.leg + 1, t.legs.size(), leg.what, leg.radius,
+                              std::string_view(v).substr(0, 4) == "MEAS" ? "measured" : v, inside * 100.0f, insideM * 100.0f, kT.margin, s.attacks, s.casts));
+            r.summary += std::format("{}{} R{:.0f} {:.4} in {:.0f}%/{:.0f}%(+{:.0f}u) arr {:.1f}s drift {:.0f} atk {} shot {} cast {}", r.summary.empty() ? "" : "; ", leg.what,
+                                     leg.radius, std::string_view(v), inside * 100.0f, insideM * 100.0f, kT.margin, s.arriveAt, drift, s.attacks, s.shots, s.casts);
             ++r.leg;
             r.redo  = 0;
             r.restarts = 0;
@@ -594,9 +598,12 @@ namespace MFO::SelfTest {
         Step Verdict_(RE::FormID a_id, HRun& r) {
             const auto& t = Tests()[r.test];
             if (r.qSec[0] > 1.0f && r.qSec[1] > 1.0f && r.qAfter[0] > 0.5f && r.qAfter[1] > 0.5f) {
-                const auto line = std::format("QUIET COMPARE normal vs CALM: drift {:.0f} vs {:.0f} u/s, inside {:.0f}% vs {:.0f}%, attacks/min {:.1f} vs {:.1f}, "
-                                              "casts/min {:.1f} vs {:.1f}",
+                // LABELLED BY THE FOLLOWER'S ROLE (the table's name is the FOE's kind: field 11-24c, "quiet_melee" ran only bow legs)
+                const auto line = std::format("QUIET COMPARE ({} follower vs a {} foe) normal vs CALM: drift {:.0f} vs {:.0f} u/s, inside R {:.0f}% vs {:.0f}%, inside R+{:.0f}u {:.0f}% vs {:.0f}%, "
+                                              "attacks/min {:.1f} vs {:.1f}, casts/min {:.1f} vs {:.1f}",
+                                              RoleName(r.role), t.foe == kMage ? "mage" : "melee",
                                               r.qWalk[0] / r.qAfter[0], r.qWalk[1] / r.qAfter[1], 100 * r.qIn[0] / r.qAfter[0], 100 * r.qIn[1] / r.qAfter[1],
+                                              kT.margin, 100 * r.qInM[0] / r.qAfter[0], 100 * r.qInM[1] / r.qAfter[1],
                                               60 * r.qAtk[0] / r.qSec[0], 60 * r.qAtk[1] / r.qSec[1], 60 * r.qCast[0] / r.qSec[0], 60 * r.qCast[1] / r.qSec[1]);
                 spdlog::info("[hold] RESULT {} {:08X}: {}", t.id, a_id, line);
                 r.summary = line + " | " + r.summary;
@@ -769,6 +776,7 @@ namespace MFO::SelfTest {
             q.spawn.baseLocal = t.foe;
             q.spawn.health    = kT.foeHealth;
             q.spawn.respawns  = 2;
+            q.spawn.distance  = t.foeAt;
         }
         Step TimeoutHold(Ctx& c, int a_test) {
             const auto it = g_hruns.find(c.id);

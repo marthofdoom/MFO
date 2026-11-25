@@ -48,6 +48,10 @@ namespace MFO::SelfTest {
         // Skyrim.esm local ids, read in the master 2026-11-24.
         constexpr RE::FormID kFlameAtronach = 0x000204C3, kFamiliar = 0x000640B6, kOakflesh = 0x0005AD5C, kCandlelight = 0x00043324,
                              kWardLesser = 0x00013018, kAbMagicka = 0x00105F16;   // AbHighElfMagicka (constant ability)
+        // A spell-casting foe for the ward (field 11-24c: a melee mudcrab is no threat, so the engine's own Ward item said NO and no ward ever fired).
+        // Skyrim.esm NPC_ EncBandit01MagicArgonianM (verified in the master 2026-11-24, tools/esp_inspect.py: a bandit mage whose spell list holds
+        // Healing, Lesser Ward, Oakflesh and two more); a plain base form of the master, load-order agnostic.
+        constexpr RE::FormID kCasterFoe = 0x000C3C9F;
 
         double NowMs() { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
 
@@ -453,6 +457,9 @@ namespace MFO::SelfTest {
         const char* GapConcPre(Ctx& c) {
             if (const char* r = Ready(c)) return r;
             c.s->set[0].clear();
+            // The ward needs a foe that gives it a reason (a spell-casting one): no resolvable caster foe = nothing lent = SKIP with the reason.
+            const auto foe = VanillaForm(kCasterFoe);
+            if (!foe || !RE::TESForm::LookupByID<RE::TESNPC>(foe)) return nullptr;
             if (const auto id = VanillaForm(kWardLesser)) c.s->set[0] = { id };
             return nullptr;
         }
@@ -463,11 +470,15 @@ namespace MFO::SelfTest {
             r.spawn.onPlayer = true;
             r.rows.push_back(CastRow(Spell(c)));
         }
+        void GapConcFix(Ctx& c, FixtureRequest& r) {
+            GapFix(c, r);
+            if (r.spawn.on) r.spawn.baseLocal = kCasterFoe;   // the ward's foe: a spell-caster, not the default mudcrab
+        }
         Step GapStep(Ctx& c) {
             auto& s = *c.s;
             if (const char* why = NoLog()) return Step::Skip(why);
             if (const char* why = NoHarbinger()) return Step::Skip(why);
-            if (!Spell(c)) return Step::Skip("no buff to lend (Oakflesh / Candlelight / Lesser Ward): not in the load order, already on him, or too dear");
+            if (!Spell(c)) return Step::Skip("no buff to lend (Oakflesh / Candlelight / Lesser Ward): not in the load order, already on him, or too dear (the ward also needs the spell-casting bandit mage of Skyrim.esm as its foe)");
             if (!s.b[0]) { Begin(c); return Step::Continue(); }
             NoteProxy(c);
             if (const auto bad = Unanimated(c); !bad.empty()) return End(Step::Fail("cast UNANIMATED: " + bad));
@@ -584,7 +595,7 @@ namespace MFO::SelfTest {
         Register({ "anim.summon_iaus", ref, "(any follower) a lent location summon, Sentient AI on, a spawned fight", 120.0f, SummonPre, SummonFixIaus, SummonIaus, AnyTimeout, true });
         Register({ "anim.fire_once", ref, "(any follower) a lent ambiguous-row buff (SKIP when the load order has none)", 150.0f, FireOncePre, FireOnceFix, FireOnceStep, AnyTimeout, true });
         Register({ "anim.party_gap", ref, "(any follower) a lent buff while only the player fights", 80.0f, GapPre, GapFix, GapStep, AnyTimeout, true });
-        Register({ "anim.party_gap_conc", ref, "(any follower) the same with Lesser Ward (concentration)", 80.0f, GapConcPre, GapFix, GapStep, AnyTimeout, true });
+        Register({ "anim.party_gap_conc", ref, "(any follower) the same with Lesser Ward (concentration) against a spell-casting foe", 80.0f, GapConcPre, GapConcFix, GapStep, AnyTimeout, true });
         Register({ "anim.blocked_blast", ref, "(any follower) a lent hostile self area spell, Sentient AI on", 70.0f, BlastPre, BlastFix, BlastStep, BlastTimeout, true });
         Register({ "anim.summon_gambit", ref, "(any follower) the summon through a gambit row (after the first creature is gone)", 120.0f, SummonPre, SummonFixGambit, SummonGambit, AnyTimeout, true });
     }

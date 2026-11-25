@@ -119,7 +119,10 @@ namespace MFO::SelfTest {
             spdlog::info("[selftest] setup {:08X}: Sentient AI switch {} for the run (his own: {})", a_follower, a_out.iausNow ? "ON" : "OFF",
                          a_out.iausPrev ? "on" : "off");
         }
-        // 2. rows (front of the table = highest priority; the player's rows keep their order below)
+        // 2. rows (the front of the table = highest priority; the player's rows keep their order below). THE LISTED ORDER IS THE TABLE ORDER: the
+        // first row listed for a table is its top row (field 11-24c: each row was inserted at begin(), which REVERSED the list and put the attack
+        // above the cast it was meant to follow). One insert position per table.
+        std::size_t put[2] = { 0, 0 };
         for (const auto& r : a_req.rows) {
             Gambit g;
             g.uid             = NextRuleUID();
@@ -134,10 +137,12 @@ namespace MFO::SelfTest {
                 std::lock_guard lk(g_mx);   // registered BEFORE the row exists: a save can never see an unregistered run row
                 g_runRows[a_follower].push_back(g.uid);
             }
-            tbl.insert(tbl.begin(), std::move(g));
-            a_out.rowUids.push_back(tbl.front().uid);
-            spdlog::info("[selftest] setup {:08X}: TEMP ROW uid {} inserted at the front of the {} table: {} -> {} (form {:08X} '{}', "
-                         "param {}, subject {})", a_follower, a_out.rowUids.back(), r.table == Table::Combat ? "combat" : "logistics",
+            const auto at = static_cast<std::ptrdiff_t>(std::min(put[static_cast<std::size_t>(r.table) & 1], tbl.size()));
+            tbl.insert(tbl.begin() + at, std::move(g));
+            ++put[static_cast<std::size_t>(r.table) & 1];
+            a_out.rowUids.push_back(tbl[static_cast<std::size_t>(at)].uid);
+            spdlog::info("[selftest] setup {:08X}: TEMP ROW uid {} inserted at position {} of the {} table: {} -> {} (form {:08X} '{}', "
+                         "param {}, subject {})", a_follower, a_out.rowUids.back(), at, r.table == Table::Combat ? "combat" : "logistics",
                          r.cond, r.act, r.form, r.form ? FormName(r.form) : std::string("-"), r.condParam, static_cast<int>(r.subject));
         }
         // 3. probes (memory only)
