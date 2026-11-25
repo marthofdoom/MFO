@@ -103,6 +103,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     iaus/Engine.cpp
     iaus/Generate.cpp
     iaus/SpellBook.cpp
+    iaus/AreaActors.cpp
     iaus/EffectMirror.cpp
     iaus/PerkEffects.cpp
     iaus/Candidates.cpp

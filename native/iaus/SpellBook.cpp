@@ -356,6 +356,7 @@ namespace MFO::Iaus::SpellBook {
             e.meleeBuff = arch.row == Actuation::EngineRow::Armor || arch.row == Actuation::EngineRow::Cloak ||
                           arch.shape == Actuation::SpellShape::Cloak;
             e.areaUnits = blast.units;
+            e.hostileArea = blast.hostileArea || arch.hostileImpact;   // M2 (iaus/AreaCensus.h): read for a Control area
             if (arch.area > 0 || blast.explosionUnits > 0.0f)
                 a_probes.emplace_back(e.form, std::format("area probe: {} ({:08X}): EFIT area {} ft = {:.0f} units, explosion radius {:.0f} units ({}), "
                                                           "payload explosion {:.0f} units -> blast {:.0f} units{}", e.name, e.form, arch.area,

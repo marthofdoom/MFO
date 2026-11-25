@@ -14,6 +14,8 @@
 #include "apmf/APMFBridge.h"
 #include "cast/Actuation.h"
 #include "Concealment.h"   // card G3: the concealment pick (asked here, answered on the main thread)
+#include "iaus/AreaActors.h"   // M2: the bystander picture
+#include "iaus/AreaCensus.h"
 #include "iaus/Disengage.h"
 #include "iaus/Engine.h"    // Q-I-2: the Mind's last fired decision (touchSpent)
 #include "iaus/Fills.h"
@@ -102,6 +104,24 @@ namespace MFO::Iaus::Candidates {
                              a_self, a_foe, a_engine ? "engine" : "own", sec, a_holdSec);
             }
             return (std::max)(sec, 1.0e-3f);
+        }
+
+        // M2: one line per (follower, spell, what closed it) per 30 s: the field run's proof that the guard bites. Worker only, log pacing only.
+        void NoteAreaBlocked(RE::FormID a_self, const std::vector<Generated::AreaBlocked>& a_blocked) {
+            static std::unordered_map<std::uint64_t, double> s_said;
+            for (const auto& b : a_blocked) {
+                const double now = NowSec();
+                if (s_said.size() > 512) s_said.clear();
+                auto& at = s_said[(static_cast<std::uint64_t>(a_self) << 32) | (b.spell ^ (b.bystander == 0 ? 0x80000000u : 0u))];
+                if (at != 0.0 && now - at < 30.0) continue;
+                at = now;
+                if (b.bystander == 0)
+                    spdlog::info("[area-guard] {:08X}: area spell {:08X} at {:08X} scores 0: the bystander picture is not readable this lap (first lap of a fight, "
+                                 "after a pause, or a stalled main thread; counts in the [area-guard] stats line)", a_self, b.spell, b.foe);
+                else
+                    spdlog::info("[area-guard] {:08X}: area spell {:08X} at {:08X} scores 0: {} {:08X} is {:.0f} units from the centre (area {:.0f} + body + {:.0f})",
+                                 a_self, b.spell, b.foe, Estimate::AreaKindName(b.kind), b.bystander, b.dist, b.radius, kAreaGuard.safetyMargin);
+            }
         }
 
         Sight ToSight(Sightline::Verdict a_v) {
@@ -449,6 +469,13 @@ namespace MFO::Iaus::Candidates {
             auto ptr = h.get();   // HOLD the NiPointer
             addAlly(ptr.get());
         }
+        // ── M2: the bystander picture (main-built, iaus/AreaActors.h). Himself, his foes and his allies are left out by id: they are read live above, and a
+        // foe of his own combat group stays a foe whatever the table's faction answer is. Harbinger's anchor is not a body anybody can hit. ──
+        s.areaPicture = AreaActors::Read(selfID, s.areaActors);
+        std::erase_if(s.areaActors, [&](const AreaActor& a) {
+            const auto listed = [&](const std::vector<Combatant>& v) { return std::any_of(v.begin(), v.end(), [&](const Combatant& u) { return u.id == a.id; }); };
+            return listed(s.foes) || listed(s.allies) || APMFBridge::IsSubstrateAnchor(a.id);
+        });
         // Review F2: a concentration Self buff at an ally runs as a minted 0xFF proxy (Harbinger's claim or the ConcProxy), so
         // the book's activeOn (keyed to ae->spell == source) never reads it up there. The stream registries are keyed to the
         // SOURCE form: a live stream at the ally = up there. (After the allies are built; the buff branch runs before them.)
@@ -635,6 +662,7 @@ namespace MFO::Iaus::Candidates {
                     else if (v.size() < 64) v.push_back({ sp, foe, nowSec });
                 }
             }
+            NoteAreaBlocked(id, a_out.gen.areaBlocked);   // M2: the [area-guard] line
             // ... and the cast layer learns whether a foe is hurting the healer now (a heal's hand lock gives way to a higher-ranked non-heal while it is true).
             Actuation::NoteHealerThreat(id, Estimate::IncomingOn(a_out.snap, a_out.snap.self) > 0.0f);
         }
