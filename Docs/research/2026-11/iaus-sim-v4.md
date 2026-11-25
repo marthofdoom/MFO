@@ -1706,4 +1706,30 @@ CPU (user seconds, 1 thread, main then this branch): evoker, knight, archer, mag
 - **F1, F2, F3: a light's tier is no score.** `Light::CastTier`: the player whose light is known, members whose light is known, the player and then members whose light nobody knows. `Decide` (1) holds an unknown one at the least wanted known one, (2) lifts the player's best light to the best member's, so a player who needs it less is first and the light still goes out, (3) caps every light under every ranked heal, ward and scroll of one, (4) puts the lights of the board in tier order, (5) takes a light out of the rapport pool and out of the commitment window while a heal or ward is ranked or a lower tier is on the board. It stays the order's fall-back when the others' roads decline. Lights are never pruned. Rows: every rank, 2000 seeds, the window, with and without weights that would break it.
 - **F5** `Light::InParty`. **F7** a mark is compared with the first mark of an event only. **F10** the lit walk by length over what is known.
 - **F6** ruled (marth 11-24): the radius is ignored.
-- **What G6 must fill natively:** `Combatant::sneakClass` for every ally (the class of THAT member, `ClassGate::sneakClass`, crouched or not), the player's `sneaking` and everybody's `lights` with the true caster (an ability or an enchantment as `fromItem`), and the call that ends a spell of ours on the player as well as on a member. `Candidates.cpp` `allyRoad` reads become `AllyRoadTo`.
+- **What G6 must fill natively:** `Combatant::sneakClass` for every ally (the class of THAT member, `ClassGate::darkClass`, crouched or not), the player's `sneaking` and everybody's `lights` with the true caster (an ability or an enchantment as `fromItem`), and the call that ends a spell of ours on the player as well as on a member. `Candidates.cpp` `allyRoad` reads become `AllyRoadTo`.
+
+## 20. The move-only heal and the S4 leftovers (branch `feat/heal-move`, 2026-11-24)
+
+Nothing asks in the DLL, so every shipped candidate and decision is main's (the pin of `CandidateDigest` is unchanged, and asking changes no count, score, order or best heal: harness rows).
+
+### 20.1 How it works
+
+- `Snapshot::moveAsk` (the lab: the road is on). `Generate` then keeps a heal (or a heal scroll) whose recipient is past the reach or occluded in `Generated::moveOnly`, when nothing in `actions` heals that recipient. Every other gate is the heal's own: class, hand, magicka, scroll road, guard, hurt, `AllyRoadTo`, `HealRefused` and the best rate asked as if he stood there.
+- `TopRanked(.., MoveAsk)` scores them as if seen and in reach, drops what is under the act floor, keeps the best of each patient, holds it under every ranked heal of somebody he reaches now (`t.moveHealYield`, 0 = every one. His own heal holds him nowhere, it goes with him), puts a light under it, and merges it into the three rows. The held action stays first. It works when the decision is Idle.
+- The pass (`RankedAction::moveOnly`): staying is worth nothing for it, cover is no place for it, only `heal_reach` (reach and sight) is. Found while building: with a reach over the whole place the 64 nearest places were tested and all were walled off, and "stay" at a blocked sight (0.15) beat every firing place. The sight tests of such an action are now spread over the walk.
+- `TickIn::spotAction` (8.1) exists and is flat at `t.spotActionMomentum` 1.
+
+### 20.2 The lab
+
+Three scenarios replace the scripted one, each 48 fights an arm: `healer-round-corner` (fault `no-move-heal`), the same with fault `no-heal` (the kind), `healer-out-of-reach` (a 700 u reach). What is counted is a heal of his that LANDS on the patient within 15 s, not a place. The foes stand with the healer, so standing at them does not bring him there. 0 of 48 with the mechanism off. `--set spot.<kind>=v` sets a kind's weight for every class (the game has it per class: `spot.<kind>` of a class file): over 30 scenarios x 12 fights of the healer `spot.heal_reach` 0.3, 0.6, 1 and 2 give four different tables (755 of 1585 lines differ between 1 and 2). `lit-ally-nightblade`: a Nightblade who stands is never lit.
+
+### 20.3 The S4 leftovers
+
+- Nightblade (marth 11-24): `Flag::kDarkClass`, one reader `Classes::WantsDark`, `ClassGate::darkClass`. `kSneakAlways` and `ClassGate::sneakClass` keep every other use (the sneak row, the hide run, flee, spot kinds). So the Nightblade's own `wantsDark` in the pass is on too.
+- R2-1: unknown light is held at the worst of the known recipients' best lights, of those over the act floor. R2-3: rows.
+
+### 20.4 Differences and limits
+
+1. The golden file is rewritten once: its action lines gained `moveOnly` (version 4) and one scene. Every old expected line is the same.
+2. A heal says its reach (`Facts::reach`) while asked, in reach or not: without it `heal_reach` had no band and never offered a place. Road-on results of healers move.
+3. Limits: past `t.spotRadius` no place is found. The in-reach rule is literal (backlog).

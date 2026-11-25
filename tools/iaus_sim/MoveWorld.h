@@ -82,7 +82,7 @@ namespace Sim {
                 // what the holder finds: he was hit hard, and a place the leash no longer lets him stand on (a leash wins over a point, kLeashStandU past it he still stands)
                 if (x.burstMax > q.burstSeen + 1.0f && x.burstMax >= kOneHitLine * x.c.hpMax) m.marks |= MV::kMarkHitHard;
                 q.burstSeen = x.burstMax;
-                m.wantsDark = g_v4.light && (F.WantsDarkNow(x) || c.gate.sneakClass); m.invisible = F.now < x.cloakUntil;
+                m.wantsDark = g_v4.light && (F.WantsDarkNow(x) || c.gate.darkClass); m.invisible = F.now < x.cloakUntil;
                 m.sneakSkill = g_v4.light ? x.spec->Skill(15) + StealthCombine(F.D->sneakSkillRows, *x.spec, false) : -1.0f;
                 if (m.commit.on && m.leash > 0.0f && MV::Dist(m.commit.p, m.anchor) > m.leash + kLeashStandU) m.marks |= MV::kMarkOrder;
                 if (!m.decides && m.commit.on) { m.commit = MV::Commit{}; }   // another mover has him: the place is given up, he asks again when he is free
@@ -189,9 +189,9 @@ namespace Sim {
     }
 
     // His own lap's ranking, for the pass (the held action first). Called by the policy after Decide.
-    inline void MoveNoteRanked(Fight& F, int ci, const Decision& d, std::span<const Candidate> acts) {
+    inline void MoveNoteRanked(Fight& F, int ci, const Decision& d, const MFO::Iaus::Generated& g, const Tuning& T) {
         if (!F.move || static_cast<std::size_t>(ci) >= F.move->claim.size()) return;
-        MoveClaim& q = F.move->claim[static_cast<std::size_t>(ci)]; q.nTop = static_cast<std::uint8_t>(MFO::Iaus::TopRanked(d, acts, q.top)); q.topAt = F.now;
+        MoveClaim& q = F.move->claim[static_cast<std::size_t>(ci)]; q.nTop = static_cast<std::uint8_t>(MFO::Iaus::TopRanked(d, g.actions, q.top, MFO::Iaus::MoveAsk{ g.moveOnly, g.moveOnlySight, F.ctl[static_cast<std::size_t>(ci)].mind, F.ctl[static_cast<std::size_t>(ci)].profile, T })); q.topAt = F.now;
     }
 
     inline bool MoveWalk(Fight& F, Body& x) {

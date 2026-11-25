@@ -237,6 +237,26 @@ namespace {
             PartyPicture b = RoomFight(); b.party[1].p.x = std::numeric_limits<float>::quiet_NaN(); b.party[2].top[0].score = std::numeric_limits<float>::infinity();
             const auto r3 = Window(mesh, b, t); Row(r3.as.size() == 4 && Of(r3, 0x12)->spot < 0 && Of(r3, 0x13)->spot < 0, "a NaN place or score: he stays, the rest decide");
         }
+        {   // MOVE-ONLY (Generated::moveOnly): it does not work from here. Staying is worth nothing for it, and only a heal-reach place pairs with it
+            const auto at = [&](bool only, bool other, float score) {
+                PartyPicture p; p.party = { Who(0x13, At(1, 8), { Act(Family::CastHeal, 0x14, score, 900.0f, Sight::Occluded, false, 0x200) }), Who(0x14, At(8, 2), {}) }; p.party[1].decides = false;
+                if (other) { p.party[0].top[1] = Act(Family::CastOffense, 0x91, 0.5f, 3000.0f, Sight::Visible); p.party[0].nTop = 2; p.foes = { Bad(0x91, At(1, 6), 0x14) }; }
+                p.party[0].top[0].moveOnly = only; return p; };
+            PartyPicture a = at(true, false, 1.2f); const auto r = Window(mesh, a, t); const auto* h = Of(r, 0x13);
+            Row(h->spot >= 0 && a.pool[static_cast<std::size_t>(h->spot)].kinds == KindBit(SpotKind::HealReach) && GeomSees(v, At(8, 2), h->p, t, s) && Dist(h->p, At(8, 2)) <= 900.0f && h->act.moveOnly, "a move-only heal: he walks to where it works");
+            PartyPicture b = at(true, true, 9.0f); b.party[0].kinds &= ~KindBit(SpotKind::HealReach); const auto r2 = Window(mesh, b, t);
+            Row(Of(r2, 0x13)->act.family == Family::CastOffense, "... with no such place it holds him nowhere, however much it is wanted: he plans for what he can do");
+            PartyPicture c = at(false, true, 9.0f); c.party[0].kinds &= ~KindBit(SpotKind::HealReach); const auto r3 = Window(mesh, c, t);
+            Row(Of(r3, 0x13)->act.family == Family::CastHeal, "... an action that works from here still may keep him");
+            RankedAction m = Act(Family::CastHeal, 0x14, 1.0f, 900.0f, Sight::Occluded); const bool cover = Pairs(SpotKind::Cover, m); m.moveOnly = true;
+            Row(cover && !Pairs(SpotKind::Cover, m) && Pairs(SpotKind::HealReach, m), "... and no cover place is paired with it");
+            PartyPicture d = at(true, false, std::numeric_limits<float>::quiet_NaN()); Row(Of(Window(mesh, d, t), 0x13)->spot < 0, "... a NaN score moves nobody");
+        }
+        {   // ... round a corner of a U, with a reach over everything: every near place is in the band and none sees
+            const auto u = Build({ "################", "#....######....#", "#....######....#", "#....######....#", "#....######....#", "#....######....#", "#....######....#", "#..............#", "#..............#", "#..............#", "################" });
+            PartyPicture p; p.party = { Who(0x13, At(4, 5), { Act(Family::CastHeal, 0x14, 1.2f, 4096.0f, Sight::Occluded, false, 0x200) }), Who(0x14, At(13, 2), {}) }; p.party[1].decides = false; p.party[0].top[0].moveOnly = true;
+            const auto r = Window(u, p, t); const auto uv = u.Get(); Row(Of(r, 0x13)->spot >= 0 && GeomSees(uv, At(13, 2), Of(r, 0x13)->p, t, s), "... found although every near place fails the sight test");
+        }
         {   // sharing: two casters on one foe ask one sight fact per spot
             PartyPicture p = RoomFight(); p.party.resize(2);
             const auto r = Window(mesh, p, t, 1.0e9f, false);
@@ -773,6 +793,9 @@ namespace {
                 p.party[1].top[0] = Act(Family::Disengage, 0, 0.8f, 0.0f, Sight::None); p.party[1].nTop = 1; p.party[1].wantsDark = true; p.party[1].sneakSkill = 45.0f; p.foes[0].target = 0x12; p.foes[0].faceY = 1.0f; p.foes[0].skill = 35.0f; p.foes[1].skill = 20.0f; p.foes[1].faceX = 0.6f; p.foes[1].faceY = 0.8f;
                 for (int y = 1; y < 8; ++y) for (int x = 1; x < 9; ++x) Light::Add(p.lightField, { At(static_cast<float>(x), static_cast<float>(y)), 7.0f + 9.0f * static_cast<float>(x), 0.1 * y });
                 p.light.push_back({ KeyOfPoint(3, 0), 44.0f }); return std::pair{ Build(kRoom), p }; }, { { "t.spotPinKinds", 1.0f } } },
+            { "move_only", [] { PartyPicture p; p.party = { Who(0x13, At(4, 5), { Act(Family::CastHeal, 0x14, 1.2f, 4096.0f, Sight::Occluded, false, 0x200), Act(Family::CastOffense, 0x91, 0.6f, 3000.0f, Sight::Visible) }), Who(0x14, At(13, 2), {}) };   // a heal that only works from elsewhere
+                p.party[0].top[0].moveOnly = true; p.party[1].decides = false; p.foes = { Bad(0x91, At(2, 2), 0x14) };
+                return std::pair{ Build({ "################", "#....######....#", "#....######....#", "#....######....#", "#....######....#", "#....######....#", "#....######....#", "#..............#", "#..............#", "#..............#", "################" }), p }; } },
             { "class_room", [] { PartyPicture p = RoomFight(); for (auto& m : p.party) m.classId = 1; p.foes[0].target = 0x12; return std::pair{ Build(kRoom), p }; } },
         };
     }
@@ -815,7 +838,7 @@ namespace {
             Row(asked && exact && worst <= 1.0e-4f, b);
             ++cases;
         }
-        Row(err.empty() && cases == 27, "every golden case was read");
+        Row(err.empty() && cases == 30, "every golden case was read");
     }
 }
 

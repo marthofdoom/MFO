@@ -2451,6 +2451,28 @@ namespace {
             s.allies[0].light = -1.0f; Check(firstLight(s, allDark, Mind{}, kSelf) == 0, "... nor the player's before a member's");
             s = room(); s.self.light = s.allies[0].light = s.allies[1].light = -1.0f; Check(firstLight(s, allDark, Mind{}, kPc) == 0, "... where nobody's is known the player is first");
         }
+        {   // round 2, R2-1: the cap of an unknown light is each KNOWN recipient's best, and only one that clears the floor
+            Snapshot s = room(); s.self.light = s.allies[0].light = -1.0f; s.allies[1].light = 90.0f;
+            const auto lights = [&](const Snapshot& q) { const Generated g = Generate(q, mage, allDark); TickIn in; in.now = 10.0; std::array<float, 3> v{}; for (const Scored& x : Decide(Mind{}, g.actions, Profile{}, allDark, in).ranked) { const Candidate& c = g.actions[x.idx]; if (c.f.lightBuff) { auto& o = v[c.target == kPc ? 0 : c.target == kLydia ? 1 : 2]; o = (std::max)(o, x.score); } } return v; };
+            const auto alone = lights(s); bool same = alone[0] > 0.0f && alone[2] > 0.0f; int weak = 0;
+            for (const float lv : { 68.0f, 68.5f, 68.9f, 69.5f }) { Snapshot q = s; q.allies[1].light = lv; const Generated g = Generate(q, mage, allDark); for (const auto& c : g.actions) if (c.f.lightBuff && c.target == kLydia) { const float v = ScoreOne(c, Mind{}, Profile{}, allDark, 1, 0.0f, nullptr); weak += v > 0.0f && v < allDark.actFloor; } if (lv > 68.4f) same = same && lights(q) == alone; }
+            Check(same && weak > 0, "R2-1: a known recipient under the floor (nearly lit, then lit) changes nothing for the unknown ones");
+            Snapshot d = s; d.allies[1].light = 45.0f; const auto known = lights(d); Check(known[1] > 0.0f && known[0] <= known[1] && known[2] <= known[1] && known[2] < alone[2], "R2-1: ... a known one over the floor still caps them");
+            Snapshot two = d; SpellEntry dear = two.book.entries[0]; dear.form = 0x43399; dear.name = "Magelight"; dear.cost = 0.95f * two.self.mp; two.book.entries.push_back(dear); const Generated g = Generate(two, mage, allDark); float best = 0.0f, worst = 9.0f;
+            for (const auto& c : g.actions) if (c.f.lightBuff && c.target == kLydia) { const float v = ScoreOne(c, Mind{}, Profile{}, allDark, 1, 0.0f, nullptr); best = (std::max)(best, v); worst = (std::min)(worst, v); }
+            TickIn in; in.now = 10.0; int held = 0; for (const Scored& x : Decide(Mind{}, g.actions, Profile{}, allDark, in).ranked) held += g.actions[x.idx].f.lightBuff && x.score > known[1] - 1.0e-3f;   // the slots: hers, the player's and the mage's
+            Check(worst < best - 0.1f && worst > 0.0f && held == 3, "R2-1: ... by her BEST light: a dear second one says nothing");
+        }
+        {   // round 2, R2-3: a scroll of ward is a ward, and a light that yields takes no place of the pool
+            Generated g = Generate(healWard(false, true), mage, t); for (auto& c : g.actions) if (c.family == Family::CastWard) { c.family = Family::Scroll; c.scrollOf = Family::CastWard; }
+            Tuning a = allDark; a.actFloor = 0.0f; TickIn in; in.now = 10.0; int wards = 0; for (const Scored& x : Decide(Mind{}, g.actions, Profile{}, a, in).ranked) wards += g.actions[x.idx].family == Family::Scroll && g.actions[x.idx].scrollOf == Family::CastWard;
+            Check(wards > 0 && sweep(g, Mind{}, a, isLight) == 0 && sweep(g, running(g, kPc), a, isLight) == 0, "R2-3: no light is picked while a SCROLL of ward is ranked");
+            Snapshot s = room(); s.self.light = s.allies[1].light = -1.0f; const Generated h = Generate(s, mage, allDark); Tuning k2 = allDark; for (auto& sh : k2.sharp) { sh.k = 2; sh.floor = 0.0f; sh.tau = 5.0f; } k2.lightDarkHoldSec = t.lightDarkHoldSec;
+            std::vector<Candidate> b; for (const auto& c : h.actions) if (c.f.lightBuff || c.family == Family::Attack) b.push_back(c); int attacks = 0; std::vector<Candidate> one; for (auto& c : b) { if (c.family == Family::Attack && attacks++) continue; one.push_back(c); }
+            k2.actionWeight[static_cast<std::size_t>(Family::CastBuff)] = 6.0f; const Decision d = Decide(Mind{}, one, Profile{}, k2, in); std::size_t lightsFirst = 0; while (lightsFirst < d.ranked.size() && one[d.ranked[lightsFirst].idx].f.lightBuff) ++lightsFirst;
+            int swings = 0; for (int seed = 0; seed < 2000; ++seed) { TickIn q; q.now = 10.0; q.rapportRank = 3; q.seed = static_cast<std::uint64_t>(seed) * 7919u + 3u; const Decision e = Decide(Mind{}, one, Profile{}, k2, q); swings += !e.order.empty() && one[e.order[0].idx].family == Family::Attack; }
+            Check(lightsFirst == 3 && d.ranked.size() == 4 && swings > 200, "R2-3: two yielding lights before the attack take no place of a pool of two");
+        }
         {   // review F8: the two exact scores the cap stands on
             Generated g = Generate(healWard(false, true), mage, t); Tuning lo = t; lo.actFloor = 0.0f; lo.maxTries = 1; for (auto& sh : lo.sharp) sh.k = 1;
             const Candidate* atk = nullptr; for (const auto& c : g.actions) if (c.family == Family::Attack) { atk = &c; break; }
@@ -2484,6 +2506,75 @@ namespace {
             Check(hold(90.0f) > 0.0f && hold(90.0f) < hold(10.0f) && hold(10.0f) == hold(-1.0f), "a hidden hold in bright light scores lower, in the dark or unknown as today");
         }
         Check(Name(Family::Decast) == "decast" && static_cast<std::size_t>(Family::Decast) == static_cast<std::size_t>(Family::DrinkBuff) + 1 && static_cast<std::size_t>(Cons::LightVeto) == static_cast<std::size_t>(Cons::SpotPathTrust) + 1, "the new family and considerations are APPENDED");
+    }
+    // THE MOVE-ONLY HEAL: a heal past its reach or round a corner, for the movement pass alone.
+    void MoveHealRows() {
+        std::printf("\n=== move-only heals ===\n");
+        const Tuning& t = DefaultTuning(); const Profile p; const Mind none; const ClassGate g = [] { ClassGate m; m.resolved = true; m.spellsOnClass = true; return m; }();
+        constexpr std::uint32_t kPc = 0x14, kLydia = 0xA2C94, kHeal = 0x12FD2, kTouch = 0x66002001;
+        const auto board = [](float reach) { Snapshot s = MageFight(); s.book.entries = { Spell("Heal Other", 0x12FD2, Prune::Nature::Heal, 10, reach), Spell("Firebolt", 0x12FCD, Prune::Nature::Offense, 10, 3000) }; s.book.entries[0].heal = 60.0f; s.book.entries[0].measured = true;
+            for (auto& a : s.allies) { a.hp = a.hpMax; a.dist = 400.0f; a.sight = Sight::Visible; } s.moveAsk = true; return s; };
+        const auto dec = [&](const Snapshot& s, const Generated& gen) { (void)s; TickIn in; in.now = 10.0; in.rapportRank = 3; return Decide(none, gen.actions, p, t, in); };
+        struct Exp { std::array<RankedAction, 3> top{}; std::size_t n = 0; const RankedAction* Heal(std::uint32_t who) const { for (std::size_t i = 0; i < n; ++i) if (top[i].Kind() == Family::CastHeal && top[i].target == who) return &top[i]; return nullptr; } };
+        const auto exp = [&](const Snapshot& s, const Tuning& tu) { Exp e; const Generated gen = Generate(s, g, tu); TickIn in; in.now = 10.0; in.rapportRank = 3; const Decision d = Decide(none, gen.actions, p, tu, in); e.n = TopRanked(d, gen.actions, e.top, MoveAsk{ gen.moveOnly, gen.moveOnlySight, none, p, tu }); return e; };
+        const auto hurt = [&](Snapshot s, std::size_t who, float share, float dist, Sight sight) { s.allies[who].hp = share * s.allies[who].hpMax; s.allies[who].dist = dist; s.allies[who].sight = sight; return s; };
+        const auto healOf = [&](const Generated& gen, std::uint32_t who) { for (const auto& c : gen.actions) if (c.family == Family::CastHeal && c.target == who) return true; return false; };
+        const Snapshot corner = hurt(board(2000), 0, 0.4f, 900.0f, Sight::Occluded), far = hurt(board(2000), 0, 0.4f, 2600.0f, Sight::Visible), near = hurt(board(2000), 0, 0.4f, 900.0f, Sight::Visible);
+        for (const Snapshot* s : { &corner, &far }) {
+            const Generated gen = Generate(*s, g, t); const Exp e = exp(*s, t); const RankedAction* h = e.Heal(kPc);
+            Check(!healOf(gen, kPc) && gen.moveOnly.size() == 1 && gen.moveOnly[0].target == kPc && h && h->moveOnly && h->reach == 2000.0f && h->sight == s->allies[0].sight && h->form == kHeal, "a heal past its reach / round a corner is exported to the pass, with its reach and what he sees");
+            const Exp n = exp(near, t); Check(n.Heal(kPc) && !n.Heal(kPc)->moveOnly && h && std::fabs(n.Heal(kPc)->score - h->score) < 1.0e-5f, "... scored exactly as if in reach");
+        }
+        {   // gated, and never a decision
+            bool off = true, same = true; int boards = 0;
+            for (const Snapshot* s : { &corner, &far, &near }) for (int extra = 0; extra < 2; ++extra) {
+                Snapshot on = *s; if (extra) { on = hurt(on, 1, 0.5f, 300.0f, Sight::Visible); } Snapshot no = on; no.moveAsk = false; const Generated a = Generate(on, g, t), b = Generate(no, g, t); const Decision da = dec(on, a), db = dec(no, b); ++boards;
+                off = off && b.moveOnly.empty() && b.moveOnlySight.empty();
+                same = same && a.actions.size() == b.actions.size() && a.droppedTarget == b.droppedTarget && a.healRefused == b.healRefused && a.perFamily == b.perFamily && da.verdict == db.verdict && da.bestHeal == db.bestHeal && da.ranked.size() == db.ranked.size() && da.order.size() == db.order.size();
+                for (std::size_t i = 0; same && i < da.ranked.size(); ++i) same = da.ranked[i].idx == db.ranked[i].idx && da.ranked[i].score == db.ranked[i].score;
+                for (std::size_t i = 0; same && i < da.order.size(); ++i) same = da.order[i].idx == db.order[i].idx;
+                for (const auto& c : b.actions) off = off && !(c.family == Family::CastHeal && c.f.reach != 0.0f && c.target != 0); }
+            Check(off && boards == 6, "nobody asks: none is made, and a heal says no reach (what main makes)");
+            Check(same, "... and asking changes no candidate count, no score, no order, no best heal");
+        }
+        { Generated gen = Generate(corner, g, t); gen.actions.clear(); const Decision d = dec(corner, gen); Exp e; e.n = TopRanked(d, gen.actions, e.top, MoveAsk{ gen.moveOnly, gen.moveOnlySight, none, p, t }); Check(d.verdict == Verdict::Idle && e.n == 1 && e.Heal(kPc), "it is exported when he has nothing else to do at all"); }
+        {   // nobody walks for a patient he reaches
+            Snapshot s = near; s.book.entries.push_back(Spell("Touch Heal", kTouch, Prune::Nature::Heal, 10, 150)); s.book.entries.back().heal = 200.0f; s.book.entries.back().measured = true; s.book.entries.back().touch = true;
+            const Generated gen = Generate(s, g, t); Check(healOf(gen, kPc) && gen.moveOnly.empty(), "a patient he reaches with one heal gets no walk for another");
+            s.allies[0].dist = 2600.0f; const Generated q = Generate(s, g, t); const Exp e = exp(s, t); int rows = 0; for (std::size_t i = 0; i < e.n; ++i) rows += e.top[i].target == kPc && e.top[i].Kind() == Family::CastHeal; Check(q.moveOnly.size() == 2 && rows == 1, "... two far heals for one patient: one row");
+        }
+        {   // ... nor leaves one
+            for (const float share : { 0.9f, 0.7f, 0.3f }) { Snapshot s = hurt(far, 1, share, 300.0f, Sight::Visible); s.allies[0].hp = 0.1f * s.allies[0].hpMax; const Exp e = exp(s, t); const auto *mine = e.Heal(kLydia), *his = e.Heal(kPc); const Generated gen = Generate(s, g, t); const Decision d = dec(s, gen); bool ranked = false; for (const Scored& x : d.ranked) ranked |= gen.actions[x.idx].family == Family::CastHeal && gen.actions[x.idx].target == kLydia;
+                Check(ranked ? !his || !mine || his->score < mine->score : his != nullptr, "the patient in reach comes first, however hurt the far one is"); }
+            Snapshot s = hurt(far, 1, 0.6f, 300.0f, Sight::Visible); s.allies[0].hp = 0.1f * s.allies[0].hpMax; Tuning y = t; y.moveHealYield = 5.0f; const Exp a = exp(s, t), b = exp(s, y); Check(b.Heal(kPc) && b.Heal(kLydia) && b.Heal(kPc)->score > b.Heal(kLydia)->score && (!a.Heal(kPc) || a.Heal(kPc)->score < a.Heal(kLydia)->score), "... t.moveHealYield is what says how much of one holds him");
+            s = far; s.self.hp = 0.5f * s.self.hpMax; s.book.entries.push_back(Spell("Healing", 0x12FCC, Prune::Nature::Heal, 5, 0)); s.book.entries.back().selfDelivery = true; s.book.entries.back().heal = 40.0f; s.book.entries.back().measured = true; const Exp e = exp(s, t), f = exp(far, t); Check(e.Heal(0) && e.Heal(kPc) && f.Heal(kPc) && e.Heal(kPc)->score == f.Heal(kPc)->score, "... his own heal goes with him and holds him nowhere");
+        }
+        {   // the heal safety rule, asked as if he stood there
+            Snapshot s = corner; s.book.entries.push_back(Spell("Healing Hands", kTouch, Prune::Nature::Heal, 10, 2000)); s.book.entries.back().concentration = true; s.book.entries.back().heal = 30.0f; s.book.entries.back().measured = true;
+            Snapshot safe = s; for (auto& f : safe.foes) f.targetId = 0, f.x = f.y = 9000.0f;
+            auto& pc = s.allies[0]; pc.hp = 5.0f; auto& f = s.foes[0]; f.x = pc.x + 60.0f; f.y = pc.y; f.z = pc.z; f.targetId = kPc; f.hit = 80.0f; f.hitsPerSec = 2.0f; s.foes.resize(1);
+            const auto has = [&](const Snapshot& q, std::uint32_t form) { for (const auto& c : Generate(q, g, t).moveOnly) if (c.form == form) return true; return false; };
+            Snapshot in = s; in.allies[0].sight = Sight::Visible; const Generated gi = Generate(in, g, t);
+            Check(gi.healRefused && !has(s, kTouch) && has(s, kHeal), "HealRefused still applies: no channel is walked to beside a foe he would not survive");
+            Check(has(safe, kTouch), "... and is when nobody is there"); Check(!Generate(s, g, t).healRefused, "... the refusal is not told as a decision's");
+            Snapshot only = s; only.book.entries.erase(only.book.entries.begin()); Check(has(only, kTouch), "... a book of channels alone keeps them, as for a patient in reach");
+        }
+        {   // what the scan drops is dropped here too
+            Snapshot s = corner; s.self.mp = 5.0f; Check(Generate(s, g, t).moveOnly.empty(), "no magicka: none"); s = corner; s.handBusyLeft = s.handBusyRight = true; Check(Generate(s, g, t).moveOnly.empty(), "no hand: none"); s = corner; s.guardHeld = true; Check(Generate(s, g, t).moveOnly.empty(), "a held guard: none");
+            s = corner; s.allies[0].hp = s.allies[0].hpMax; Check(Generate(s, g, t).moveOnly.empty(), "nobody hurt: none"); s = corner; s.book.entries[0].selfDelivery = true; Check(Generate(s, g, t).moveOnly.empty(), "a self heal no road carries: none");
+            s = corner; s.book.entries[0].nature = Prune::Nature::Buff; Check(Generate(s, g, t).moveOnly.empty(), "a buff: none");
+            s = corner; Generated gen = Generate(s, g, t); gen.moveOnly[0].f.hardCooldownSec = gen.moveOnly[0].f.hardCooldownLeft = 5.0f; std::array<RankedAction, 3> top; const Decision d = dec(s, gen); const auto n = TopRanked(d, gen.actions, top, MoveAsk{ gen.moveOnly, gen.moveOnlySight, none, p, t }); bool any = false; for (std::size_t i = 0; i < n; ++i) any |= top[i].moveOnly; Check(!any, "one on cooldown is not exported");
+        }
+        {   // a light is never above it
+            Snapshot s = corner; s.self.hp = s.self.hpMax; s.self.light = 10.0f; for (auto& a : s.allies) { a.light = 10.0f; a.inPlayerView = Tri::Yes; } SpellEntry e = Spell("Candlelight", 0x43324, Prune::Nature::Buff, 20, 0); e.selfDelivery = true; e.light = true; s.book.entries.push_back(e); s.foes.resize(1);
+            Tuning b = t; b.actionWeight[static_cast<std::size_t>(Family::CastBuff)] = 30.0f; for (auto& e2 : s.book.entries) if (e2.nature == Prune::Nature::Offense) e2.drop = Prune::Drop::Unanimated; const Exp x = exp(s, b); const RankedAction* l = nullptr; for (std::size_t i = 0; i < x.n; ++i) if (x.top[i].family == Family::CastBuff) l = &x.top[i]; Check(x.Heal(kPc) && l && l->score < x.Heal(kPc)->score && x.top[0].Kind() == Family::CastHeal, "a light ranks under a move-only heal in the export");
+        }
+        {   // 8.1: the action his place was chosen for
+            const Generated gen = Generate(near, g, t); const Candidate* atk = nullptr; for (const Scored& x : dec(near, gen).ranked) if (!atk && gen.actions[x.idx].family != Family::CastHeal) atk = &gen.actions[x.idx];
+            TickIn in; in.now = 10.0; in.rapportRank = 5; const auto score = [&](const Tuning& tu, bool has) { TickIn q = in; q.hasSpotAction = has; if (atk) q.spotAction = KeyOf(*atk); const Decision d = Decide(none, gen.actions, p, tu, q); for (const Scored& x : d.ranked) if (&gen.actions[x.idx] == atk) return x.score; return -1.0f; };
+            Tuning up = t; up.spotActionMomentum = 1.25f; Tuning open = t; open.actFloor = 0.0f; open.maxTries = 16; Tuning down = open; down.spotActionMomentum = 0.0f; Tuning openUp = open; openUp.spotActionMomentum = 1.25f;
+            Check(atk && score(t, true) == score(t, false), "spotAction: inert as shipped (1)"); Check(score(openUp, true) > 1.24f * score(open, false) && score(openUp, false) == score(open, false) && score(down, true) == score(open, false) && score(open, false) > 0.0f && score(open, true) == score(open, false), "... a bonus when the tuning gives one, never a malus");
+        }
     }
     void HandLostRows() {
         std::printf("\n=== hand lost (concentration buff and the weapon hand) ===\n");
@@ -3379,6 +3470,7 @@ int main() {
     ClassCurveRows();
     SchoolAffinityRows();
     SpellPerkRows();
+    MoveHealRows();
     HandLostRows();
     LightRows();
     Field1117bRows();

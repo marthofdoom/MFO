@@ -181,12 +181,13 @@ namespace Sim {
             if (capLive > 0) { ++vt.capLaps; vt.capSum += sn.chaseCap; if (capDropped > 0) ++vt.capDropLaps; if (capDropped == capLive) ++vt.capStarveLaps; vt.capWaived += capWaived; vt.capKept += capKept; } }
         if (g_v4.light) {   // S4 (iaus/Light.h): what the native fillers will read in G6
             const auto fill = [&](Combatant& k, const Body& o) {
-                k.sneaking = o.sneaking; k.hideRun = F.WantsDarkNow(o) && !o.sneaking && F.now >= o.cloakUntil; k.invisible = F.now < o.cloakUntil; k.sneakClass = o.ctl >= 0 && F.ctl[static_cast<std::size_t>(o.ctl)].gate.sneakClass;
+                k.sneaking = o.sneaking; k.hideRun = F.WantsDarkNow(o) && !o.sneaking && F.now >= o.cloakUntil; k.invisible = F.now < o.cloakUntil; k.sneakClass = o.ctl >= 0 && F.ctl[static_cast<std::size_t>(o.ctl)].gate.darkClass;
                 k.darkAgoSec = o.darkAt > -1e8 ? static_cast<float>(F.now - o.darkAt) : MFO::Iaus::kInf; k.light = g_lightScale * F.LightOn({ o.c.x, o.c.y, o.c.z }, o.nav.tri);
                 k.inPlayerView = &o == &pl ? Tri::Yes : F.Sees(pl, o) && Fight::AngleDeg(pl, o) < 60.0f ? Tri::Yes : Tri::No; k.lights.clear(); for (const Body::Lit& q : o.lit) if (q.until > F.now) k.lights.push_back({ q.spell, q.caster, false });
                 if (g_moveFault->noVeto) { k.sneaking = k.hideRun = k.invisible = k.sneakClass = false; k.darkAgoSec = MFO::Iaus::kInf; } if (g_moveFault->noNeed) { k.light = -1.0f; k.inPlayerView = Tri::Unknown; k.isPlayer = false; } };
             fill(sn.self, self); for (Combatant& a : sn.allies) if (const Body* o = F.Find(a.id)) fill(a, *o);
             sn.decastRoad = g_decastRoad; }
+        sn.moveAsk = F.move && !g_moveFault->noMoveHeal;   // the movement pass pairs his ranking with places
         sn.playerId = pl.c.id; sn.currentTargetId = sn.self.targetId; sn.playerTargetId = pl.alive ? pl.c.targetId : 0;
         sn.hasBook = true; sn.book = c.book;
         for (std::size_t i = 0; i < sn.book.entries.size(); ++i) {
@@ -545,8 +546,9 @@ namespace Sim {
             }
             FillCooldowns(c, sv.g.actions, F.now, *T); FillCooldowns(c, sv.g.postures, F.now, *T);
             TickIn in; in.now = F.now; in.rapportRank = c.rank; in.seed = c.seed; in.commitWindowSec = c.window;
+            if (F.move && F.move->claim[static_cast<std::size_t>(ci)].on) { const auto& a = F.move->claim[static_cast<std::size_t>(ci)].act; in.hasSpotAction = true; in.spotAction = Key{ a.family, PostureKind::None, a.form, a.target }; }   // 8.1: flat at t.spotActionMomentum 1
             sv.d = Decide(c.mind, sv.g.actions, c.profile, *T, in);
-            if (F.move) MoveNoteRanked(F, ci, sv.d, sv.g.actions);   // S2: what the movement pass pairs with spots
+            if (F.move) { FillCooldowns(c, sv.g.moveOnly, F.now, *T); MoveNoteRanked(F, ci, sv.d, sv.g, *T); }   // S2: what the movement pass pairs with spots
             c.chosenForm = 0; if (!sv.d.ranked.empty()) { const Candidate& top = sv.g.actions[sv.d.ranked.front().idx]; if (top.family == Family::CastOffense || top.family == Family::CastControl) c.chosenForm = top.form; }   // Q-I-2 (Candidates::NoteDecision, mirrored)
             if (F.trace && std::getenv("SIM_WHY")) {   // debug: SIM_WHY=1 with --trace prints why the top candidates and every heal scored as they did
                 std::fprintf(F.trace, "%7.2f  WHY %s: %zu candidates, %zu ranked, verdict %d, best heal %.3f\n", F.now, x.c.name.c_str(), sv.g.actions.size(), sv.d.ranked.size(), static_cast<int>(sv.d.verdict), sv.d.bestHeal);

@@ -17,7 +17,7 @@
 
 namespace MFO::Iaus::MoveDump {
 
-    inline constexpr int kVersion = 3;
+    inline constexpr int kVersion = 4;
 
     struct Mesh {   // a View that owns its arrays
         std::vector<Env::Vec3> verts; std::vector<Env::Tri> tris; std::vector<Env::Door> doors; std::vector<Env::Wall> walls; std::vector<std::uint32_t> walk, weak; Env::Grid grid;
@@ -47,8 +47,8 @@ namespace MFO::Iaus::MoveDump {
             In& operator>>(Env::Vec3& p) { return *this >> p.x >> p.y >> p.z; }
             template <class I> requires(std::is_integral_v<I> || std::is_enum_v<I>) In& operator>>(I& v) { v = static_cast<I>(std::strtoll(Tok().c_str(), nullptr, 10)); return *this; }
         };
-        inline void Act(Out& o, const RankedAction& a) { o << a.family << a.scrollOf << a.form << a.target << a.score << a.reach << a.melee << a.sight; }
-        inline void Act(In& i, RankedAction& a) { i >> a.family >> a.scrollOf >> a.form >> a.target >> a.score >> a.reach >> a.melee >> a.sight; }
+        inline void Act(Out& o, const RankedAction& a) { o << a.family << a.scrollOf << a.form << a.target << a.score << a.reach << a.melee << a.sight << a.moveOnly; }
+        inline void Act(In& i, RankedAction& a) { i >> a.family >> a.scrollOf >> a.form >> a.target >> a.score >> a.reach >> a.melee >> a.sight >> a.moveOnly; }
     }
 
     // a_pic as it stood BEFORE Freeze. a_answers: what Answer was given. a_as: what Phase3 returned.
