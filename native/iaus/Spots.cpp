@@ -355,7 +355,7 @@ namespace MFO::Iaus::Move {
             { Cons::SpotPath, 1 }, { Cons::SpotSight, 1 }, { Cons::SpotExposure, 1 }, { Cons::SpotFireLine, 1 }, { Cons::SpotRange, 1 }, { Cons::SpotPathExposed, 1 },
             { Cons::SpotExits, 1 }, { Cons::SpotAllyDist, 1 }, { Cons::SpotHostileArea, 1 }, { Cons::SpotLeash, 1 }, { Cons::SpotClimb, 1 }, { Cons::SpotDrop, 1 },
             { Cons::SpotDetected, 1 }, { Cons::SpotLight, 1 }, { Cons::SpotFoeReach, 1 }, { Cons::SpotLane, 1 }, { Cons::SpotPortalBusy, 1 }, { Cons::SpotServes, 1 },
-            { Cons::BoostSpotCover, 1 },
+            { Cons::BoostSpotCover, 1 }, { Cons::SpotRegionTrust, 1 }, { Cons::SpotPathTrust, 1 },
         };
         detail::In Num(float v) { return v < 0.0f ? detail::In::Off() : detail::In(v); }   // a NaN applies, and is refused below
         detail::In Three(Iaus::Tri v) { return v == Iaus::Tri::Unknown ? detail::In::Off() : detail::In(v == Iaus::Tri::Yes ? 1.0f : 0.0f); }
@@ -380,6 +380,8 @@ namespace MFO::Iaus::Move {
             case Cons::SpotPortalBusy:  return Three(f.portalBusy);
             case Cons::SpotServes:      return Three(f.serves);
             case Cons::BoostSpotCover:  return detail::In(f.coversAlly ? 1.0f : 0.0f);
+            case Cons::SpotRegionTrust: return Num(f.spotRegionTrust);
+            case Cons::SpotPathTrust:   return Num(f.pathRegionTrust);
             default:                    return detail::In::Off();
             }
         }

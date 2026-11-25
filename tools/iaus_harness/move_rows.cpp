@@ -539,6 +539,128 @@ namespace {
         }
     }
 
+    // Two rooms, a gap in the middle (column 6, row 2) and a way round at the bottom (row 6).
+    const std::vector<std::string> kTwoWays{ "#############", "#.....#.....#", "#...........#", "#.....#.....#", "#.....#.....#", "#.....#.....#", "#...........#", "#############" };
+    PartyPicture TwoWays(const MD::Mesh& m) {
+        PartyPicture p; p.party = { Who(0x61, At(2, 2), { Act(Family::CastOffense, 0x91, 0.8f, 700.0f, Sight::Occluded) }), Who(0x62, At(2, 2.4f), { Act(Family::CastOffense, 0x91, 0.7f, 700.0f, Sight::Occluded) }) };
+        p.foes = { Bad(0x91, At(10, 4), 0) };
+        p.envStamp = m.stamp; WallVerts(m.Get(), p.wallVert);   // a window that is not the mesh's first: a mark in the table stands
+        return p;
+    }
+    void TrustRows() {
+        std::printf("\n== movement: trust (S3) ==\n");
+        namespace TR = Trust; using TR::Sign; using TR::Level;
+        const Tuning& t = ShippedTuning(); const TR::Rules& R = TR::kTrustRules;
+        const Env::Vec3 at{ 1000.0f, 800.0f, 0.0f }, ahead{ 1400.0f, 800.0f, 0.0f };
+        const auto here = TR::RegionOf({ at.x + R.aheadU, at.y, at.z });
+        {   // the thresholds
+            TR::Table a; const bool n1 = TR::Note(a, Sign::NoGround, 1, at, ahead, 0.0); const auto l1 = TR::Of(a, here);
+            const bool n2 = TR::Note(a, Sign::NoGround, 1, at, ahead, 0.9); const auto l2 = TR::Of(a, here);
+            const bool n3 = TR::Note(a, Sign::NoGround, 1, at, ahead, 2.0); const auto l3 = TR::Of(a, here);
+            Row(n1 && l1 == Level::Doubted, "one lived sign doubts and never distrusts");
+            Row(!n2 && l2 == Level::Doubted, "the same event again (inside repeatSec) is not a repeat");
+            Row(n3 && l3 == Level::Distrusted, "one sign repeated distrusts");
+            TR::Table b; TR::Note(b, Sign::NoGround, 1, at, ahead, 0.0); TR::Note(b, Sign::EngineRefused, 1, at, ahead, 0.1);
+            Row(TR::Of(b, here) == Level::Distrusted, "two different signs distrust");
+            TR::Table c; TR::Note(c, Sign::NoGround, 1, at, ahead, 0.0); TR::Note(c, Sign::NoGround, 2, at, ahead, 0.2);
+            Row(TR::Of(c, here) == Level::Distrusted, "the same sign lived by two bodies is a repeat");
+            bool lived = true, stat = true;
+            for (const auto& row : TR::kTrustSigns) { TR::Table d; TR::Note(d, row.sign, 1, at, ahead, 0.0); (row.lived ? lived : stat) &= TR::Of(d, here) == row.alone && (!row.lived || row.alone == Level::Doubted) && row.decaySec > 0.0f && TR::Seen(row.sign, row.threshold) && !TR::Seen(row.sign, row.threshold - 0.01f); }
+            Row(lived && stat, "every row of kTrustSigns: alone it argues its own level, no lived row distrusts alone, every row decays, its threshold is >=");
+        }
+        {   // what takes a mark away
+            TR::Table a; TR::Note(a, Sign::NoGround, 1, at, ahead, 0.0); TR::Note(a, Sign::NoGround, 1, at, ahead, 5.0);
+            TR::Table b = a; TR::Decay(b, 29.0); const auto d1 = TR::Of(b, here); TR::Decay(b, 31.0); const auto d2 = TR::Of(b, here); TR::Decay(b, 36.0);
+            Row(d1 == Level::Distrusted && d2 == Level::Doubted && b.Clean(), "marks decay one by one (30 s): distrusted, doubted, trusted");
+            const auto walk = [&](Env::Vec3 p, Env::Vec3 q) { TR::Table w = a; TR::Walked(w, true, p, q, 6.0); return w.Clean(); };
+            Row(walk({ 1000, 800, 0 }, { 1040, 800, 0 }), "a walk across the place, the way it was going, clears the region");
+            Row(!walk({ 1040, 800, 0 }, { 1000, 800, 0 }), "... the other way does not (a one-way edge)");
+            Row(!walk({ 1040, 900, 0 }, { 1080, 900, 0 }) && !walk({ 1000, 1000, 0 }, { 1040, 1000, 0 }), "... nor a walk beside it or on the far side of it");
+            Row(!walk({ 1000, 800, 300 }, { 1040, 800, 300 }), "... nor one on the floor above");
+            TR::Table f = a; TR::Walked(f, false, { 1000, 800, 0 }, { 1040, 800, 0 }, 6.0);
+            Row(f.Clean() && f.trail.empty(), "a follower's crossing clears too, and leaves no trail");
+            TR::Table g = a; TR::Walked(g, true, { 1200, 700, 0 }, { 1210, 700, 0 }, 6.0);
+            Row(TR::Of(g, Env::Vec3{ 1250, 720, 0 }) == Level::Trusted && TR::Of(g, Env::Vec3{ 1100, 950, 0 }) == Level::Distrusted, "a place the player stood on is proven, the rest of the region is not");
+            TR::Decay(g, 80.0); Row(g.trail.empty(), "the trail gets old");
+            TR::Table h = a; TR::Forget(h); Row(h.Clean() && h.gen != a.gen, "a stamp change forgets");
+        }
+        {   // a route
+            TR::Table a; TR::Note(a, Sign::NoGround, 1, at, ahead, 0.0); TR::Note(a, Sign::NoGround, 1, at, ahead, 5.0);   // region 512..1536 is x 1024..1536
+            const auto lvl = [&](Env::Vec3 from, std::vector<Env::Vec3> via) { return TR::RouteLevel(a, from, via); };
+            Row(lvl({ 200, 800, 0 }, { { 328, 800, 0 }, { 800, 800, 0 }, { 1100, 800, 0 }, { 1800, 800, 0 } }) == Level::Distrusted, "a route into the region depends on it");
+            Row(lvl({ 200, 800, 0 }, { { 328, 400, 0 }, { 800, 300, 0 }, { 1100, 300, 0 }, { 1800, 300, 0 } }) == Level::Trusted, "a route round it does not");
+            Row(lvl({ 1100, 900, 0 }, { { 1100, 600, 0 }, { 1100, 400, 0 } }) == Level::Trusted, "leaving it is not depending on it");
+            Row(lvl({ 1000, 800, 0 }, { { 1010, 800, 0 }, { 1030, 800, 0 } }) == Level::Distrusted, "a short route across the place itself is");
+        }
+        {   // the legs' ends
+            TR::Table a; TR::LegEvent e; e.who = 7; e.spot = 42; e.end = TR::End::Stuck; e.at = at; e.toward = ahead; e.laneClear = false;
+            Row(TR::Leg(a, e) == 0 && a.Clean(), "a stuck leg with a body or a door in the lane is no sign");
+            e.laneClear = true; Row(TR::Leg(a, e) == 1 && !TR::Refused(a, 7, 42), "a stuck leg with a clear lane is one, and its spot may be tried again");
+            TR::Table b; e.end = TR::End::Blocked; e.laneClear = false; TR::Leg(b, e);
+            Row(b.Clean() && TR::Refused(b, 7, 42) && !TR::Refused(b, 8, 42) && !TR::Refused(b, 7, 43), "a blocked leg remembers its spot, for him alone, and is no sign");
+            TR::Decay(b, 9.0); const bool still = TR::Refused(b, 7, 42); TR::Decay(b, 10.5); Row(still && !TR::Refused(b, 7, 42), "... for ten seconds");
+            TR::Table c; e.end = TR::End::Refused; e.laneClear = true; Row(TR::Leg(c, e) == 1 && TR::Refused(c, 7, 42), "a route the engine refuses is a sign and remembers its spot");
+            const std::vector<Env::Vec3> way{ { 600, 100, 0 }, { 1200, 100, 0 }, { 1800, 100, 0 } };
+            e.end = TR::End::Arrived; e.route = way; e.passed = 1u; e.planned = 1000.0f;
+            TR::Table d; e.walked = 1590.0f; const int under = TR::Leg(d, e); e.walked = 1610.0f; const int over = TR::Leg(d, e);
+            Row(under == 0 && over == 2 && TR::Of(d, way[0]) == Level::Trusted && TR::Of(d, way[2]) == Level::Doubted, "1.6 times the planned length marks the parts of the plan he did not come by");
+            TR::Table s; e.planned = 100.0f; e.walked = 300.0f; Row(TR::Leg(s, e) == 0, "... not on a short leg, whatever the ratio");
+        }
+        {   // the log
+            TR::Table a; for (int i = 0; i < 6; ++i) TR::Note(a, Sign::NoGround, 1, at, ahead, 2.0 * i);
+            TR::Decay(a, 100.0); for (int i = 0; i < 6; ++i) TR::Note(a, Sign::NoGround, 1, at, ahead, 101.0 + 2.0 * i);
+            Row(a.log.size() == 2 && a.log[0].level == Level::Doubted && a.log[1].level == Level::Distrusted && TR::Text(a.log[1], "Cell").find("[env-trust] Cell region 2,1,0 distrusted: no-ground") == 0, "one line a region and level, also after it decayed and came back");
+        }
+        {   // the route search's price
+            const auto m = Build(kTwoWays); Env::Scratch s; Env::Path p, q, z; const auto v = m.Get();
+            const auto tri = [&](Env::Vec3 x) { return Env::TriAt(v, x); };
+            std::vector<float> dear(v.tris.size(), 1.0f), plain(v.tris.size(), 1.0f);
+            for (std::size_t i = 0; i < dear.size(); ++i) if (const auto c = Env::Centroid(v, static_cast<std::int32_t>(i)); c.x > 5.5f * kCell && c.x < 8.0f * kCell && c.y < 4.0f * kCell) dear[i] = 6.0f;
+            Env::PathQuery k{ At(2, 2), At(10, 2), tri(At(2, 2)), tri(At(10, 2)), {} }; Env::FindPath(v, k, s, p);
+            k.avoid = dear; Env::FindPath(v, k, s, q); k.avoid = plain; Env::FindPath(v, k, s, z);
+            float low = 0.0f; for (const auto& c : q.pts) low = (std::max)(low, c.p.y);
+            Row(p.reachable && q.reachable && q.length > p.length + 300.0f && low > 6.0f * kCell, "an avoided gap is walked round, and the length is the real walk's");
+            const auto room = Build({ "############", "#..........#", "#..........#", "#..........#", "#..........#", "#..........#", "############" }); const auto w = room.Get();
+            std::vector<float> mid(w.tris.size(), 1.0f); for (std::size_t i = 0; i < mid.size(); ++i) if (const auto c = Env::Centroid(w, static_cast<std::int32_t>(i)); c.x > 5.0f * kCell && c.x < 7.0f * kCell && c.y < 5.0f * kCell) mid[i] = 12.0f;
+            Env::Path o; Env::PathQuery j{ At(2, 2), At(9, 2), Env::TriAt(w, At(2, 2)), Env::TriAt(w, At(9, 2)), {}, mid }; Env::FindPath(w, j, s, o);
+            Row(o.reachable && o.length > Dist(At(2, 2), At(9, 2)) + 100.0f, "the straight line over an avoided patch is not put back");
+            Row(z.length == p.length && z.pts.size() == p.pts.size(), "a price of 1 everywhere is the plain search");
+        }
+        {   // the pass
+            const auto m = Build(kTwoWays);
+            const auto run = [&](const std::function<void(PartyPicture&)>& f, Ran& r) { PartyPicture p = TwoWays(m); if (f) f(p); r = Window(m, p, t); return p; };
+            const auto gapMark = [&](PartyPicture& p, int n) { for (int i = 0; i < n; ++i) TR::Note(p.trust, Sign::NoGround, 0x61, At(5.4f, 2), At(9, 2), -4.0 + 2.0 * i); };
+            Ran r0, r1, r2, r3; run({}, r0);
+            const auto p1 = run([&](PartyPicture& p) { gapMark(p, 1); }, r1);
+            const auto p2 = run([&](PartyPicture& p) { gapMark(p, 2); }, r2);
+            const auto through = [&](const PartyPicture& p, const Ran& r, FormID who) { for (const auto& a : r.as) if (a.who == who && a.spot >= 0) for (const auto& w : p.work.pairs) if (w.spot == a.spot && p.party[w.member].id == who) return TR::RouteLevel(p.trustNow, p.party[w.member].p, { w.path.via.data(), w.path.nVia }); return Level::Trusted; };
+            Row(Of(r0, 0x61)->spot >= 0 && Of(r1, 0x61)->spot >= 0 && through(p1, r1, 0x61) <= Level::Doubted, "one mark in the gap: he still goes");
+            Row(through(p2, r2, 0x61) != Level::Distrusted && through(p2, r2, 0x62) != Level::Distrusted, "two: no place is given whose way depends on the gap");
+            // refused for one
+            const auto key = Of(r0, 0x61)->key;
+            const auto p3 = run([&](PartyPicture& p) { p.trust.refused.push_back({ 0x61, key, 0.0 }); }, r3);
+            bool mine = false, his = false; for (const auto& o : p3.work.offers) if (p3.pool[static_cast<std::size_t>(o.spot)].key == key) (p3.party[o.member].id == 0x61 ? mine : his) = true;
+            Row(Of(r0, 0x61)->spot >= 0 && Of(r3, 0x61)->key != key && !mine, "a refused spot is not offered to him again");
+            Row(his, "... and still is to the other");
+            PartyPicture one = TwoWays(m); one.party.resize(1); PartyPicture two = one; Window(m, one, t);
+            for (const auto& o : one.work.offers) two.trust.refused.push_back({ 0x61, one.pool[static_cast<std::size_t>(o.spot)].key, 0.0 });
+            Window(m, two, t); bool same = false; for (const auto& o : two.work.offers) for (const auto& x : one.work.offers) same = same || two.pool[static_cast<std::size_t>(o.spot)].key == one.pool[static_cast<std::size_t>(x.spot)].key;
+            Row(!one.work.offers.empty() && !two.work.offers.empty() && !same, "... and the next best are looked for in its stead");
+            PartyPicture late = TwoWays(m); gapMark(late, 2); late.t = 60.0; Window(m, late, t);
+            Row(late.trust.Clean() && late.avoid.empty(), "the pass lets marks decay");
+            PartyPicture k = TwoWays(m); Window(m, k, t); const bool was = k.party[0].commit.on; k.trust.refused.push_back({ 0x61, k.party[0].commit.key, k.t }); const auto old = k.party[0].commit.key; const auto rk = Window(m, k, t);
+            Row(was && Of(rk, 0x61)->key != old, "a committed spot that was refused is given up");
+            // an event inside a window
+            PartyPicture a = TwoWays(m), b = TwoWays(m); Env::Scratch s; std::vector<RayAsk> qa, qb; std::vector<Assignment> xa, xb; const auto v = m.Get();
+            MP::Freeze(a, v, t); MP::Freeze(b, v, t); gapMark(b, 2);
+            while (!MP::Phase1(a, v, s, &NoClass, t, qa, 1.0e9f)) {} while (!MP::Phase1(b, v, s, &NoClass, t, qb, 1.0e9f)) {}
+            MP::Phase3(a, &NoClass, t, xa); MP::Phase3(b, &NoClass, t, xb); Ran ra, rb; ra.as = xa; rb.as = xb;
+            Row(SameAsks(qa, qb) && Same(xa, xb) && !b.trust.Clean(), "a mark made inside a window changes nothing in it");
+            PartyPicture d = TwoWays(m); gapMark(d, 2); d.envStamp = 999; Window(m, d, t);
+            Row(d.trust.Clean(), "a new stamp forgets the marks");
+        }
+    }
+
     // ── golden vectors ──
     struct Scene { std::string name; std::function<std::pair<MD::Mesh, PartyPicture>()> make; std::vector<std::pair<std::string, float>> tuning = {}; };
     std::vector<Scene> Scenes() {
@@ -555,6 +677,10 @@ namespace {
             { "door_pins_on", [] { PartyPicture p; p.caps.pin = true;
                 for (int i = 0; i < 3; ++i) p.party.push_back(Who(0x51 + static_cast<FormID>(i), At(1.0f + static_cast<float>(i) * 0.6f, 2), { Act(Family::Attack, 0x91, 0.7f, 150.0f, Sight::Visible, true) }));
                 p.foes = { Bad(0x91, At(7, 2), 0x52) }; return std::pair{ Build({ "#########", "#...#...#", "#.......#", "#...#...#", "#########" }), p }; }, { { "t.spotPinKinds", 1.0f } } },
+            { "trust", [] { auto m = Build(kTwoWays); PartyPicture p = TwoWays(m);   // two marks in the gap, a doubted corner, a refusal, a trail
+                for (int i = 0; i < 2; ++i) Trust::Note(p.trust, Trust::Sign::NoGround, 0x61, At(5.4f, 2), At(9, 2), -4.0 + 2.0 * i);
+                Trust::Note(p.trust, Trust::Sign::LengthFar, 0x62, At(9, 6), At(10, 6), -1.0, 900.0f, 1700.0f); p.trust.refused.push_back({ 0x62, KeyOfPoint(20, 0), -1.0 });
+                p.trust.trail.push_back({ At(3, 5), -1.0 }); return std::pair{ m, p }; } },
             { "class_room", [] { PartyPicture p = RoomFight(); for (auto& m : p.party) m.classId = 1; p.foes[0].target = 0x12; return std::pair{ Build(kRoom), p }; } },
         };
     }
@@ -597,13 +723,13 @@ namespace {
             Row(asked && exact && worst <= 1.0e-4f, b);
             ++cases;
         }
-        Row(err.empty() && cases == 21, "every golden case was read");
+        Row(err.empty() && cases == 24, "every golden case was read");
     }
 }
 
 int MoveRows(const char* a_golden, bool a_write) {
     g_bad = 0;
-    Determinism(); Tunables(); Scoring(); Behaviour(); Budgets(); Review(); Golden(a_golden, a_write);
+    Determinism(); Tunables(); Scoring(); Behaviour(); Budgets(); Review(); TrustRows(); Golden(a_golden, a_write);
     return g_bad;
 }
 

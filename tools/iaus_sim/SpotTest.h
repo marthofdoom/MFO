@@ -109,6 +109,65 @@ namespace Sim {
           c.script = [](Fight& F) { Script(F, 0, { Want(Family::Retreat, 0, 0.9f, 0.0f, Sight::None, false) }); };
           c.watch = [](Fight& F, SpotProbe& p) { const MoveClaim& q = F.move->claim[0]; if (q.on && (q.kinds & MV::KindBit(MFO::Iaus::SpotKind::RetreatExit))) p["filed"] = 1; };
           c.rule = [](const std::vector<SpotProbe>& r, std::string& o) { o = Fmt("a retreat place in %.0f of %zu", Sum(r, "filed"), r.size()); return Sum(r, "filed") == 0; }; v.push_back(c); }
+        // ── TRUST (S3, 8.9): the truth differs from the mesh the pass plans on. One scripted bow, one target he has to go through the bad place for. Measured on the
+        // CLAIMS: does a claim's planned way cross the bad place (`dep`). Repaired at kRepairAt, then the player walks it. No mechanism of the pass is told any of this.
+        static constexpr double kRepairAt = 25.0, kRepairLate = 33.0, kDecaySec = 30.0;
+        struct Bad { float x, y0, y1; };                                            // the line the bad place lies on
+        const auto crosses = [](const MoveClaim& q, const Bad& b, int way /* +1 east only, -1 west only, 0 both */) { if (!q.on || q.via.empty()) return false;
+            for (std::size_t i = 0; i < q.via.size(); ++i) { const auto &p = i ? q.via[i - 1] : q.from, &r = q.via[i]; if ((p.x < b.x) == (r.x < b.x) || (way > 0 && r.x < p.x) || (way < 0 && r.x > p.x)) continue; const float k = (b.x - p.x) / (r.x - p.x), y = p.y + (r.y - p.y) * k; if (y >= b.y0 - 70.0f && y <= b.y1 + 70.0f) return true; }
+            return false; };
+        const auto walkPlayer = [](Fight& F, float x0, float x1, float y, double t0) {  // the player walks the place, 300 u/s
+            const double s = F.now - t0; if (s < 0 || s > std::fabs(x1 - x0) / 300.0) return; Body& p = F.b[0]; p.c.x = x0 + (x1 - x0) * static_cast<float>(s * 300.0 / std::fabs(x1 - x0)); p.c.y = y; p.c.z = 0.0f; EQ::Vec3 on; p.nav.tri = EQ::NearestTri(EnvViewOf(F), { p.c.x, p.c.y, 0.0f }, 100.0f, on); };
+        const auto watchTrust = [crosses](Fight& F, SpotProbe& p, const Bad& b, int way, double repairAt = 25.0) { p["repair"] = repairAt; const MoveClaim& q = F.move->claim[0]; const bool dep = crosses(q, b, way); const double key = static_cast<double>(q.key % 1000003u) + q.since * 1e-3;
+            if (F.t.trustMarks > 0 && !p.v.count("sign")) p["sign"] = F.now; if (dep) { p["depAny"] = 1; if (p["_dep"] != key) { p["_dep"] = key; p["deps"] += 1; if (F.now >= repairAt + 2.0 && !p.v.count("again")) p["again"] = F.now; }
+                if (F.now < repairAt && p.v.count("sign")) p["lastDep"] = F.now; }
+            if (F.now < repairAt) p["osc"] = static_cast<double>(F.t.pathOsc) * 60.0 / std::max(1.0, F.now);
+            int dis = 0, dup = 0; const auto& L = F.move->trustLog; for (std::size_t i = 0; i < L.size(); ++i) { dis += L[i].level == TR::Level::Distrusted; for (std::size_t j = 0; j < i; ++j) dup += L[i].region == L[j].region && L[i].level == L[j].level; } p["dis"] = dis; p["dup"] = dup; p["lines"] = static_cast<double>(L.size()); };
+        // recovery: from the first sign to the last moment a claim still depended on the place (before the repair). Band: kPathBounds osc/min 8.
+        const auto ruleTrust = [](const std::vector<SpotProbe>& r, double bound, std::string& o) { const int n = static_cast<int>(r.size()), sign = Count(r, [](const SpotProbe& p) { return p.v.count("sign") > 0 && p.v.at("sign") < p.v.at("repair"); }); double worst = 0, sum = 0, osc = 0; for (const auto& p : r) { const double k = std::max(0.0, Get(p, "lastDep", 0) - Get(p, "sign", 1e9)); worst = std::max(worst, k); sum += k; osc = std::max(osc, Get(p, "osc", 0)); }
+            const int in = Count(r, [bound](const SpotProbe& p) { return Get(p, "lastDep", 0) - Get(p, "sign", 1e9) <= bound; }), again = Count(r, [](const SpotProbe& p) { return Get(p, "again", 1e9) <= p.v.at("repair") + 2.0 + kDecaySec; });
+            o = Fmt("a sign in %d of %d, recovered within %.0f s in %d (mean %.1f s, worst %.1f s), worst osc/min %.1f, distrusted lines a fight %.1f, said twice %.0f, used again within a decay of the walk in %d", sign, n, bound, in, sum / n, worst, osc, Sum(r, "dis") / n, Sum(r, "dup"), again);
+            return sign * 10 >= n * 9 && in * 10 >= n * 9 && osc <= 8.0 && Sum(r, "dup") == 0 && Sum(r, "dis") >= n * 0.9 && again * 10 >= n * 9; };
+        const auto bow = [](Fight& F) { Body& f = *Foes(F)[0]; Script(F, 0, { Want(Family::Attack, f.c.id, 0.8f, 800.0f, EnvSees(F, Sub(F), f) ? Sight::Visible : Sight::Occluded, false) }); };
+        const auto stage = [](Fight& F, EQ::Vec3 me, EQ::Vec3 foe, EQ::Vec3 pc) { AllStatues(F); for (Body* f : Foes(F)) Put(F, *f, foe); for (std::size_t i = 1; i < Foes(F).size(); ++i) Foes(F)[i]->alive = false; Put(F, Sub(F), me); Put(F, F.b[0], pc); F.ctl[0].leash = 0.0f; for (std::size_t i = 1; i < F.ctl.size(); ++i) F.b[static_cast<std::size_t>(F.ctl[i].body)].alive = false;
+            F.ctl[0].drawn = PostureKind::Bow; Sub(F).rangedMode = true; F.ctl[0].gate.weaponBow = true; };
+        { SpotCase c{ "trust-ignored-wall", "trust-ignored-wall", "no-trust" }; c.scripted = true; c.sec = 58.0; c.what = "the mesh walks through a wall that is really there, the engine reads the same mesh: he stops being sent into it";
+          const Bad b{ 1290.0f, 640.0f, 768.0f }; c.setup = [=](Fight& F) { stage(F, At(F, 7, 3, 8), At(F, 18, 2, 8), At(F, 2, 5, 8)); };
+          c.script = [=](Fight& F) { bow(F); if (F.now >= kRepairAt && !F.meshEdit) EnvRepair(F); walkPlayer(F, 1100.0f, 1460.0f, 704.0f, kRepairAt + 0.5); };
+          c.watch = [=](Fight& F, SpotProbe& p) { watchTrust(F, p, b, 0); }; c.rule = [=](const auto& r, std::string& o) { return ruleTrust(r, 12.0, o); }; v.push_back(c); }
+        { SpotCase c{ "trust-buried-patch", "env-doorway-block", "no-trust" }; c.scripted = true; c.sec = 58.0; c.what = "a patch of mesh under a wall the rays see and the mesh does not (the one gap between two rooms)";
+          const Bad b{ 1344.0f, 512.0f, 640.0f }; c.setup = [=](Fight& F) { stage(F, At(F, 7, 5, 9), At(F, 18, 2, 9), At(F, 2, 6, 9));
+              EnvEdit(F, [](const EQ::View& w, std::int32_t i, std::int32_t j) { const auto in = [&](std::int32_t k) { const auto q = EQ::Centroid(w, k); return q.x > 1280.0f && q.x < 1408.0f; }; return in(i) != in(j); }, { { 1344.0f, 512.0f, 0.0f, 1344.0f, 640.0f, 0.0f, -24.0f, 300.0f, EQ::WallKind::Face } }); };
+          c.script = [=](Fight& F) { bow(F); if (F.now >= kRepairAt) EnvRepair(F); walkPlayer(F, 1100.0f, 1560.0f, 576.0f, kRepairAt + 0.5); };
+          c.watch = [=](Fight& F, SpotProbe& p) { watchTrust(F, p, b, 0); }; c.rule = [=](const auto& r, std::string& o) { return ruleTrust(r, 12.0, o); }; v.push_back(c); }
+        { SpotCase c{ "trust-missing-link", "env-doorway-block", "no-trust" }; c.scripted = true; c.sec = 58.0; c.what = "a link goes after the plan was made and the engine knows: it refuses the paths we find";
+          const Bad b{ 1344.0f, 512.0f, 640.0f }; c.setup = [=](Fight& F) { stage(F, At(F, 7, 5, 9), At(F, 18, 2, 9), At(F, 2, 6, 9)); F.engineTrue = true; };
+          c.script = [=](Fight& F) { bow(F); if (F.now >= 1.6 && F.now < kRepairAt && !F.meshEdit) EnvEdit(F, [](const EQ::View& w, std::int32_t i, std::int32_t j) { return (EQ::Centroid(w, i).x < 1280.0f) != (EQ::Centroid(w, j).x < 1280.0f); });
+              if (F.now >= kRepairAt) EnvRepair(F); walkPlayer(F, 1100.0f, 1560.0f, 576.0f, kRepairAt + 0.5); };
+          c.watch = [=](Fight& F, SpotProbe& p) { watchTrust(F, p, b, 0); }; c.rule = [=](const auto& r, std::string& o) { return ruleTrust(r, 12.0, o); }; v.push_back(c); }
+        { SpotCase c{ "trust-one-way", "trust-one-way", "no-trust" }; c.scripted = true; c.sec = 68.0; c.what = "an edge walkable one way only and the engine knows: it takes him round, twice, and the plan follows it round (the target crosses every 4.5 s, so he has to)";
+          const Bad b{ 1290.0f, 640.0f, 768.0f }; c.setup = [=](Fight& F) { stage(F, At(F, 15, 2, 8), At(F, 3, 2, 8), At(F, 20, 5, 8)); F.engineTrue = true; };
+          c.script = [=](Fight& F) { Body& f = *Foes(F)[0]; const bool west = std::fmod(F.now, 9.0) < 4.5; const bool isWest = f.c.x < 1280.0f; if (west != isWest) Put(F, f, west ? At(F, 3, 2, 8) : At(F, 18, 2, 8));
+              Script(F, 0, { Want(Family::Attack, f.c.id, 0.8f, 700.0f, EnvSees(F, Sub(F), f) ? Sight::Visible : Sight::Occluded, false) });
+              if (F.now >= kRepairLate && !F.meshEdit) EnvRepair(F); walkPlayer(F, 1460.0f, 1100.0f, 704.0f, kRepairLate + 0.5); };
+          c.watch = [=](Fight& F, SpotProbe& p) { watchTrust(F, p, b, -1, kRepairLate); }; c.rule = [=](const auto& r, std::string& o) { return ruleTrust(r, 16.0, o); }; v.push_back(c); }
+        // one blocked leg in a clean place: nothing is distrusted and he goes on (the 11-17 GATED lesson)
+        { SpotCase c{ "trust-one-blocked-leg", "env-doorway-block", "hair-trust" }; c.scripted = true; c.sec = 20.0; c.what = "a clean place, something stands in the gap for a moment and one leg ends STUCK: the region is not distrusted and he goes through it";
+          const Bad b{ 1344.0f, 512.0f, 640.0f }; c.setup = [=](Fight& F) { stage(F, At(F, 7, 5, 9), At(F, 18, 2, 9), At(F, 2, 6, 9)); EnvEdit(F, [](const EQ::View& w, std::int32_t i, std::int32_t j) { return (EQ::Centroid(w, i).x < 1280.0f) != (EQ::Centroid(w, j).x < 1280.0f); }); };
+          c.script = [=](Fight& F) { bow(F); if (!F.move) return; const auto& mk = F.move->pic.trust.marks; if (F.meshEdit && !mk.empty() && F.now >= mk[0].t + 1.0) EnvRepair(F); };   // gone again a second after his first STUCK end, before a second one
+          c.watch = [=](Fight& F, SpotProbe& p) { watchTrust(F, p, b, 0); if (Sub(F).c.x > 1344.0f && F.move->claim[0].on && !p.v.count("over")) p["over"] = F.now; };
+          c.rule = [](const std::vector<SpotProbe>& r, std::string& o) { const int n = static_cast<int>(r.size()), over = Count(r, [](const SpotProbe& p) { return Get(p, "over", 1e9) <= 15.0; }), s = Count(r, [](const SpotProbe& p) { return p.v.count("sign") > 0; }); o = Fmt("one leg ended STUCK in %d of %d, his claim takes him through the gap within 15 s in %d, distrusted lines %.0f, lines %.0f", s, n, over, Sum(r, "dis"), Sum(r, "lines")); return s * 10 >= n * 9 && over * 10 >= n * 9 && Sum(r, "dis") == 0; }; v.push_back(c); }
+        // S2 review F6
+        { SpotCase c{ "blocked-spot", "env-doorway-block", "no-memory" }; c.scripted = true; c.sec = 12.0; c.what = "a leg that ended BLOCKED: the same spot is not filed again for him in the next seconds";
+          c.setup = [=](Fight& F) { stage(F, At(F, 7, 5, 9), At(F, 18, 2, 9), At(F, 2, 6, 9)); };
+          c.script = [=](Fight& F) { bow(F); Body& x = Sub(F); if (!F.move) return; MoveClaim& q = F.move->claim[0]; if (q.on && !q.arrived && F.now > 2.0 && F.move->pic.trust.refused.empty() && !F.t.spotBlocked) { q.walks = true; EnvLegEnd(F, x, LegEnd::Blocked); q.walks = false; } };
+          c.watch = [](Fight& F, SpotProbe& p) { const MoveClaim& q = F.move->claim[0]; if (!q.on && F.t.spotBlocked && !p.v.count("key")) { p["key"] = static_cast<double>(q.key); p["at"] = F.now; } else if (q.on && p.v.count("key") && F.now < p["at"] + 5.0) { p["next"] = 1; if (static_cast<double>(q.key) == p["key"]) p["same"] = 1; } };
+          c.rule = [](const std::vector<SpotProbe>& r, std::string& o) { const int n = static_cast<int>(r.size()); const int k = Count(r, [](const SpotProbe& p) { return p.v.count("key") > 0; }); o = Fmt("blocked in %d of %d, another claim within 5 s in %.0f, on the same spot in %.0f", k, n, Sum(r, "next"), Sum(r, "same")); return k * 10 >= n * 9 && Sum(r, "next") * 10 >= n * 9 && Sum(r, "same") == 0; }; v.push_back(c); }
+        { SpotCase c{ "waiting-claim", "env-doorway-block", "any-leg" }; c.scripted = true; c.sec = 6.0; c.what = "a goal-less leg of another mover ends while a claim waits: the claim stays and trust hears nothing";
+          c.setup = [=](Fight& F) { stage(F, At(F, 7, 5, 9), At(F, 18, 2, 9), At(F, 2, 6, 9)); };
+          c.script = [=](Fight& F) { bow(F); Body& x = Sub(F); if (!F.move) return; MoveClaim& q = F.move->claim[0]; if (q.on && !q.arrived && F.now > 2.0 && x.perch == false && q.since > 0.0 && F.t.spotArrived >= 0 && F.t.spotBlocked == 0 && F.t.apprDrops == 0) { F.t.apprDrops = 1; x.nav.goalBody = 0; EnvLegEnd(F, x, LegEnd::Unreachable); F.t.apprBlocked = q.on ? 2 : 1; } };
+          c.watch = [](Fight& F, SpotProbe& p) { if (F.t.apprBlocked && !p.v.count("did")) { p["did"] = 1; p["kept"] = F.t.apprBlocked == 2; p["marks"] = F.t.trustMarks; } };
+          c.rule = [](const std::vector<SpotProbe>& r, std::string& o) { const int n = static_cast<int>(r.size()); o = Fmt("the other leg ended in %.0f of %d, the claim stayed in %.0f, marks %.0f", Sum(r, "did"), n, Sum(r, "kept"), Sum(r, "marks")); return Sum(r, "did") * 10 >= n * 9 && Sum(r, "kept") == Sum(r, "did") && Sum(r, "marks") == 0; }; v.push_back(c); }
         return v;
     }
 

@@ -145,7 +145,8 @@ namespace MFO::Iaus::Env {
         void Clear() { pts.clear(); length = 0.0f; reachable = false; blockDoor = -1; blocked = false; drops = 0; climb = fall = 0.0f; expanded = 0; }
     };
 
-    struct PathQuery { Vec3 from, to; std::int32_t fromTri = -1, toTri = -1; Walker who; };
+    // avoid: per triangle, what a step out of it costs times its length (>= 1, trust S3). Empty = nothing is avoided, and the search is what it was.
+    struct PathQuery { Vec3 from, to; std::int32_t fromTri = -1, toTri = -1; Walker who; std::span<const float> avoid{}; };
 
     // Reused search memory. One per thread. Nothing in it survives a call as a result.
     struct Scratch {

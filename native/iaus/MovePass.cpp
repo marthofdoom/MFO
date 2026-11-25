@@ -103,6 +103,10 @@ namespace MFO::Iaus::MovePass {
             }
             if (m.leash > 0.0f) f.leashX = Dist(at, m.anchor) / m.leash;
             if (m.wantsDark) for (const LightAt& l : pic.light) if (l.key == key) f.light = l.level;
+            if (spot && !pic.trustNow.Clean()) {   // where he stands now is nobody's plan: staying hands him back to the engine, and is never priced
+                if (const auto l = Trust::Of(pic.trustNow, spot->p); l != Trust::Level::Trusted) f.spotRegionTrust = static_cast<float>(l);
+                if (pair) if (const auto l = Trust::RouteLevel(pic.trustNow, m.p, { pair->path.via.data(), pair->path.nVia }); l != Trust::Level::Trusted) f.pathRegionTrust = static_cast<float>(l);
+            }
             if (IsMove(a.Kind())) f.serves = spot ? Iaus::Tri::Yes : Iaus::Tri::No;
             return f;
         }
@@ -183,7 +187,7 @@ namespace MFO::Iaus::MovePass {
             if (pic.counts.paths >= static_cast<std::uint32_t>(B.paths)) { ++pic.counts.pathsSkipped; return; }
             ++pic.counts.paths;
             Env::Path p; PathFact f; f.from = m.p;
-            const bool any = Env::FindPath(v, { m.p, to, m.tri, k.toTri, m.who }, s, p);
+            const bool any = Env::FindPath(v, { m.p, to, m.tri, k.toTri, m.who, pic.avoid }, s, p);
             f.reachable = any && p.reachable; f.length = p.length; f.climb = p.climb; f.drop = p.fall;
             if (k.actor) { f.at[0] = to; f.nAt = 1; }
             else if (f.reachable) {
@@ -198,6 +202,18 @@ namespace MFO::Iaus::MovePass {
                     }
                     done += leg; prev = c.p;
                 }
+                const int nv = (std::min)(static_cast<int>(f.via.size()), 1 + static_cast<int>(p.length / 128.0f));   // the walk in equal pieces
+                prev = m.p; done = 0.0f; next = 1;
+                for (const auto& c : p.pts) {
+                    const float leg = Dist(prev, c.p);
+                    while (next < nv && leg > 0.0f && p.length * static_cast<float>(next) <= (done + leg) * static_cast<float>(nv)) {
+                        const float at = (p.length * static_cast<float>(next) / static_cast<float>(nv) - done) / leg;
+                        f.via[f.nVia++] = { prev.x + (c.p.x - prev.x) * at, prev.y + (c.p.y - prev.y) * at, prev.z + (c.p.z - prev.z) * at };
+                        ++next;
+                    }
+                    done += leg; prev = c.p;
+                }
+                f.via[f.nVia++] = to;
                 if (m.tri != k.toTri)
                     for (std::size_t i = 0; i + 1 < s.corridor.size() && f.nPortals < f.portals.size(); ++i) {
                         const auto add = [&](std::uint64_t id) { if (id && f.nPortals < f.portals.size() && std::find(f.portals.begin(), f.portals.begin() + f.nPortals, id) == f.portals.begin() + f.nPortals) f.portals[f.nPortals++] = id; };
@@ -315,6 +331,7 @@ namespace MFO::Iaus::MovePass {
             int kept = 0, tested = 0;
             for (const R& x : found) {
                 if (kept >= B.perGen) break;
+                if (Trust::Refused(pic.trustNow, m.id, x.c.key)) continue;
                 if (row.check) { if (tested++ >= B.geomPerGen) break; if (!row.check(g, x.c, s)) continue; }
                 Spot sp; sp.key = x.c.key; sp.p = x.c.p; sp.tri = x.c.tri; sp.kinds = KindBit(row.kind);
                 w.hits.push_back({ sp, kept * 100000 + (std::min)(99999, QDist(x.c.walk)) });   // the first of every kind before the second of any, nearest first
@@ -361,7 +378,7 @@ namespace MFO::Iaus::MovePass {
             std::map<FormID, bool> sight;   // CheckSight reads the target and the spot only
             for (std::uint32_t i = 0; i < pic.party.size(); ++i) {
                 const Member& m = pic.party[i];
-                if (!Scores(m)) continue;
+                if (!Scores(m) || Trust::Refused(pic.trustNow, m.id, sp.key)) continue;   // his last leg there was refused
                 const bool own = m.commit.on && m.commit.key == sp.key;
                 Cand c{ sp.key, sp.p, sp.tri, WalkTo(pic, m, w.memberFlood[i].Get(), sp.p, sp.tri) };
                 if (c.walk < 0.0f) { if (!own) continue; c.walk = Dist(m.p, sp.p); }   // beyond his own gather: another member's spot
@@ -515,6 +532,22 @@ namespace MFO::Iaus::MovePass {
         if (moved) { pic.envStamp = v.stamp; pic.facts.clear(); pic.paths.clear(); pic.carried.clear(); pic.late.clear(); WallVerts(v, pic.wallVert); }
         if (moved || !pic.mesh || pic.mesh->cen.size() != v.tris.size()) { pic.mesh = FactsOf(v); pic.exitMemo.reset(); pic.exitFlood.reset(); pic.still.clear(); }
         std::erase_if(pic.still, [&](const auto& s) { return !ById(pic.party, s.who) && !ById(pic.foes, s.who); });
+        if (moved) Trust::Forget(pic.trust);           // a door, a cell: what was learned is about another mesh
+        Trust::Decay(pic.trust, pic.t);
+        pic.trustNow = pic.trust; pic.trustNow.log.clear(); pic.trustNow.said.clear();
+        if (moved || pic.trustGen != pic.trust.gen) {
+            pic.trustGen = pic.trust.gen; pic.paths.clear(); pic.avoid.clear();
+            if (!pic.trustNow.Clean()) {
+                std::map<Trust::Region, float> price;
+                pic.avoid.assign(v.tris.size(), 1.0f);
+                for (std::size_t i = 0; i < v.tris.size(); ++i) {
+                    const auto r = Trust::RegionOf(pic.mesh->cen[i], pic.trustNow.rules);
+                    const auto [it, fresh] = price.try_emplace(r, 1.0f);
+                    if (fresh) { const auto l = Trust::Of(pic.trustNow, r); it->second = l == Trust::Level::Distrusted ? pic.trustNow.rules.distrustMult : l == Trust::Level::Doubted ? pic.trustNow.rules.doubtMult : 1.0f; }
+                    pic.avoid[i] = it->second;
+                }
+            }
+        }
         for (Foe& f : pic.foes) f.tri = Locate(v, f.p);
         for (Member& m : pic.party) {
             m.tri = Locate(v, m.p);
@@ -555,6 +588,7 @@ namespace MFO::Iaus::MovePass {
                 if (Dist(m.p, c.p) <= t.spotArriveU) m.seen |= kMarkArrived;
                 if (m.nTop == 0 || !SameAct(m.top[0], c.held)) m.seen |= kMarkActionChanged;
                 if (!(c.kinds & KindsOf(pic, m, t))) { c.on = false; m.seen |= kMarkOrder; }       // the road or the class no longer offers it
+                if (Trust::Refused(pic.trustNow, m.id, c.key)) { c.on = false; m.seen |= kMarkPathBlocked; }
                 if (m.seen & kMarkCombatEnd) c.on = false;
             }
             m.fixed = m.decides && c.on && m.seen == 0;

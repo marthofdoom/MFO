@@ -11,6 +11,7 @@
 //   an event that frees a commit ......... Mark
 #include "iaus/Core.h"
 #include "iaus/EnvQuery.h"
+#include "iaus/EnvTrust.h"
 
 #include <array>
 #include <cstdint>
@@ -115,6 +116,7 @@ namespace MFO::Iaus::Move {
         bool reachable = false; float length = 0.0f, climb = 0.0f, drop = 0.0f;
         Env::Vec3 from; std::array<Env::Vec3, 8> at{}; std::uint8_t nAt = 0;
         std::array<std::uint64_t, 6> portals{}; std::uint8_t nPortals = 0;
+        std::array<Env::Vec3, 16> via{}; std::uint8_t nVia = 0;   // the walk as points at most 128 apart (farther on a long one), its end the last: what trust reads
     };
     struct PathKey { FormID who = 0; std::int32_t fromTri = -1; SpotKey to = 0; std::int32_t toTri = -1; bool actor = false; auto operator<=>(const PathKey&) const = default; };
 
@@ -162,6 +164,12 @@ namespace MFO::Iaus::Move {
         std::vector<LightAt> light;
         RoadCaps caps;
         Env::SightTuning sight;                        // the geometry rays' rules (what is worth asking). Shipped = Env::kSightTuning; the sim's sight layers are switches
+        // THE TRUST TABLE (S3). The holder writes it whenever it lives something (Trust::Leg, Note, Walked), and takes `log` to print. The pass reads the copy
+        // Freeze makes, so nothing that happens between Freeze and Adopt changes a window.
+        Trust::Table trust;
+        Trust::Table trustNow;                         // frozen
+        std::vector<float> avoid;                      // per triangle: what a route pays there (1 = plain). Empty while everything is trusted
+        std::uint32_t trustGen = 0;
         // carried across windows
         std::map<PairKey, PairFact> facts;
         std::map<PathKey, PathFact> paths;

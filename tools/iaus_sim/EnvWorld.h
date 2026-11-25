@@ -26,7 +26,23 @@ namespace Sim {
         w.opensDoors = !(x.spec->animal || x.spec->creature || x.spec->dragon);   // MODEL: beasts do not open doors (the race flag is not in the extract)
         w.drops = x.Party() ? g_v4.drops : g_v4.foedrops; w.maxDrop = g_envT.maxDrop; return w;
     }
-    [[nodiscard]] inline EQ::View EnvViewOf(const Fight& F, bool plan = false) { return F.env->View(F.doors, F.doorStamp, plan); }
+    [[nodiscard]] inline EQ::View EnvViewOf(const Fight& F, bool plan = false) {
+        EQ::View v = F.env->View(F.doors, F.doorStamp, plan);
+        if (F.meshEdit && !plan) { v.tris = F.meshEdit->tris; v.walls = F.meshEdit->walls; v.grid = &F.meshEdit->grid; v.stamp ^= F.meshEdit->stamp; }
+        return v;
+    }
+    // The truth becomes what the planner's mesh says (a fixture's DFCT defect is repaired, an edit is taken back).
+    inline void EnvRepair(Fight& F) {
+        if (F.env->planTris.empty()) { F.meshEdit = nullptr; return; }
+        auto e = std::make_shared<MeshEdit>(); e->tris = F.env->planTris; e->walls = F.env->walls; e->grid = F.env->grid; e->stamp = SimEnv::Mix(0x4E9A14ULL); F.meshEdit = std::move(e);
+    }
+    // Edit the truth of this fight: a_cut says which edges are gone (both sides are asked), a_faces = cliff-like faces the rays meet (a wall the mesh does not know).
+    template <class Cut> inline void EnvEdit(Fight& F, Cut&& a_cut, const std::vector<EQ::Wall>& a_faces = {}) {
+        auto e = std::make_shared<MeshEdit>(); const EQ::View v = EnvViewOf(F); e->tris.assign(v.tris.begin(), v.tris.end()); e->walls.assign(v.walls.begin(), v.walls.end()); e->grid = *v.grid;
+        for (std::size_t i = 0; i < e->tris.size(); ++i) for (int k = 0; k < 3; ++k) if (e->tris[i].nb[k] >= 0 && a_cut(v, static_cast<std::int32_t>(i), e->tris[i].nb[k])) { e->tris[i].nb[k] = -1; e->tris[i].kind[k] = EQ::Edge::Wall; }
+        e->walls.insert(e->walls.end(), a_faces.begin(), a_faces.end()); EQ::IndexWalls(e->grid, e->walls);
+        e->stamp = SimEnv::Mix((F.meshEdit ? F.meshEdit->stamp : 0) + 1); F.meshEdit = std::move(e);
+    }
     inline thread_local EQ::Scratch tl_envScratch;
 
     // Put a body on the mesh near where it is (a spawn, a summon, a landing). Height is taken from the nearest other body.
@@ -100,7 +116,7 @@ namespace Sim {
         return false;
     }
     enum class LegEnd { Blocked, Unreachable, Stuck };
-    inline void MoveLegEnd(Fight& F, Body& x, LegEnd how);   // S2 (MoveWorld.h): a leg toward a spot claim ended
+    inline void MoveLegEnd(Fight& F, Body& x, LegEnd how, const EQ::Vec3& toward);   // S2 (MoveWorld.h): a leg toward a spot claim ended
     inline void EnvLegEnd(Fight& F, Body& x, LegEnd how) {
         Nav& n = x.nav; const bool subj = x.ctl == 0;
         // AN END BESIDE HIS LAST END OF THE SAME KIND IS A REPEAT (review F8: only a BLOCKED end was compared, so asking again and again for a route
@@ -123,8 +139,9 @@ namespace Sim {
                     else { n.holdUntil = F.now + static_cast<double>(std::max(0.0f, lt.offenseApproachBackoffSec)); if (subj) ++F.t.apprDrops; } } }
         } else { n.exact = true; n.exactUntil = F.now + 3.0; if (subj) ++F.t.pathStuckLegs; }
         if (F.trace && x.ctl >= 0) std::fprintf(F.trace, "%7.2f  LEG %s: %s at (%.0f, %.0f, %.0f) toward (%.0f, %.0f, %.0f), corner %d of %d%s%s, hold until %.1f\n", F.now, x.c.name.c_str(), how == LegEnd::Blocked ? "BLOCKED" : how == LegEnd::Unreachable ? "UNREACHABLE" : "STUCK", x.c.x, x.c.y, x.c.z, n.goal.x, n.goal.y, n.goal.z, int(n.i), int(n.n), n.reach ? "" : " (no route to the goal)", n.away ? " (away)" : "", n.holdUntil);
+        const EQ::Vec3 toward = n.i < n.n ? n.pts[n.i].p : n.goal;   // before the route is emptied
         n.n = n.i = 0; n.legOpen = false; n.away = false;
-        if (F.move && x.ctl >= 0) MoveLegEnd(F, x, how);
+        if (F.move && x.ctl >= 0) MoveLegEnd(F, x, how, toward);
     }
 
     // One step toward (qx, qy) on the TRUE mesh: the straight walk, one slide along what stopped it, the door, the bodies.
@@ -223,10 +240,10 @@ namespace Sim {
         n.pathAt = F.now; n.stamp = F.doorStamp; n.goalTri = gt; n.goal = gp; n.i = n.n = 0; n.cut = n.blocked = false; n.reach = false; n.away = false;
         const EQ::Vec3 pos{ x.c.x, x.c.y, x.c.z }; float len = 0.0f;
         if (gt >= 0) {
-            const EQ::View pv = EnvViewOf(F, true); const EQ::Walker who = WalkerOf(x);
+            const bool truth = F.engineTrue; const EQ::View pv = EnvViewOf(F, !truth); const EQ::Walker who = WalkerOf(x);
             // the straight walk counts only when it ENDS AT THE GOAL'S HEIGHT (review F1): the same x, y on the floor above is not the goal
             if (EQ::WalkLine(pv, n.tri, pos, gp, who).At()) { n.pts[0] = { gp, gt, EQ::Corner::Goal }; n.n = 1; n.reach = true; len = std::hypot(gp.x - pos.x, gp.y - pos.y, gp.z - pos.z); }
-            else if (n.exact && F.now < n.exactUntil) {   // the shared route runs centre to centre, and its first corner need not be a straight walk from where HE is. After a STUCK end the route is searched from his own spot (a pure function of the state, so still the same run at any thread count)
+            else if ((n.exact && F.now < n.exactUntil) || truth) {   // the shared route runs centre to centre, and its first corner need not be a straight walk from where HE is. After a STUCK end the route is searched from his own spot (a pure function of the state, so still the same run at any thread count)
                 static thread_local EQ::Path xp; EQ::PathQuery q; q.from = pos; q.to = gp; q.fromTri = n.tri; q.toTri = gt; q.who = who;
                 if (EQ::FindPath(pv, q, tl_envScratch, xp)) { n.n = static_cast<std::uint8_t>(std::min<std::size_t>(xp.pts.size(), n.pts.size())); for (std::uint8_t i = 0; i < n.n; ++i) n.pts[i] = xp.pts[i];
                     n.reach = xp.reachable; n.blocked = xp.blocked; n.cut = xp.pts.size() > n.pts.size(); len = xp.length; } }
