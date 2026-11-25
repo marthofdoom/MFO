@@ -61,7 +61,7 @@ namespace Sim {
         float selectorLag = 0.25f;       // the Movement Selector's period
         float startDelay = 0.0f;         // the first order's first carry: 0 with the pick seat, up to 1.0 on the area road (areaLag)
         float repointStall = 0.25f;      // one pick of standing when the point changes in flight
-        float refileStall = 0.25f;       // a NEW point is a release, a request and an area carry until P-C, and so is the first order after a Free (Free ends the claim)
+        float refileStall = 1.1f;        // a NEW point is a release, a request and an area carry until P-C, and so is the first order after a Free (Free ends the claim). Until it is carried the ENGINE moves him (as under startDelay)
         float bridgeLag = 0.0f;          // from the pass window to the order being live: until then the one before stands
         float arriveError = 1.0f;        // he stops inside U(0, arriveError x arriveR), never past leashR (2.7 x 24 = the accepted short stop)
         float arriveZ = 0.0f;            // > 0: a point whose height is more than this off his never arrives, the leg blocks (Harbinger measures in 3D). 0 = off
@@ -77,12 +77,13 @@ namespace Sim {
         float blockedShare = 0.05f;      // the share of orders that end Blocked for no reason the navmesh shows
         float blockBackoff = 1.0f;       // he stands this long after a block (MoveTuning kBlockBackoffMs)
         float blockWindow = 10.0f;       // three blocks in it end the order
-        float blockTold = 1.0f;          // 0: a block never becomes Unreachable and nobody is told (the game until P-B)
+        float blockTold = 0.0f;          // 0: a block never becomes Unreachable and nobody is told (the game until P-B)
         float displaceU = 0.0f;          // what a stagger pushes him (displaceReturn: the walk back follows from it)
-        float displaceDownU = 0.0f;      // ... a fall (the lab's one fall is a paralysis)
+        float displaceDownU = 0.0f;      // ... a fall (the lab's one fall is a paralysis: in a cell without one the row is NOT ARMED, no verdict may be read there)
         float dodgeInLeash = 1.0f;       // 1 = a dodge is cut at the leash (the clamp), 0 = refused
         float fearUncarried = 1.5f;      // seconds of every fear effect his order is not carried: the engine's, with Flee and Hide denied
         float fearActs = 1.0f;           // 0: ... and he begins no attack and no hostile cast in them
+        float notCarriedShare = 0.0f;    // the share of points filed that are never carried: the engine moves him as long as that order stands
     };
     inline Residue g_residue;
     struct ResidueRow { const char* name; float Residue::*f; float lo, hi; const char* by; };
@@ -99,7 +100,7 @@ namespace Sim {
         { "blockWindow", &Residue::blockWindow, 10.0f, 10.0f, "hm1 7.2" },         { "blockTold", &Residue::blockTold, 0.0f, 1.0f, "P-B" },
         { "displaceU", &Residue::displaceU, 0.0f, 120.0f, "stand session" },       { "displaceDownU", &Residue::displaceDownU, 0.0f, 300.0f, "stand session" },
         { "dodgeInLeash", &Residue::dodgeInLeash, 1.0f, 1.0f, "DISASM" },          { "fearUncarried", &Residue::fearUncarried, 0.0f, 3.0f, "strict.flee" },
-        { "fearActs", &Residue::fearActs, 0.0f, 1.0f, "strict.flee" },
+        { "fearActs", &Residue::fearActs, 0.0f, 1.0f, "strict.flee" },              { "notCarriedShare", &Residue::notCarriedShare, 0.0f, 0.1f, "stand session" },
     };
     static_assert(sizeof(Residue) == std::size(kResidue) * sizeof(float), "every residue has its row");
     // --move-caps <strict,kite,disengage>: what the mover serves on the strict road. The default is strict,kite: H-M3's disengage (and the run of a GoTo) is a later delta.
@@ -152,8 +153,9 @@ namespace Sim {
 
     // What one follower's claim is doing (by Fight::ctl index).
     struct StrictHand {   // the strict order in hand (StrictWorld.h). A new place claim keeps it
-        MV::MoveOrder order; std::uint32_t orderGen = 0; StrictPhase phase = StrictPhase::None; float stopAt = 0.0f; double nextPick = 0.0, notBefore = 0.0, retryAt = 0.0, dueBlock = -1.0; std::array<double, 3> blocks{}; std::uint8_t nBlocks = 0;
+        MV::MoveOrder order; std::uint32_t orderGen = 0; StrictPhase phase = StrictPhase::None; float stopAt = 0.0f; double nextPick = 0.0, notBefore = 0.0, carriedAt = 0.0, retryAt = 0.0, dueBlock = -1.0; std::array<double, 3> blocks{}; std::uint8_t nBlocks = 0;
         bool filed = false;                          // an order was filed before: the next one pays refileStall
+        bool notCarried = false;                     // Residue::notCarriedShare: this point never is. carriedAt: when the area carries it, the engine's until then
         MV::MoveOrder next; double nextAt = -1.0;    // Residue::bridgeLag: the order that is not live yet
         double fearSeen = 0.0, fearFree = 0.0;       // the fear effect that was counted, and until when the order is not carried under it
         double actSeen = 0.0, stopUntil = 0.0;       // Residue::shotStop

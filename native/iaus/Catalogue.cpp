@@ -464,7 +464,7 @@ namespace MFO::Iaus {
             }
             // HOLD (S5-A). ALL PLACEHOLDERS (the `spots` stage searches them). Factors: over 1 = hold, under 1 = leave him to the engine
             {
-                static constexpr std::array<std::array<float, 2>, 4> foes{ { { 0.0f, 0.8f }, { 1.0f, 0.85f }, { 2.0f, 1.15f }, { 4.0f, 1.3f } } };
+                static constexpr std::array<std::array<float, 2>, 4> foes{ { { 0.0f, 0.7f }, { 1.0f, 0.75f }, { 2.0f, 1.15f }, { 4.0f, 1.3f } } };   // one left: under 1 / t.orderHoldMomentum, so a blade held by two is let go
                 at(Cons::HoldFoesOn) = Piece(foes);
                 static constexpr std::array<std::array<float, 2>, 4> contact{ { { 0.0f, 0.65f }, { 0.4f, 0.85f }, { 0.8f, 1.0f }, { 3.0f, 1.15f } } };
                 at(Cons::HoldContact) = Piece(contact);

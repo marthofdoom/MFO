@@ -13,6 +13,8 @@
 // A fear EFFECT takes his order away for Residue::fearUncarried: he is the engine's, with Flee and Hide still denied.
 // Free is not here: no order, the engine's own movement model, unchanged. THE CLIENT'S CONTRACT (s5-plan.md 4.1): Free ENDS the claim, so the lab bounds it by no
 // radius and the order after it pays refileStall. M-1's Free path must do exactly that.
+// NOT CARRIED YET (Harbinger CarryOf kNot, the pick is the engine's own): refileStall, startDelay, notCarriedShare. He moves as the engine moves him, Flee and Hide
+// denied as under a fear. repointStall is the other thing: carried, one pick of standing.
 #include "iaus_sim/World.h"
 
 namespace Sim {
@@ -28,7 +30,7 @@ namespace Sim {
         const MoveClaim* q = StrictClaim(F, x); if (!q || q->order.mode == MV::MoveMode::Free || q->phase == StrictPhase::Ended) return false;
         return !MoveBodyTaken(F, x) && !StrictLeashed(F, x, *q);
     }
-    [[nodiscard]] inline bool StrictLive(const Fight& F, const Body& x) { const MoveClaim* q = StrictClaim(F, x); return q && F.now >= q->fearFree && StrictFiled(F, x); }
+    [[nodiscard]] inline bool StrictLive(const Fight& F, const Body& x) { const MoveClaim* q = StrictClaim(F, x); return q && F.now >= q->fearFree && F.now >= q->carriedAt && !q->notCarried && StrictFiled(F, x); }
     // Declared in World.h: the engine's own Flee / Hide are never picked under an order.
     inline bool StrictBars(const Fight& F, const Body& x) { return g_road == Road::Strict && !g_moveFault->fleeWins && StrictFiled(F, x); }
     // Declared in World.h: no attack is started (a Disengage order that travels, a fear that holds his hands).
@@ -43,11 +45,15 @@ namespace Sim {
         const bool samePoint = was && q.order.p.x == o.p.x && q.order.p.y == o.p.y && q.order.p.z == o.p.z;
         q.order = o; q.orderGen = o.gen; q.blocks = {}; q.nBlocks = 0; q.dueBlock = -1.0;
         if (x.ctl == 0) { ++F.t.strictOrders[static_cast<std::size_t>(o.mode)]; }
+        if (!was) q.fearSeen = 0.0;   // a fear that began before the order holds it off (again)
         if (o.mode == MV::MoveMode::Free) { q.phase = StrictPhase::None; return; }
-        if (samePoint && q.phase == StrictPhase::Standing && StrictDist(x, q) <= o.leashR) return;   // only the radii or the mode changed: the stand is not interrupted
+        if (samePoint && q.phase == StrictPhase::Standing && StrictDist(x, q) <= std::max(q.stopAt, o.arriveR)) return;   // only the radii or the mode changed: the stand is not interrupted where he has arrived. Else he travels, as the point was filed anew
         const bool filed = q.filed; q.filed = true;
         q.phase = StrictPhase::Pending; q.stopAt = StrictStop(o) * StrictHash(F, x, 0xA11CEull ^ (static_cast<std::uint64_t>(o.gen) << 20));
-        q.notBefore = F.now + static_cast<double>(samePoint ? 0.0f : !filed ? g_residue.startDelay : std::max(g_residue.refileStall, moving ? g_residue.repointStall : was ? 0.0f : g_residue.startDelay));
+        if (!samePoint) {   // the same point in place: what its claim waits for, it waits for
+            q.carriedAt = F.now + static_cast<double>(!filed ? g_residue.startDelay : was ? g_residue.refileStall : std::max(g_residue.refileStall, g_residue.startDelay));
+            q.notCarried = StrictHash(F, x, 0xCA44ull ^ (static_cast<std::uint64_t>(o.gen) << 20)) < g_residue.notCarriedShare;
+            q.notBefore = std::max(q.carriedAt, F.now + static_cast<double>(moving ? g_residue.repointStall : 0.0f)); }
         x.nav.n = x.nav.i = 0;
         if (StrictDist(x, q) > o.arriveR && StrictHash(F, x, 0xB10CCull ^ (static_cast<std::uint64_t>(o.gen) << 20)) < g_residue.blockedShare) q.dueBlock = F.now + static_cast<double>(g_moveT.blockAfterSec);
     }
@@ -71,10 +77,12 @@ namespace Sim {
             if (q->nextAt >= 0.0 && F.now >= q->nextAt) { q->nextAt = -1.0; const MV::MoveOrder o = q->next; StrictPublish(F, x, *q, o); }
             if (F.now < x.fearUntil && x.fearUntil != q->fearSeen && StrictFiled(F, x)) { q->fearSeen = x.fearUntil; q->fearFree = std::min(x.fearUntil, F.now + static_cast<double>(g_residue.fearUncarried)); }
             const bool live = Fight::Up(x) && StrictLive(F, x);
+            if ((!live || (q->phase != StrictPhase::Travelling && q->phase != StrictPhase::Returning)) && (x.act == Act::Shoot || x.act == Act::Cast)) q->actSeen = x.actEnd;   // begun before he travels: no shotStop
             if (live && x.ctl == 0) { const float d = StrictDist(x, *q); F.t.strictSec += TM::dt; if (d > q->order.leashR && (q->phase == StrictPhase::Standing || q->phase == StrictPhase::Returning)) F.t.strictOutSec += TM::dt; if (q->phase == StrictPhase::Standing || q->phase == StrictPhase::Returning) F.t.strictStandSec += TM::dt; }
             if (F.now < q->nextPick) continue;
             q->nextPick = F.now + static_cast<double>(g_residue.selectorLag) * (q->nextPick <= 0.0 ? 0.25 + 0.75 * static_cast<double>(StrictHash(F, x, 0x91C4ull)) : 1.0);   // his own offset on the grid
-            if (!live) { if (q->phase == StrictPhase::Returning || q->phase == StrictPhase::Standing) q->phase = StrictPhase::Pending; continue; }   // Yielded: back as Travelling or Standing by distance
+            if (!live) { if (q->phase == StrictPhase::Returning && F.now < q->fearFree) continue;   // a walk back a fear interrupts goes on as one
+                if (q->phase == StrictPhase::Returning || q->phase == StrictPhase::Standing) q->phase = StrictPhase::Pending; continue; }   // Yielded: back as Travelling or Standing by distance
             const float d = StrictDist(x, *q);
             switch (q->phase) {
             case StrictPhase::Pending:   if (F.now >= q->notBefore) q->phase = d > std::max(q->stopAt, q->order.arriveR) || StrictHighOff(x, *q) ? StrictPhase::Travelling : StrictPhase::Standing; break;

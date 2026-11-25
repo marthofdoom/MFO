@@ -1881,7 +1881,12 @@ Its score is Stay's score, times the kind weight `spot.hold`, times ten factors 
 | `hold_narrow` | doorways on the walk to the nearest foe, that the pass searched for its target anyway | Off when the nearest foe is no target of his three |
 | `hold_ally_front` | an ally with a foe on him, between, inside `t.spotPeelU` of the line | |
 | `hold_player` | the player's place in `t.orderLeadSec` over the leash | his walk is `Member::anchorVel`, unread = where he is |
-| `hold_kept` | `t.orderHoldMomentum` | the hysteresis |
+| `hold_kept` | `t.orderHoldMomentum` | the hysteresis. Off while he has a committed place: there the momentum is the place's own |
+
+- The hysteresis multiplies: a kept hold has `hold_kept`, and a new place must beat the bar (his hold's score) by `1 + t.spotPreempt` on top.
+- `hold_kept`'s exponent and `t.orderHoldMomentum` are ONE degree of freedom (momentum to the power of the weight). A search moves one of the two, the other stays at its value.
+- Not his place but where he IS: sight, exposure, cover, the stay key and the plan position are read at his body, while the point of a kept hold is up to twice its leash off (128). Only `hold_player` reads the point. The pin row needs exactly that. S5-C must evaluate an option at the order's point.
+- A blade held by two, with one of them gone, is let go: one foe on him is worth 0.75, under 1 / momentum. Reasons of their own (a doorway, an ally in front) can still hold him.
 
 New inputs (dump format 6, fields appended): `Member::anchorVel / anchorMoves`, `Foe::reach / speed / ranged`. Golden v6: of the 36 old cases every line is the old line with fields appended, but the score of the one held follower in `strict_blades_0..2` (a hold has a factor now). The scene states its foes' reach, or nothing about them would be known. Six new cases.
 
@@ -1893,25 +1898,28 @@ With weights that read foes on him, contact and sight alone, the three old scene
 
 ### 22.3 The residue table (S5-B)
 
-`Move.h Residue` + `kResidue`: value, low, high, source. Both the default and the arms are s5-plan.md 4.1's. New: `strafeSpeed` 150, `walkBackSpeed` 150, `refileStall` 0.25, `bridgeLag` 0, `arriveZ` 0 (off), `shotStop` 0, `blockTold` 1, `displaceDownU` 0, `fearUncarried` 1.5, `fearActs` 1. A static_assert holds one row a member. The executor's own numbers (no field row) are `MoveTuning`: minimum stop, aim cone (45 degrees), drift speed and period, lunge standoff, the two block times, the sneak gait.
+`Move.h Residue` + `kResidue`: value, low, high, source. Both the default and the arms are s5-plan.md 4.1's. New: `strafeSpeed` 150, `walkBackSpeed` 150, `refileStall` 1.1, `bridgeLag` 0, `arriveZ` 0 (off), `shotStop` 0, `blockTold` 0, `displaceDownU` 0, `fearUncarried` 1.5, `fearActs` 1, `notCarriedShare` 0 (arms 0, 0.1). A static_assert holds one row a member. The executor's own numbers (no field row) are `MoveTuning`: minimum stop, aim cone (45 degrees), drift speed and period, lunge standoff, the two block times, the sneak gait.
 
-Run `refileStall=1.1` and `blockTold=0` until P-C and P-B land (s5-plan.md 12 trap 8): the defaults are the table's, which are the kind ends of these two.
+`refileStall` and `blockTold` run at their HARSH ends by default (s5-plan.md 12 trap 8, over the table of 4.1). P-C and P-B turn them off as values, no new binary.
 
 - Toward the foe he faces (45 degrees) his run, across it `strafeSpeed`, away `kiteSpeed`. A walk back has `walkBackSpeed` whatever its direction.
-- A new point on a live order, and the first order after a Free or an ended one, waits `refileStall` (and `repointStall` in flight, the larger). Free ends the claim: M-1's client must do that.
+- A new point on a live order, and the first order after a Free or an ended one, waits `refileStall`, a first order `startDelay`. Until then it is NOT CARRIED: the engine moves him as under no order, Flee and Hide denied (Harbinger `CarryOf` kNot, the pick is the engine's own). `repointStall` is the other thing: carried, and he stands. Free ends the claim: M-1's client must do that. The same point filed again (radii, mode) keeps what its claim waits for, and travels when he stands outside the arrival radius.
+- `notCarriedShare`: that share of the points filed is never carried for as long as it stands (rolled per order, by its gen).
+- **For S5-C:** with `blockTold` 0 an order that blocks never ends: he tries each 2 s and walks half the time. An order option must be bounded by TIME (or by a refusal), never by waiting for an end event.
 - `bridgeLag`: the order before stands until then. `arriveError` is cut at `leashR`.
 - `arriveZ`: at the point in 2D and off in height is a block, also when an order starts there.
-- `blockTold` 0: no Unreachable, no mark, no trust event, he tries for ever.
-- A fear EFFECT (`Body::fearUntil`, not the low-health flight) takes the order away once for `fearUncarried`. Flee and Hide stay denied. `fearActs` 0: no blow, no shot, no hostile cast in it. MODEL, not decoded: once an effect, not again and again while it lasts.
-- `displaceDownU` is carried by the lab's one fall, a paralysis.
+- `blockTold` 0 (the default): no Unreachable, no mark, no trust event, he tries for ever.
+- A fear EFFECT (`Body::fearUntil`, not the low-health flight) takes the order away once for `fearUncarried`. Flee and Hide stay denied. `fearActs` 0: no blow, no shot, no hostile cast in it. MODEL, not decoded: once an effect, not again and again while it lasts. A fear that began before the order (under Free, or an order that ended) holds the new order off again. A low-health flight begun under Free is not modelled so. A walk back it interrupts goes on as a walk back.
+- `displaceDownU` is carried by the lab's one fall, a paralysis. In a class and foe cell without one the row is NOT ARMED: no SENSITIVE / INSENSITIVE verdict is read there.
+- `shotStop`: not for a shot or a cast begun before he travels.
 
-Not modelled: package areas, the Exit Water pick, flight, a mount, orders the game never carries at all (section 10 asks for that count; a `notCarriedShare` row only if it is above zero).
+Not modelled: package areas, the Exit Water pick, flight, a mount.
 
 Forced arms: an arm whose mode `--move-caps` does not serve is not played and has no ACCEPT line. An order that ended gets a new gen when its rule fires again. The highest mean is out of the verdict.
 
 ### 22.4 Rows
 
-Fifteen new `strict-*` spot rows: one a residue row with the row ZEROED as its off arm (it must fail), and the F4 rows `strict-goto-aim`, `strict-leashed`, `strict-backoff`. A strict row states its own residue and caps, so `--residue` does not move the tests.
+Twenty new `strict-*` spot rows (five of the review round: `strict-refile-own`, `strict-start`, `strict-repoint`, `strict-not-carried`, `strict-fear-before`): one a residue row with the row ZEROED as its off arm (it must fail), and the F4 rows `strict-goto-aim`, `strict-leashed`, `strict-backoff`. A strict row states its own residue and caps, so `--residue` does not move the tests.
 
 ### 22.5 Cost
 

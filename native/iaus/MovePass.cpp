@@ -149,7 +149,7 @@ namespace MFO::Iaus::MovePass {
         // ... and the hold's half. The shared facts are those of staying: with no hold consideration read, a hold IS a stay. What is not read stays not applicable.
         void FillHold(SpotFacts& f, const PartyPicture& pic, const Member& m, const RankedAction& a, const Tuning& t) {
             f.hold = true;
-            Env::Vec3 at; std::int32_t tri = -1; f.holdKept = HoldPoint(m, at, tri);
+            Env::Vec3 at; std::int32_t tri = -1; f.holdKept = HoldPoint(m, at, tri) && !m.commit.on;   // on a committed place the momentum is the place's own (the bar), not the hold's
             const Foe* near = nullptr; float nearD = 0.0f;
             int on = 0, known = 0, aimed = 0, ranged = 0, rangedKnown = 0, hid = 0, seenKnown = 0; float contact = -1.0f, pace = -1.0f;
             for (const Foe& e : pic.foes) {

@@ -4076,13 +4076,17 @@ F5 SEV-5 "no heal candidate above" counts a heal in `actions` even when Decide v
 F6 SEV-5 parallel vectors moveOnly/moveOnlySight invite F2(5): one struct.
 Off sim seed 991 fights 2 threads 8 beta1 + nightblade,healer,thief,wizard, v3 v4: byte identical (17408/20301/4682/5445 lines). fuzz.cpp kept: _localbuild/hmrev/fuzz.cpp
 
-### `feat/s5-ab` (author notes, Opus 5.5, 2026-11-25; no review yet)
+### `feat/s5-ab` (author notes, Opus 5.5, 2026-11-25; review on 3ebcca6a: MERGE, nothing above SEV-3)
 - CLOSED of SIM-STRICT below: T1, T3's rows, F1, F2, F3, F4, F5, F6, F7, F9. F10 stays (a comment at the row) until MFO's APMF_API.h reaches v48. F8 and T2 are S5-C and S5-D.
-- OPEN (plan against plan, coordinator): s5-plan 4.1 puts `refileStall` 0.25 and `blockTold` 1 as the placeholders, its trap 8 says they run harsh until P-C and P-B. Coded as 4.1, a run must pass `--residue refileStall=1.1`, `--residue blockTold=0`.
-- OPEN (S5-E / round): `notCarriedShare` (s5-plan 10) has no row. If the Deck log shows orders that are never carried, it must be coded before the freeze.
+- CLOSED in the fix round: F1 to F4, F8, F10, `notCarriedShare`, F7(a) (one foe left = 0.75). F6 and F7(d) are documented (iaus-sim-v4.md 22.1).
 - OPEN (field, strict.flee): a fear effect takes the order away once (`fearUncarried`); whether the game repeats it while the effect lasts is not known.
 - OPEN (G-filler): the game must fill `Foe::reach / speed / ranged` and `Member::anchorVel`. Unread is not applicable, never favourable.
 - OPEN (SEV-5): `hold_narrow` is known only when his nearest foe is a target of his three actions (no path is searched for it).
+- Review on 3ebcca6a (Opus 5.5), open, VERBATIM:
+  - F5 SEV-4 a self or targetless top action (drink, self buff, summon) is no Hold, so a held member goes Free and pays a re-file. Allowing it while held: evoker Free orders 2.12 -> 1.85 a fight, stands 3.72 -> 3.44, U flat. Plan 3.1 asks for this gate, so not a defect of the branch; put it to the planner for S5-C (the oracle must be able to hold while drinking).
+  - F7 SEV-4 shapes. (a) blade: foes_on 1 = 0.85 x 1.25 kept = 1.06: once held by two, one foe left keeps him held, only zero frees him: the "fights freely with one foe" ruling is true only for the first decision. (b) contact is near flat: exponent 0 / 1 / 3 / 8 moves U under 0.2 and claims under 4 points; foes_on exponent 3 moves knight U +0.9. (c) an exponent cannot change a factor's direction and has no upper bound (pow overflow -> 0, safe, never NaN); direction needs the per-class curve (px/py), which the sim's c.<i>.a|b does not reach for Piece rows. (d) hold_kept's exponent and t.orderHoldMomentum are one degree of freedom: search one. Gradient exists: spot.hold 0.5/0.85/1.2/3 moves U monotonically past 1 (archer -2.3, knight -4.3, warrior -3.7 at 3). Hold neither dead nor absolute at shipped values, but at them it costs (knight, warrior, about 1 U; F1 alone does not restore it). All placeholders. [(a) and (d) closed above, (b) and (c) open]
+  - F9 SEV-5 C4457 MovePass.cpp(117): `Light::Read a` hides parameter a. Pre-existing (ed7ec4a5, S4), harmless (the action is used again only after the scope closes). Rename on the next touch.
+  - S5-C (from F3): an order option must be bounded by time or a refusal, `blockTold` 0 never ends one.
 
 ### SIM-STRICT: review findings on d252f39d (Opus, nothing above SEV-3). F1 to F3 and T1 to T3 are in S5 (plan: Fable), the rest is this entry (what `feat/s5-ab` closed is in its own block above)
 
