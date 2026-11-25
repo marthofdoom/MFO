@@ -27,8 +27,19 @@ namespace MFO::Iaus {
         std::uint32_t maxAgeTicks = 3;    // older than this = NotReady = the gate is closed (never read as "nobody there")
         // PLACEHOLDER, no reader until package M6 (runes): a rune stands for its life, not the cast moment, so out of combat in a settlement it scores 0.
         bool          runeOutOfCombatInSettlement = false;
+        // PLACEHOLDER (M3 review F3). An actor farther than this from EVERY asking follower is not listed at all, so IsHostileToActor is not called for it
+        // (AreaActors.cpp BuildPass). The widest placed area is a hazard or a Fire Storm (about 2200 units) round a foe inside the chase cap; Harbinger's
+        // cast guard keeps nothing past 4096 for the same reason.
+        float         cullRange = 6000.0f;
     };
     inline constexpr AreaGuardTuning kAreaGuard{};
+
+    // Does this listed actor count as a bystander for this snapshot? A party summon and the player's horse only when the MCM option says so
+    // (Config::g_areaSummonsBlock, default OFF: Harbinger's ruling "Bystanders only", marth 2026-11-02). The ONE place that option is enforced.
+    [[nodiscard]] inline bool CountsAsBystander(const Snapshot& a_s, const AreaActor& a_b) {
+        if (a_b.kind == AreaKind::PartySummon || a_b.kind == AreaKind::PlayerHorse) return a_s.areaPartyOwnedBlock;
+        return true;
+    }
 
     struct AreaHits {
         int  foes = 0;            // the decision's foes inside the radius
@@ -61,6 +72,7 @@ namespace MFO::Iaus {
             h.blind = a_s.areaPicture == AreaPicture::NotReady;
             if (a_s.areaPicture != AreaPicture::Ready) return h;   // NotApplicable: a host with no bystanders (the simulator, the harness)
             for (const AreaActor& b : a_s.areaActors) {
+                if (!CountsAsBystander(a_s, b)) continue;
                 const float body = (std::max)(kFireBodyPad, Pos(b.radius));
                 const float d = AreaDist(b.x, b.y, b.z, a_cx, a_cy, a_cz);
                 if (d > a_radius + body + kAreaGuard.safetyMargin) continue;   // a NaN never passes this test, so it counts as a hit
@@ -73,12 +85,46 @@ namespace MFO::Iaus {
             return AreaCensus(a_s, a_foes, a_centre.x, a_centre.y, a_centre.z, a_radius, a_allyPad);
         }
 
+        // THE LINE (M3, a wall's stream): bystanders along the segment from a_from to a_to, where they project BETWEEN the two ends (one behind the caster or
+        // past the target is the area census's business, not the stream's), within the corridor kFireLinePad (or his body when larger) + the safety margin.
+        // The same bystander rules as the area census: an unreadable position is a hit, an unreadable picture is blind. Allies on the line are
+        // Estimate::InLineOfFire's, not counted here.
+        [[nodiscard]] inline AreaHits AreaCensusLine(const Snapshot& a_s, const Combatant& a_from, const Combatant& a_to) {
+            AreaHits h;
+            h.blind = a_s.areaPicture == AreaPicture::NotReady;
+            if (a_s.areaPicture != AreaPicture::Ready) return h;
+            const float abx = a_to.x - a_from.x, aby = a_to.y - a_from.y, abz = a_to.z - a_from.z;
+            const float len2 = abx * abx + aby * aby + abz * abz;
+            for (const AreaActor& b : a_s.areaActors) {
+                if (!CountsAsBystander(a_s, b)) continue;
+                float d = std::numeric_limits<float>::quiet_NaN();   // NaN = unreadable = a hit
+                bool between = true;
+                if (std::isfinite(len2)) {
+                    const float apx = b.x - a_from.x, apy = b.y - a_from.y, apz = b.z - a_from.z;
+                    if (len2 <= 1.0f) d = std::sqrt(apx * apx + apy * apy + apz * apz);
+                    else {
+                        const float t = (apx * abx + apy * aby + apz * abz) / len2;
+                        if (std::isfinite(t) && !(t >= 0.0f && t <= 1.0f)) between = false;
+                        const float dx = apx - abx * t, dy = apy - aby * t, dz = apz - abz * t;
+                        d = std::sqrt(dx * dx + dy * dy + dz * dz);
+                    }
+                }
+                if (!between) continue;
+                const float reach = (std::max)(kFireLinePad, Pos(b.radius)) + kAreaGuard.safetyMargin;
+                if (d > reach) continue;   // a NaN never passes this test, so it counts as a hit
+                if (h.bystanders++ == 0 || d < h.firstDist) { h.firstBystander = b.id; h.firstKind = b.kind; h.firstDist = d; }
+            }
+            return h;
+        }
+
         [[nodiscard]] inline const char* AreaKindName(AreaKind a_k) {
             switch (a_k) {
             case AreaKind::Guard:     return "guard";
             case AreaKind::Teammate:  return "teammate";
             case AreaKind::Commanded: return "summon";
             case AreaKind::Mount:     return "mount";
+            case AreaKind::PartySummon: return "party summon";
+            case AreaKind::PlayerHorse: return "player's horse";
             case AreaKind::Person:    break;
             }
             return "bystander";

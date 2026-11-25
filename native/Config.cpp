@@ -233,6 +233,7 @@ namespace MFO::Config {
             else if (a_key == "bInheritPerkCensus") setB(g_inheritPerkCensus);   // [inherit-census] hidden-perk census, log only, INI-only, default ON
             else if (a_key == "bHeartbeat")         setB(g_heartbeat);        // [hb] 5 s liveness line, INI-only, default ON
             else if (a_key == "bIausAvailable")     setB(g_iausAvailable);    // global IAUS gate, MCM, default ON (the per-follower bit stays default OFF)
+            else if (a_key == "bAreaSummonsBlock")  setB(g_areaSummonsBlock);   // party summons / the player's horse count as area bystanders, MCM, default OFF
             else if (a_key == "bIausLoot")          setB(g_iausLoot);         // IAUS looting for Sentient AI followers, INI-only, default ON
             else if (a_key == "bIausThiefNeedSteal") setB(g_iausThiefNeedSteal);   // thief-class need-steal inside IAUS looting, MCM, default ON
             else if (a_key == "bIausExplain")       setB(g_iausExplain);      // [iaus-why] per-candidate breakdown, INI-only, default OFF
@@ -482,6 +483,7 @@ namespace MFO::Config {
             g_spellShapeCensus   = true;    // [shape-census] load-time log-only census -- ON
             g_inheritPerkCensus  = true;    // [inherit-census] hidden-perk census -- ON (log only, changes nothing)
             g_iausAvailable      = true;    // global IAUS gate -- ON (the per-follower switch is what defaults OFF)
+            g_areaSummonsBlock   = false;   // party summons and the player's horse are not area bystanders -- OFF (marth 2026-11-24)
             g_iausLoot           = true;    // IAUS looting (Sentient AI followers) -- ON
             g_iausThiefNeedSteal = true;    // a Thief-class follower steals a NEEDED item inside IAUS looting -- ON
             g_iausExplain        = false;   // [iaus-why] breakdown lines -- OFF everywhere by default
@@ -640,7 +642,7 @@ namespace MFO::Config {
             { "fRapportRate", "2.000000" },   { "fRapportKill", "1.000000" },
             { "fRapportBossMult", "5.000000" }, { "fRapportDragonMult", "10.000000" },
             { "iBossLevelDelta", "5" },        { "fSharedRadius", "3000.000000" },
-            { "bEquipToCast", "1" },           { "bIausAvailable", "1" },
+            { "bEquipToCast", "1" },           { "bIausAvailable", "1" },   { "bAreaSummonsBlock", "0" },
             { "bCasterHook", "1" },            { "bCommandTarget", "1" },
             { "iCastControl", "2" },
             { "bWarnNoApmf", "1" },

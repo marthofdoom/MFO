@@ -910,6 +910,8 @@ namespace MFO::Actuation {
         bool         snapToNavMesh = false;  // any effect kSnapToNavMesh
         bool         impactHazard = false;   // any effect: impactDataSet (+0x90) has an entry whose BGSImpactData::hazard (+0x80) is set (log only since MFO-B865)
         bool         impactHazardDrops = false;   // ...and that hazard (BGSHazardData flags +0x14) has kDropToGround (16); the Wall shape needs it (Prune::IsWallShape)
+        float        impactHazardUnits = 0.0f;   // M3: the footprint radius (game units) of the largest ground-dropping impact hazard (BGSHazardData radius; a
+                                                 // kInheritRadius hazard takes the effect's EFIT area, 1 ft = 64/3 units, Prune::AreaUnits). 0 = none / unreadable
         bool         spawnHazard  = false;   // any effect archetype kSpawnHazard (40)
         bool         hostileImpact = false;  // an impact hazard on an effect whose OWN kHostile flag is set (Prune::HostileAreaEffect)
         bool         hazardHostile = false;  // ...and the spawned hazard's spell has a hostile effect (read off associatedForm)

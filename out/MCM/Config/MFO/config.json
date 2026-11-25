@@ -736,6 +736,16 @@
             "sourceType": "ModSettingBool",
             "defaultValue": 1
           }
+        },
+        {
+          "id": "bAreaSummonsBlock:General",
+          "text": "Summons and horses block area spells",
+          "type": "toggle",
+          "help": "OFF (default): a summon your party commands and your horse do not count when a Sentient AI follower weighs an area spell (Fire Storm, a wall, a fireball), so he may cast with them in the area. ON: they count like any bystander and the area spell waits until they are clear. Townsfolk, guards and other non-hostile people always close the area, whatever this says.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 0
+          }
         }
       ]
     },

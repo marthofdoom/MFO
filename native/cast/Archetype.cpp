@@ -212,15 +212,22 @@ namespace MFO::Actuation {
         // The effect's impactDataSet (EffectSetting +0x90) holds an impact-data entry whose BGSImpactData::hazard (+0x80) is set;
         // a_drops is set when such a hazard also has BGSHazardData flag kDropToGround (data +0x14, bit 16). Fork: EffectSetting.h:97,
         // BGSImpactDataSet.h:36 (impactMap, +0x28), BGSImpactData.h:70, BGSHazard.h:11-36. Pure reads of loaded records.
-        bool HasImpactHazard(const RE::EffectSetting* b, bool& a_drops) {
+        bool HasImpactHazard(const RE::EffectSetting* b, bool& a_drops, float& a_dropRadius, std::uint32_t a_efitArea) {
             a_drops = false;
+            a_dropRadius = 0.0f;
             auto* set = b->data.impactDataSet;
             if (!set) return false;
             bool any = false;
             for (const auto& kv : set->impactMap) {
                 if (!kv.second || !kv.second->hazard) continue;
                 any = true;
-                if (kv.second->hazard->data.flags.all(RE::BGSHazardData::BGSHazardFlags::kDropToGround)) a_drops = true;
+                if (kv.second->hazard->data.flags.all(RE::BGSHazardData::BGSHazardFlags::kDropToGround)) {
+                    a_drops = true;
+                    const auto& hd = kv.second->hazard->data;
+                    const float r = (hd.flags.all(RE::BGSHazardData::BGSHazardFlags::kInheritRadius) && a_efitArea > 0)
+                                        ? Iaus::Prune::AreaUnits(static_cast<float>(a_efitArea)) : hd.radius;
+                    if (std::isfinite(r) && r > a_dropRadius) a_dropRadius = r;
+                }
             }
             return any;
         }
@@ -306,8 +313,10 @@ namespace MFO::Actuation {
                 archs.push_back(a);
                 effIdx.push_back(effNo);
                 bool drops = false;
-                if (HasImpactHazard(b, drops)) { o.impactHazard = true; o.hostileImpact |= b->data.flags.all(RE::EffectSetting::EffectSettingData::Flag::kHostile); }
+                float dropRadius = 0.0f;
+                if (HasImpactHazard(b, drops, dropRadius, eff->effectItem.area)) { o.impactHazard = true; o.hostileImpact |= b->data.flags.all(RE::EffectSetting::EffectSettingData::Flag::kHostile); }
                 if (drops) o.impactHazardDrops = true;
+                o.impactHazardUnits = (std::max)(o.impactHazardUnits, dropRadius);
                 if (a == Arch::kSpawnHazard) {
                     o.spawnHazard = true;
                     if (HazardSpellHostile(b)) o.hazardHostile = true;

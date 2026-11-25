@@ -356,6 +356,10 @@ namespace MFO::Iaus::SpellBook {
             e.meleeBuff = arch.row == Actuation::EngineRow::Armor || arch.row == Actuation::EngineRow::Cloak ||
                           arch.shape == Actuation::SpellShape::Cloak;
             e.areaUnits = blast.units;
+            // M3 (placed-spells-plan 3.2): a WALL's area is the footprint of the hazard it drops where the stream lands (the larger of that and any blast), so the
+            // ONE area guard and the foes-in-area count read it like any other area. Its EFIT area is 0 and its hazard is no explosion, so before this a wall had none.
+            e.wall = arch.shape == Actuation::SpellShape::Wall;
+            if (e.wall && std::isfinite(arch.impactHazardUnits) && arch.impactHazardUnits > e.areaUnits) e.areaUnits = arch.impactHazardUnits;
             e.hostileArea = blast.hostileArea || arch.hostileImpact;   // M2 (iaus/AreaCensus.h): read for a Control area
             if (arch.area > 0 || blast.explosionUnits > 0.0f)
                 a_probes.emplace_back(e.form, std::format("area probe: {} ({:08X}): EFIT area {} ft = {:.0f} units, explosion radius {:.0f} units ({}), "
@@ -364,6 +368,9 @@ namespace MFO::Iaus::SpellBook {
                                                           blast.explosionSrc, blast.payloadUnits, e.areaUnits,
                                                           (e.areaUnits <= 0.0f && blast.explosionUnits > 0.0f)
                                                               ? " (cosmetic explosion: no area, MFO-B661)" : ""));
+            if (e.wall)
+                a_probes.emplace_back(e.form, std::format("wall probe: {} ({:08X}): hazard footprint {:.0f} units -> area {:.0f} units (guarded round the foe and along the stream)",
+                                                          e.name, e.form, arch.impactHazardUnits, e.areaUnits));
             // The aimed reach (spell range, else projectile range; Self / Touch = Heal Other's reach, which is
             // what a heal or buff placed on an ally needs). "No cap of its own" is a huge number there: 0 here.
             const float reach = Actuation::HealReach(a_sp);
