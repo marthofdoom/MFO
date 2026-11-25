@@ -3971,9 +3971,9 @@ HEAL FINDING (8) **CLOSED on `feat/heal-move` (iaus-sim-v4.md 20)**: real in gam
 ### `feat/sim-strict` (author notes, Opus 5.5, 2026-11-24; no review yet)
 - CLOSED here: HEAL-MOVE F1 (the export keeps Decide's order), F2 (five rows, each mutation fails one), F3 (doc), F5 (a patient whose in-reach heal is on its hard cooldown). F4 and F6 stay open (SEV-5).
 - OPEN (S5): the acceptance of the mode set is a tournament of constant rules under IAUS's own actions. The oracle's subject still holds no claim (S2 F3).
-- OPEN (S5, SEV-4): `StayMode`'s three lines (`t.orderHoldFoes`, `t.orderNearU`, `t.orderStandMinU`) are rules, not scores: Free against a hold on his own place is not weighed by the considerations. If the oracle over spots shows gaps there it wants a spot kind of its own.
-- OPEN (SEV-4): Free is the only order without a leash here. H-M1's Free keeps the claim's R as a bound (hm1 7.2): the MFO client has to end the claim for a Free, or the lab must bound it.
-- OPEN (SEV-5): `blockedShare` blocks an order at 0.5 s and again each 2 s until it ends. The field may show single blocks that pass.
+- CLOSED on `feat/s5-ab` (Hold is a scored kind, iaus-sim-v4.md 22.1): `StayMode`'s three lines (`t.orderHoldFoes`, `t.orderNearU`, `t.orderStandMinU`) are rules, not scores: Free against a hold on his own place is not weighed by the considerations. If the oracle over spots shows gaps there it wants a spot kind of its own.
+- CONTRACT (`feat/s5-ab`: the lab ends the claim on Free and the next order pays `refileStall`; M-1's client still owes it): Free is the only order without a leash here. H-M1's Free keeps the claim's R as a bound (hm1 7.2): the MFO client has to end the claim for a Free, or the lab must bound it.
+- OPEN (SEV-5, named since `feat/s5-ab`: `MoveTuning::blockAfterSec` / `blockAgainSec`): `blockedShare` blocks an order at 0.5 s and again each 2 s until it ends. The field may show single blocks that pass.
 - OPEN (SEV-5): the lab's summoner (what he calls joins as a late foe) and flyer (the dragon) are models. 1 foe kind x count cell is not applicable (a boss with adds is no single foe).
 - OPEN (G2): hide run, back-off, retreat, regroup still take the body from an order, in the lab as in the game today.
 
@@ -4076,7 +4076,15 @@ F5 SEV-5 "no heal candidate above" counts a heal in `actions` even when Decide v
 F6 SEV-5 parallel vectors moveOnly/moveOnlySight invite F2(5): one struct.
 Off sim seed 991 fights 2 threads 8 beta1 + nightblade,healer,thief,wizard, v3 v4: byte identical (17408/20301/4682/5445 lines). fuzz.cpp kept: _localbuild/hmrev/fuzz.cpp
 
-### SIM-STRICT: review findings on d252f39d (Opus, nothing above SEV-3). F1 to F3 and T1 to T3 are in S5 (plan: Fable), the rest is this entry
+### `feat/s5-ab` (author notes, Opus 5.5, 2026-11-25; no review yet)
+- CLOSED of SIM-STRICT below: T1, T3's rows, F1, F2, F3, F4, F5, F6, F7, F9. F10 stays (a comment at the row) until MFO's APMF_API.h reaches v48. F8 and T2 are S5-C and S5-D.
+- OPEN (plan against plan, coordinator): s5-plan 4.1 puts `refileStall` 0.25 and `blockTold` 1 as the placeholders, its trap 8 says they run harsh until P-C and P-B. Coded as 4.1, a run must pass `--residue refileStall=1.1`, `--residue blockTold=0`.
+- OPEN (S5-E / round): `notCarriedShare` (s5-plan 10) has no row. If the Deck log shows orders that are never carried, it must be coded before the freeze.
+- OPEN (field, strict.flee): a fear effect takes the order away once (`fearUncarried`); whether the game repeats it while the effect lasts is not known.
+- OPEN (G-filler): the game must fill `Foe::reach / speed / ranged` and `Member::anchorVel`. Unread is not applicable, never favourable.
+- OPEN (SEV-5): `hold_narrow` is known only when his nearest foe is a target of his three actions (no path is searched for it).
+
+### SIM-STRICT: review findings on d252f39d (Opus, nothing above SEV-3). F1 to F3 and T1 to T3 are in S5 (plan: Fable), the rest is this entry (what `feat/s5-ab` closed is in its own block above)
 
 
 ## Proof run by the reviewer

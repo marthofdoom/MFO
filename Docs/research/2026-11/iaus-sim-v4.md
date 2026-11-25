@@ -1740,7 +1740,7 @@ Road off and the point and pinned roads are main's. The native half has no calle
 
 ### 21.1 Orders
 
-`iaus/MoveOrder.h`. The pass still says who stands where. `MovePass::Orders` turns each assignment into mode, point, `leashR`, `arriveR` (Harbinger's own mode numbers). `kOrderRows`: retreat exit = Disengage, kite = Kite, regroup and flank = GoTo, every other place = Stand, a place of several kinds the first row. "Stay" is Free, or a Stand on his own place by three rules (`StayMode`): a blade with `t.orderHoldFoes` (2) foes on him that he reaches, a shooter with sight and reach and no foe on him inside `t.orderStandMinU` (300), a cast on an ally that works from here. A hold keeps its point until he is carried past twice its leash. Same order, same `gen`.
+`iaus/MoveOrder.h`. The pass still says who stands where. `MovePass::Orders` turns each assignment into mode, point, `leashR`, `arriveR` (Harbinger's own mode numbers). `kOrderRows`: retreat exit = Disengage, kite = Kite, regroup and flank = GoTo, every other place = Stand, a place of several kinds the first row. "Stay" is Free. A hold on his own place is a kind of its own (`SpotKind::Hold`, Stand), scored like every other place (22.1; until S5-A it was the three rules of `StayMode`, the first of which counted every foe inside 400 units, not only those that reach him: review F7). A hold keeps its point until he is carried past twice its leash. Same order, same `gen`.
 
 Caps: `RoadCaps::strict` offers the pin kinds whatever `t.spotPinKinds` says (cover, chokepoint and flank stay on) and refuses the kite kind without `kite` and the retreat kind without `disengage`. Golden format 5: the caps, the order that stood, the order made. All 30 old cases: every line is the old line with fields appended. Six new cases.
 
@@ -1748,17 +1748,11 @@ Caps: `RoadCaps::strict` offers the pin kinds whatever `t.spotPinKinds` says (co
 
 A pick every 0.25 s at each body's own phase. Travelling, Standing, Returning, Blocked (1 s), Ended after three blocks in 10 s. Standing he makes no movement of his own. He fights on the way, except in a Disengage (no attack begun). Backing away from the foe he faces he has `kiteSpeed`. With the disengage cap (H-M3) GoTo and Disengage have his run. A started blow carries him `lungeOut` toward its target in `lungeShare` of cases, whatever the leash says, and the picks walk him back. A dodge is cut at the leash. The engine's flee is never picked (a fear spell too). Retreat, hide run, back-off and regroup keep the body as today until G2's one owner. The ch.23 leash wins over a point. Free is the engine's model, unchanged.
 
-`--move-caps strict,kite` is H-M1 alone. The default adds H-M3's disengage.
+`--move-caps` defaults to `strict,kite` (S5-B). H-M3's disengage, and with it the run of a GoTo, is asked for by name.
 
 ### 21.3 The residue table (`Move.h Residue`, `--residue <row>=<v>`)
 
-| Row | Value | Where from |
-|---|---|---|
-| selectorLag, repointStall | 0.25 s | DISASM |
-| blockBackoff, blockWindow | 1 s, 10 s | hm1 7.2 |
-| dodgeInLeash | 1 | DISASM (the clamp) |
-| kiteSpeed | 150 u/s | RUN 60 to 193, placeholder |
-| startDelay 0, arriveError 1 (x arriveR), standDrift 0, lungeOut 60, lungeOutPower 110, lungeShare 0.5, attackInPlaceRate 0.6 (not used: lunges are the default), blockedShare 0.05, displaceU 0 | | PLACEHOLDERS |
+The rows as they stand since S5-B are in 22.3 and in `Move.h` `kResidue` (value, low and high for the sensitivity arms, field source).
 
 Anything but a default is in the world tag, so a compare across tables is refused.
 
@@ -1866,3 +1860,59 @@ User CPU, 1 thread, evoker, knight, archer, mage, 480 fights: fixtures off 1.99 
 3. Path is in the vocabulary and nothing emits it: the pass files single points and the mover finds its way.
 4. The mode set is not in `Scenarios.h`: a new scenario there moves the v4 baseline. The `spots` stage reads `ModeSpec`.
 5. HEAL-MOVE F1, F2, F3 and F5 are in this branch. F5 moved the "he reaches that patient" test from `Generate` to `TopRanked`, where the cooldowns are known.
+
+## 22. Hold as a scored place, the executor's honesty (s5-plan.md packages S5-A and S5-B, branch `feat/s5-ab`, 2026-11-25)
+
+Road off, and the point and pinned roads, are main's byte for byte. The native half has no caller in the DLL. Every curve, weight and residue below is a PLACEHOLDER.
+
+### 22.1 Hold (S5-A)
+
+`SpotKind::Hold` (appended) is Stay with an order on it. It has no generator: Phase 3 makes one row beside Stay's per member and ranked action when its gate `HoldOffered` holds (the strict cap, his class mask, an action on a target that is not himself, no movement, not move-only, in reach from where he stands, with the leash as play while he holds). Its point is his own, or the standing order's while he is within twice that order's leash, at that order's radii (`HoldPoint`). It takes no place in the pool, no ray and no path of its own, so nothing else in the pass changes.
+
+Its score is Stay's score, times the kind weight `spot.hold`, times ten factors round 1 (`Spots.cpp kHoldSet`, over 1 = hold). They are Boosts with an exponent a class (`Profile::hold`, `spot.hold.<cons>` in class files and `--set`, at least 0). With every exponent 0 a hold equals a stay and Stay wins the tie: that is the pin row. What is not read is not applicable.
+
+| Consideration | Read from | Note |
+|---|---|---|
+| `hold_foes_on` | foes on him whose hand reach covers him | blades only. Off when one of their reaches is not read |
+| `hold_contact_sec` | (distance less reach) over pace, the nearest | not for blades |
+| `hold_foe_speed`, `hold_foe_ranged` | `Foe::speed`, `Foe::ranged` | of those on him |
+| `hold_sight` | the action's own ray | |
+| `hold_cover` | answered (stay, foe) facts | none asked for it |
+| `hold_narrow` | doorways on the walk to the nearest foe, that the pass searched for its target anyway | Off when the nearest foe is no target of his three |
+| `hold_ally_front` | an ally with a foe on him, between, inside `t.spotPeelU` of the line | |
+| `hold_player` | the player's place in `t.orderLeadSec` over the leash | his walk is `Member::anchorVel`, unread = where he is |
+| `hold_kept` | `t.orderHoldMomentum` | the hysteresis |
+
+New inputs (dump format 6, fields appended): `Member::anchorVel / anchorMoves`, `Foe::reach / speed / ranged`. Golden v6: of the 36 old cases every line is the old line with fields appended, but the score of the one held follower in `strict_blades_0..2` (a hold has a factor now). The scene states its foes' reach, or nothing about them would be known. Six new cases.
+
+`OrderOf` reads the kinds through the caps and the class NOW (F6). `t.orderHoldStay`, `orderHoldFoes`, `orderNearU`, `orderStandMinU` are gone (in no tag, no caller in the DLL).
+
+### 22.2 The pass's holds against the old rules
+
+With weights that read foes on him, contact and sight alone, the three old scenes give the old orders, but for the foe that does not reach him (F7). On the old flip edges (the foe's distance, the reach) the order changes at most once in 20 windows, with momentum 1 it flips.
+
+### 22.3 The residue table (S5-B)
+
+`Move.h Residue` + `kResidue`: value, low, high, source. Both the default and the arms are s5-plan.md 4.1's. New: `strafeSpeed` 150, `walkBackSpeed` 150, `refileStall` 0.25, `bridgeLag` 0, `arriveZ` 0 (off), `shotStop` 0, `blockTold` 1, `displaceDownU` 0, `fearUncarried` 1.5, `fearActs` 1. A static_assert holds one row a member. The executor's own numbers (no field row) are `MoveTuning`: minimum stop, aim cone (45 degrees), drift speed and period, lunge standoff, the two block times, the sneak gait.
+
+Run `refileStall=1.1` and `blockTold=0` until P-C and P-B land (s5-plan.md 12 trap 8): the defaults are the table's, which are the kind ends of these two.
+
+- Toward the foe he faces (45 degrees) his run, across it `strafeSpeed`, away `kiteSpeed`. A walk back has `walkBackSpeed` whatever its direction.
+- A new point on a live order, and the first order after a Free or an ended one, waits `refileStall` (and `repointStall` in flight, the larger). Free ends the claim: M-1's client must do that.
+- `bridgeLag`: the order before stands until then. `arriveError` is cut at `leashR`.
+- `arriveZ`: at the point in 2D and off in height is a block, also when an order starts there.
+- `blockTold` 0: no Unreachable, no mark, no trust event, he tries for ever.
+- A fear EFFECT (`Body::fearUntil`, not the low-health flight) takes the order away once for `fearUncarried`. Flee and Hide stay denied. `fearActs` 0: no blow, no shot, no hostile cast in it. MODEL, not decoded: once an effect, not again and again while it lasts.
+- `displaceDownU` is carried by the lab's one fall, a paralysis.
+
+Not modelled: package areas, the Exit Water pick, flight, a mount, orders the game never carries at all (section 10 asks for that count; a `notCarriedShare` row only if it is above zero).
+
+Forced arms: an arm whose mode `--move-caps` does not serve is not played and has no ACCEPT line. An order that ended gets a new gen when its rule fires again. The highest mean is out of the verdict.
+
+### 22.4 Rows
+
+Fifteen new `strict-*` spot rows: one a residue row with the row ZEROED as its off arm (it must fail), and the F4 rows `strict-goto-aim`, `strict-leashed`, `strict-backoff`. A strict row states its own residue and caps, so `--residue` does not move the tests.
+
+### 22.5 Cost
+
+User CPU, one core, 4 classes, 480 fights on fixtures: off 2.38 (main) and 2.11, point 4.40 and 4.35, strict 5.22 and 5.20. Thief and nightingale strict 2.01 and 1.97. `i_Skyrim-0213A0` strict,kite 5.75 and 5.59. No change beyond noise.

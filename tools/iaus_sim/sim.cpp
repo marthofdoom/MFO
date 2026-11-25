@@ -177,7 +177,7 @@ namespace {
           m["mv.pathShort"] = double(s.movePathShort) / w; m["mv.askShort"] = double(s.moveAskShort) / w; m["mv.spotShort"] = double(s.moveSpotShort) / w; m["mv.tripleShort"] = double(s.moveTripleShort) / w;
           if (g_road == Road::Strict) { static const char* const kMode[] = { "free", "stand", "goto", "kite", "disengage", "path" }; for (std::size_t k = 0; k < 6; ++k) m[std::string("ord.") + kMode[k] + "/f"] = double(s.strictOrders[k]) / n;
             m["ord%"] = 100.0 * s.strictSec / up; m["ord.out%"] = s.strictStandSec > 0 ? 100.0 * s.strictOutSec / s.strictStandSec : -1; m["ord.displ/f"] = double(s.strictDisplaced) / n; m["ord.lunge/f"] = double(s.strictLunges) / n; m["ord.block/f"] = double(s.strictBlocks) / n; m["ord.unreach/f"] = double(s.strictUnreach) / n; m["ord.travelU/s"] = s.strictTravelSec > 0 ? s.strictTravelU / s.strictTravelSec : -1; }
-          for (const MV::SpotKindRow& r : MV::kSpotKinds) m[std::string("sk.") + r.name] = double(s.spotKind[static_cast<std::size_t>(r.kind)]) / n; }
+          for (const MV::SpotKindRow& r : MV::kSpotKinds) if (r.kind != MFO::Iaus::SpotKind::Hold /* an order, never a place claim: strictOrders counts it */) m[std::string("sk.") + r.name] = double(s.spotKind[static_cast<std::size_t>(r.kind)]) / n; }
         m["pow/min"] = double(s.powerAttacks) / mins; m["powCtl%"] = pct(double(s.powOnControlled), double(s.powerAttacks)); m["powWhiff%"] = pct(double(s.powerWhiffs), double(s.powerAttacks)); m["ground/min"] = double(s.grounds) / mins; m["block/min"] = double(s.blocks) / mins; m["bash/min"] = double(s.bashes) / mins;
         return m;
     }
