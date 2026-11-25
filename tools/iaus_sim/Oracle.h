@@ -665,7 +665,7 @@ namespace Sim {
                 std::string o = "{\"t\":" + std::to_string(F.now) + ",\"order\":1,\"n\":" + std::to_string(R.n) + ",\"best\":" + std::to_string(at(static_cast<int>(best))) + ",\"last\":" + std::to_string(last < 0 ? -1 : at(last)) + ",\"opts\":[";
                 for (std::size_t i = 0; i < N; ++i) { if (!in[i]) continue; std::vector<double> full = U[i]; for (int k = static_cast<int>(full.size()); k < R.ceil; ++k) { Fight G = Stream(F, R.s0, k); if (!roll(G, i)) break; full.push_back(Utility(G)); }
                     o += std::string(comma ? "," : "") + "{\"l\":\"" + label(opt[i]) + "\",\"tg\":" + std::to_string(opt[i].pick.act.target) + ",\"form\":" + std::to_string(opt[i].pick.act.form) + ",\"key\":" + std::to_string(opt[i].pick.spot ? opt[i].pick.key : 0) + ",\"paired\":" + std::to_string(int(opt[i].paired)) + ",\"n0\":" + std::to_string(U[i].size()) + ",\"iaus\":" + std::to_string(int(opt[i].iaus)) + ",\"u\":[";
-                    for (std::size_t z = 0; z < full.size(); ++z) { char nb[32]; std::snprintf(nb, sizeof nb, "%s%.4f", z ? "," : "", full[z]); o += nb; } o += "]}"; comma = true; }
+                    for (std::size_t z = 0; z < full.size(); ++z) { char nb[32]; std::snprintf(nb, sizeof nb, "%s%.9f", z ? "," : "", full[z]); o += nb; } o += "]}"; comma = true; }
                 o += "]}\n"; std::fputs(o.c_str(), g_oracleDump); std::fflush(g_oracleDump); }
             Pick pk; pk.best = best;
             if (leads()) { if (wonOrder.size() < F.ctl.size()) wonOrder.resize(F.ctl.size()); OrderPick& won = wonOrder[static_cast<std::size_t>(ci)]; const auto isWon = [&](int i) { return i >= 0 && won.on && won.SameOrder(opt[static_cast<std::size_t>(i)].pick) && won.end == opt[static_cast<std::size_t>(i)].pick.end; };
