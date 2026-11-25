@@ -73,10 +73,12 @@ namespace Sim {
             if (!Fight::Up(x)) continue;
             if (!x.Party()) {
                 MV::Foe f; f.id = x.c.id; f.p = { x.c.x, x.c.y, x.c.z }; const Body* tg = F.Find(x.c.targetId); f.target = tg && tg->Party() && Fight::Up(*tg) ? tg->c.id : 0;
-                f.faceX = x.hx; f.faceY = x.hy; if (g_v4.light) f.skill = x.spec->Skill(15); P.foes.push_back(f); continue; }
+                f.faceX = x.hx; f.faceY = x.hy; if (g_v4.light) f.skill = x.spec->Skill(15);
+                if (g_road == Road::Strict) { f.reach = F.Reach(x); f.speed = x.spec->run; bool far = x.spec->ranged.Has(); for (const int i : x.spec->spells) far = far || F.D->foeSpells[static_cast<std::size_t>(i)].e.nature == MFO::Iaus::Prune::Nature::Offense; f.ranged = far ? Tri::Yes : Tri::No; }   // S5-A: the hold's inputs
+                P.foes.push_back(f); continue; }
             MV::Member m; for (MV::Member& o : was) if (o.id == x.c.id) { m = o; break; }
             m.id = x.c.id; m.p = { x.c.x, x.c.y, x.c.z }; m.who = WalkerOf(x); m.speed = x.spec->run * (x.sneaking ? 0.55f : 1.0f); m.nTop = 0; m.decides = false;
-            m.anchor = { F.b[0].c.x, F.b[0].c.y, F.b[0].c.z }; m.leash = 0.0f;
+            m.anchor = { F.b[0].c.x, F.b[0].c.y, F.b[0].c.z }; m.leash = 0.0f; m.anchorMoves = S.playerSeen > 0.0 && F.now > S.playerSeen; m.anchorVel = {}; if (m.anchorMoves) { const float dt = static_cast<float>(F.now - S.playerSeen); m.anchorVel = { (m.anchor.x - S.playerWas.x) / dt, (m.anchor.y - S.playerWas.y) / dt, (m.anchor.z - S.playerWas.z) / dt }; }
             if (x.ctl >= 0) { const Ctl& c = F.ctl[static_cast<std::size_t>(x.ctl)]; MoveClaim& q = S.claim[static_cast<std::size_t>(x.ctl)];
                 m.leash = c.leash; m.classId = static_cast<std::uint8_t>(x.ctl); m.kinds = MV::SpotKindsFor(c.gate) & ~g_moveFault->kinds; m.decides = !MoveBodyTaken(F, x);
                 if (S.force != Force::None && x.ctl == 0 && !(S.force == Force::Stand && S.forceVar == 1)) m.kinds = MV::KindBit(MFO::Iaus::SpotKind::Stay); else if (S.force == Force::Stand && x.ctl == 0) m.kinds &= ~(MV::KindBit(MFO::Iaus::SpotKind::Kite) | MV::KindBit(MFO::Iaus::SpotKind::RetreatExit) | MV::KindBit(MFO::Iaus::SpotKind::Regroup) | MV::KindBit(MFO::Iaus::SpotKind::Flank));
@@ -91,6 +93,7 @@ namespace Sim {
             } else m.commit = MV::Commit{};
             P.party.push_back(m);
         }
+        S.playerWas = { F.b[0].c.x, F.b[0].c.y, F.b[0].c.z }; S.playerSeen = F.now;   // his walk over the last window
         P.light.clear();
         if (g_v4.light) {   // S4: every actor of the fight is a light meter
             P.exterior = !F.interior; P.detect = F.dg;

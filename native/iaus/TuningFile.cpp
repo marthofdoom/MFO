@@ -112,6 +112,11 @@ namespace MFO::Iaus::TuningFile {
                 if (ff < 0 || !CC::SetFamilyWeight(a_row, static_cast<Family>(ff), a_v)) { a_err = "unknown family or bad weight (family.<family>=<v>, v > 0)"; return false; }
                 return true;
             }
+            if (a_path.rfind("spot.hold.", 0) == 0) {   // S5-A: spot.hold.<cons>=<v>, a hold consideration's exponent
+                const long k = ConsOf(a_path.substr(10));
+                if (k < 0 || !CC::SetHoldWeight(a_row, static_cast<Cons>(k), a_v)) { a_err = "unknown hold consideration or bad weight (spot.hold.<cons>=<v>, v >= 0)"; return false; }
+                return true;
+            }
             if (a_path.rfind("spot.", 0) == 0) {   // MOVEMENT (S1): spot.<kind>=<v>, the kind's name in iaus/Spots.h kSpotKinds
                 const long k = IndexOf(a_path.substr(5), kSpotKindCount, [](std::size_t i) { return std::string(Move::kSpotKinds[i].name); });
                 if (k < 0 || !CC::SetSpotWeight(a_row, static_cast<SpotKind>(k), a_v)) { a_err = "unknown spot kind or bad weight (spot.<kind>=<v>, v > 0)"; return false; }
@@ -124,7 +129,7 @@ namespace MFO::Iaus::TuningFile {
             }
             const auto d1 = a_path.find('.');
             const auto d2 = d1 == std::string_view::npos ? d1 : a_path.find('.', d1 + 1);
-            if (d2 == std::string_view::npos) { a_err = "bad path (<family>.<cons>.<param> | scalar.<name> | family.<family> | equip.crossover | spot.<kind>)"; return false; }
+            if (d2 == std::string_view::npos) { a_err = "bad path (<family>.<cons>.<param> | scalar.<name> | family.<family> | equip.crossover | spot.<kind> | spot.hold.<cons>)"; return false; }
             const long fi = FamilyOf(a_path.substr(0, d1));
             const long ki = ConsOf(a_path.substr(d1 + 1, d2 - d1 - 1));
             if (fi < 0 || ki < 0) { a_err = "unknown family or consideration"; return false; }

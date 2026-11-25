@@ -6,7 +6,8 @@
 //
 // TO ADD OR CHANGE
 //   which mode a spot kind asks for ...... kOrderRows (one table, its ORDER is the precedence when a place is good for several kinds)
-//   a radius or a rule of the stay half .. t.order* (Core.h Tuning)
+//   a mode the oracle may order .......... one row of kOrderRows plus its cap
+//   Free against a hold .................. Spots.cpp kHoldSet (scored, no rule). A radius: t.order* (Core.h Tuning)
 //   a cap a kind needs ................... Spots.h kSpotKinds needs + Spots.cpp AllowedKinds
 #include "iaus/Spots.h"
 
@@ -25,7 +26,8 @@ namespace MFO::Iaus::Move {
         { SpotKind::HealReach,    MoveMode::Stand,     false },
         { SpotKind::Peel,         MoveMode::Stand,     false },
         { SpotKind::ReachUnreach, MoveMode::Stand,     false },
-        { SpotKind::Stay,         MoveMode::Free,      false },   // StayMode decides between Free and a Stand on his own place
+        { SpotKind::Hold,         MoveMode::Stand,     false },
+        { SpotKind::Stay,         MoveMode::Free,      false },
     };
     static_assert([] { std::uint32_t seen = 0; for (const OrderRow& r : kOrderRows) seen |= 1u << static_cast<unsigned>(r.kind); return seen == ((1u << kSpotKindCount) - 1u - (1u << static_cast<unsigned>(SpotKind::LootRoute))); }(), "every spot kind a fight offers has an order row");
 
@@ -34,8 +36,7 @@ namespace MFO::Iaus::Move {
         return kOrderRows[std::size(kOrderRows) - 1];
     }
 
-    // He stays. Left to the engine, or held where he is? marth: melee may fight one enemy freely when that is best, hold otherwise. PLACEHOLDER lines (t.order*).
-    [[nodiscard]] MoveMode StayMode(const PartyPicture& a_pic, const Member& a_m, const RankedAction& a_act, const Tuning& a_t);
     // The order of one assignment. a_m.order is the one that stands: an order that says the same keeps its point and its gen.
+    // a_as.kinds is read through what the caps and his class allow NOW: a bit whose cap went off since he committed orders nothing.
     [[nodiscard]] MoveOrder OrderOf(const PartyPicture& a_pic, const Member& a_m, const Assignment& a_as, const Tuning& a_t);
 }

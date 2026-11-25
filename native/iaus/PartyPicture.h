@@ -34,7 +34,7 @@ namespace MFO::Iaus::Move {
     [[nodiscard]] inline constexpr SpotKey KeyOfStay(FormID a_who) { return kStayBit | a_who; }
     [[nodiscard]] inline constexpr std::uint32_t KindBit(SpotKind a_k) { return 1u << static_cast<unsigned>(a_k); }
 
-    enum Need : std::uint32_t { kNeedPin = 1, kNeedFacing = 2, kNeedGait = 4, kNeedKite = 8, kNeedDisengage = 16 };   // what a kind needs of the mover
+    enum Need : std::uint32_t { kNeedPin = 1, kNeedFacing = 2, kNeedGait = 4, kNeedKite = 8, kNeedDisengage = 16, kNeedStrict = 32 };   // what a kind needs of the mover
     struct RoadCaps { bool point = true, hold = true, pin = false, facing = false, gait = false;   // what the mover can do NOW (the ABI today: point and hold)
         // STRICT MOVEMENT (ABI 48, kMoveCaps_*): an order is a point that is kept. A strict road IS a pin, whatever t.spotPinKinds says (marth: cover, chokepoint
         // and flank stay on), and it refuses the kite and the disengage kind unless their cap is on. Without strict the two are read by nobody.
@@ -88,6 +88,7 @@ namespace MFO::Iaus::Move {
         std::uint32_t kinds = 0xFFFFFFFFu;             // SpotKindsFor(his ClassGate)
         Env::Walker who; float speed = 370.0f;
         Env::Vec3 anchor; float leash = 0.0f;          // 0 = no leash
+        Env::Vec3 anchorVel; bool anchorMoves = false; // S5-A: the anchor's own walk, u/s. anchorMoves false = not read: only where it is counts (Cons::HoldPlayer)
         bool  wantsDark = false;                       // S4 (Light::WantsNow or a sneak class): the light facts are read for him, and for nobody else
         float sneakSkill = -1.0f;                      // S4: his Sneak, perks included (DetectIn::skillT). < 0 = not read: spot_detected does not apply
         bool  invisible = false;
@@ -101,7 +102,9 @@ namespace MFO::Iaus::Move {
         bool  fixed = false;                           // committed and unmarked: a fixed assignment this window
     };
     struct Foe { FormID id = 0; Env::Vec3 p; std::int32_t tri = -1; float ageSec = 0.0f; FormID target = 0; float faceX = 0.0f, faceY = 0.0f;   // facing: unit, 0 0 = unknown
-        float skill = -1.0f; };                        // S4: its perception skill (DetectIn::skillO). < 0 = not read
+        float skill = -1.0f;                           // S4: its perception skill (DetectIn::skillO). < 0 = not read
+        // S5-A (the hold): how far it strikes by hand (both bodies in it), its run in u/s, whether it fights at range (a bow, a spell). < 0 / Unknown = not read
+        float reach = -1.0f, speed = -1.0f; Iaus::Tri ranged = Iaus::Tri::Unknown; };
     struct Area { Env::Vec3 p; float r = 0.0f; };                    // an active hostile area
     struct LightAt { SpotKey key = 0; float level = 0.0f; };         // A POINT SAMPLER's answer at a pooled spot (S4 / G6, probe L1): filled after Phase1, before Phase3. Absent = the field below answers, or nobody (unknown, never dark)
 
@@ -136,7 +139,7 @@ namespace MFO::Iaus::Move {
         bool reachable = false; float length = 0.0f, climb = 0.0f, drop = 0.0f;
         Env::Vec3 from; std::array<Env::Vec3, 8> at{}; std::uint8_t nAt = 0;
         std::array<std::uint64_t, 6> portals{}; std::uint8_t nPortals = 0;
-        std::array<Env::Vec3, 16> via{}; std::uint8_t nVia = 0;   // the walk as points at most 128 apart (farther on a long one), its end the last: what trust reads
+        std::array<Env::Vec3, 16> via{}; std::uint8_t nVia = 0; float narrow = -1.0f;   /* a walk to an actor, strict road: the narrowest doorway on it, t.spotPortalU when there is none */   // the walk as points at most 128 apart (farther on a long one), its end the last: what trust reads
     };
     struct PathKey { FormID who = 0; std::int32_t fromTri = -1; SpotKey to = 0; std::int32_t toTri = -1; bool actor = false; auto operator<=>(const PathKey&) const = default; };
 
@@ -171,6 +174,7 @@ namespace MFO::Iaus::Move {
         struct Pair { std::uint32_t member; std::int32_t spot; PathFact path; float exposedSec = 0.0f; };
         std::vector<Pair> pairs;                       // reachable (member, spot)
         std::map<std::pair<FormID, FormID>, Iaus::Tri> reach;   // (member, target): can he walk to it
+        std::map<std::pair<FormID, FormID>, float> narrow;      // ... and the narrowest doorway on the way (strict road)
         std::vector<RayAsk> asked;                     // filed this window, not answered yet
     };
 

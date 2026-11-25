@@ -125,6 +125,7 @@ namespace MFO::Iaus::ClassCurves {
             if (static_cast<std::size_t>(fw.family) < kFamilies) p.family[static_cast<std::size_t>(fw.family)] = fw.w;
         for (std::size_t s = 0; s < kSchools; ++s) p.school[s] = SchoolWeight(a_row.scalars, s);
         p.spot = a_row.spot;
+        p.hold = a_row.hold;
         return p;
     }
 
@@ -231,6 +232,13 @@ namespace MFO::Iaus::ClassCurves {
     bool SetSpotWeight(Row& a_row, SpotKind a_k, float a_w) {
         if (!std::isfinite(a_w) || !(a_w > 0.0f) || static_cast<std::size_t>(a_k) >= kSpotKindCount) return false;
         a_row.spot[static_cast<std::size_t>(a_k)] = a_w;
+        return true;
+    }
+
+    bool SetHoldWeight(Row& a_row, Cons a_c, float a_w) {
+        const auto i = static_cast<std::size_t>(a_c) - kHoldFirst;   // below the run wraps past it
+        if (!std::isfinite(a_w) || a_w < 0.0f || i >= kHoldCons) return false;
+        a_row.hold[i] = a_w;
         return true;
     }
 

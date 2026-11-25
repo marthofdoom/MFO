@@ -60,6 +60,7 @@ namespace MFO::Iaus::ClassCurves {
         std::vector<FamilyWeight> families;             // a family multiplier for this class (Profile::family)
         Scalars scalars;
         std::array<float, kSpotKindCount> spot = [] { std::array<float, kSpotKindCount> a{}; a.fill(1.0f); return a; }();   // MOVEMENT (S1): a multiplier per spot kind. 1 = the shared value
+        std::array<float, kHoldCons> hold = [] { std::array<float, kHoldCons> a{}; a.fill(1.0f); return a; }();              // S5-A: the exponent of each hold consideration
     };
     using Table = std::array<Row, kRows>;
 
@@ -98,4 +99,5 @@ namespace MFO::Iaus::ClassCurves {
     bool SetWeight(Row& a_row, Family a_f, Cons a_c, float a_w);
     bool SetFamilyWeight(Row& a_row, Family a_f, float a_w);
     bool SetSpotWeight(Row& a_row, SpotKind a_k, float a_w);   // > 0, finite (a kind is switched off by the class mask or a road cap, never by a weight)
+    bool SetHoldWeight(Row& a_row, Cons a_c, float a_w);       // >= 0, finite. 0 = this hold consideration is not read
 }
