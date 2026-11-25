@@ -11,6 +11,7 @@
 #include "iaus/Reach.h"      // ruling Q68: the learned swing reach
 #include "iaus/ReachBook.h"  // marth 2026-11-17: the per-weapon / per-sequence reach book and its one reader
 #include "iaus/SpellWorth.h"  // S11b: the spell-worth reader
+#include "iaus/AreaCensus.h"
 #include "iaus/Generate.h"   // card I4: the pure candidate generator + the Snapshot it reads
 #include "iaus/Disengage.h"  // card G3: the pure questions the disengage gate asks
 #include "iaus/Reposition.h" // batch I: spell range, back-off, hidden step
