@@ -274,6 +274,11 @@ namespace MFO::SelfTest {
             r.rows.push_back({ Table::Combat, Vocab::kCondFoeAny, Vocab::kActCastSelf, 0.0f, c.s->set[0][0], 0 });
             r.rows.push_back({ Table::Combat, Vocab::kCondFoeAny, Vocab::kActAttack, 0.0f, 0, 0 });
             r.spawn.on = true;
+            // 11-25 field: three runs each ended in 10 s because the default mudcrab died first (a fixture, not the mechanism). A foe that outlives
+            // the 30 s the bow needs to be drawn and loosed, on clear ground so the arrows have a line.
+            r.spawn.health    = 20000.0f;
+            r.spawn.clearSpot = true;
+            r.spawn.respawns  = 2;
         }
         RE::TESObjectWEAP* BoundBowInHand(RE::Actor* a) {
             for (const bool left : { false, true }) {

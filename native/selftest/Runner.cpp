@@ -421,6 +421,10 @@ namespace MFO::SelfTest {
         constexpr const char*      kRetestMarker = "_retest.1124c";
         constexpr std::string_view kRetestIds[]  = { "anim.summon_iaus", "anim.summon_gambit", "anim.fire_once", "anim.party_gap_conc", "buff.animated_claim_road",
                                                      "bound_bow.fires", "costparity.fireforget", "costparity.concentration", "g0b.cover" };
+        // 11-25 (deck-strict-1125): only the tests whose test or whose MFO code changed. anim.fire_once: the Fired end is now read before the release.
+        constexpr const char*      kRetestMarker2 = "_retest.1125";
+        constexpr std::string_view kRetestIds2[]  = { "strict.stand_bow", "strict.stand_melee", "strict.keep", "strict.release", "strict.free", "bound_bow.fires",
+                                                      "costparity.concentration", "buff.animated_claim_road", "anim.fire_once" };
         // A strict.* test closed as SKIP because Harbinger did not serve strict orders runs again on a load where it does. (Asked before g_mx: a leaf.)
         void ApplyCodeRetest() {
             const bool strictAbi = APMFBridge::DevAbi() >= 48;
@@ -433,6 +437,15 @@ namespace MFO::SelfTest {
             g_results[kRetestMarker] = { true, 0, "the tests changed by the 11-24c diagnosis fixes were cleared once so they run again", true };
             spdlog::info("[selftest] code retest {}: cleared {} stale result(s) of {} listed test(s); they run again on this load", kRetestMarker, cleared,
                          std::size(kRetestIds));
+        }
+        void ApplyCodeRetest2() {
+            std::lock_guard lk(g_mx);
+            if (g_results.contains(kRetestMarker2)) return;
+            std::size_t cleared = 0;
+            for (const auto id : kRetestIds2) cleared += g_results.erase(std::string(id));
+            g_results[kRetestMarker2] = { true, 0, "the tests changed by the 11-25 strict diagnosis fixes were cleared once so they run again", true };
+            spdlog::info("[selftest] code retest {}: cleared {} stale result(s) of {} listed test(s); they run again on this load", kRetestMarker2, cleared,
+                         std::size(kRetestIds2));
         }
 
         // One end for every way a run stops. a_complete = PASS / FAIL / INFO (persisted); else RETRY / ABORT.
@@ -765,6 +778,7 @@ namespace MFO::SelfTest {
         if (afterLoad) {
             ApplyResetIni();
             ApplyCodeRetest();
+            ApplyCodeRetest2();
             LogPending("after load", true);
         }
         if (postOrphans) {

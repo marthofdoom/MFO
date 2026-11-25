@@ -18,6 +18,8 @@
 #include "MainThread.h"
 #include "apmf/APMFBridge.h"
 #include "classes/Classes.h"
+#include "Followers.h"
+#include "Sightline.h"   // the bow lane: his own ray to the foe, a teammate in the line
 
 #include <algorithm>
 #include <array>
@@ -34,7 +36,7 @@ namespace MFO::SelfTest {
             float walkBackSpeed = 60.0f, walkBackPlus = 1.0f;   // an excursion of D units must be over in D / speed + plus seconds
             float arriveSpeed = 60.0f, arrivePlus = 3.0f;    // arrival within path / backpedal speed + plus
             float relMoveV = 25.0f;                          // a speed that counts as "he moves again"
-            float relIn = 1.0f;                              // seconds
+            float relIn = 1.5f;                              // seconds (11-25: one area period 1.0 s plus a path build, Harbinger measured 1.06 s)
             float relWatch = 4.0f;
             float relFoe = 250.0f, relFoeWait = 8.0f;        // the release waits this long for the foe to be at least this far
             float freeShare = 0.5f;                          // drift and attacks after the order, of those before it
@@ -43,13 +45,17 @@ namespace MFO::SelfTest {
             float startMin = 130.0f, startMax = 320.0f, foeGap = 130.0f, playerReach = 1200.0f;
             float neverLive = 5.0f;                          // filed, in combat, and no phase after this long
             float healEvery = 2.0f;
+            // 11-25 BOW LANE (diag-strict-1125 A2): a bow point needs a line to the foe (his own ray, no teammate within the fire-line pad). Blocked this
+            // long = re-point (at most maxRepoints times, the existing Repoint road); a leg whose lane share ends under laneMin is INVALID, not a verdict.
+            float laneRepointSec = 3.0f, laneMin = 0.8f;
+            int   maxRepoints = 2;
             float foeHealth = 20000.0f;
         };
         constexpr Tuning kT{};
 
         enum class Kind : std::uint8_t { Free, Stand, Release };
         enum class Who : std::uint8_t { Bow, Melee, AsHeld };
-        struct Leg { const char* what; Kind kind; float radius; float sec; bool askFree = false; bool judge = true; };   // Stand: sec = held time after arrival
+        struct Leg { const char* what; Kind kind; float radius; float sec; bool askFree = false; bool judge = true; float minInside = 0.0f; };   // minInside > 0: a floor on the inside share, lunges or not   // Stand: sec = held time after arrival
         struct Test { const char* id; const char* needs; Who who; RE::FormID foe; float foeAt; std::vector<Leg> legs; };
         constexpr RE::FormID kMelee = 0x0002D1DE, kArcher = 0x0002D1FC;   // Skyrim.esm skeleton warrior / archer (TestsHold.cpp)
         constexpr RE::FormID kIronSword = 0x00012EB7, kHuntingBow = 0x00013985, kIronArrow = 0x0001397D;
@@ -60,9 +66,9 @@ namespace MFO::SelfTest {
                   { { "free fight", Kind::Free, 0, 15 }, { "stand", Kind::Stand, 64, 20 }, { "stand", Kind::Stand, 32, 20 } } },
                 { "strict.stand_melee", "(any follower, any place) a one-hander is lent; stands on a point with a melee foe in contact, R 64 and R 32", Who::Melee, kMelee, 700.0f,
                   { { "free fight", Kind::Free, 0, 15 }, { "stand", Kind::Stand, 64, 20 }, { "stand", Kind::Stand, 32, 20 } } },
-                { "strict.keep", "(any follower, any place) one Stand order left alone for 30 s", Who::AsHeld, kMelee, 700.0f,
-                  { { "kept", Kind::Stand, 64, 30 } } },
-                { "strict.release", "(any follower, any place) a Stand order released with the foe at a distance: he fights again within 1 s", Who::Melee, kArcher, 700.0f,
+                { "strict.keep", "(any follower, any place) one Stand order left alone for 30 s: FAIL under 90% inside", Who::AsHeld, kMelee, 700.0f,
+                  { { "kept", Kind::Stand, 64, 30, false, true, 0.90f } } },
+                { "strict.release", "(any follower, any place) a Stand order released with the foe at a distance: he fights again within 1.5 s", Who::Melee, kArcher, 700.0f,
                   { { "released", Kind::Release, 64, 6 }, { "released", Kind::Release, 64, 6 } } },
                 { "strict.free", "(any follower, any place) the same free fight before and after a Stand order", Who::AsHeld, kMelee, 700.0f,
                   { { "free before", Kind::Free, 0, 15 }, { "stand between", Kind::Stand, 64, 6, true, false }, { "free after", Kind::Free, 0, 15 } } },
@@ -76,7 +82,13 @@ namespace MFO::SelfTest {
         std::unordered_map<std::uint32_t, Plan> g_plans;
         std::uint32_t                           g_ticket = 1;   // WORKER
 
-        Plan PlanOnMain(RE::FormID a_f, RE::FormID a_foe) {
+        // a_bow: the point must have a line to the foe (BowLane). a_not: a re-point must differ from the point he stands on.
+        bool BowLane(RE::Actor* a_f, RE::Actor* a_foe, const RE::NiPoint3& a_p) {
+            if (!a_foe) return true;
+            if (Sightline::PointSeenNow(a_foe, a_p, 128.0f) == Sightline::PointSight::Hidden) return false;   // a wall; Unavailable is not a wall
+            return !Sightline::TeammateInFireLineFrom(a_f->GetFormID(), a_p, a_foe->GetFormID());
+        }
+        Plan PlanOnMain(RE::FormID a_f, RE::FormID a_foe, bool a_bow, bool a_haveNot, RE::NiPoint3 a_not) {
             Plan  o;
             auto* f  = RE::TESForm::LookupByID<RE::Actor>(a_f);
             auto* pc = RE::PlayerCharacter::GetSingleton();
@@ -84,10 +96,12 @@ namespace MFO::SelfTest {
             auto* foe = a_foe ? RE::TESForm::LookupByID<RE::Actor>(a_foe) : nullptr;
             if (foe && (foe->IsDead() || !foe->Is3DLoaded())) foe = nullptr;
             const auto me = f->GetPosition();
+            int lanes = 0;
             const auto fit = [&](const RE::NiPoint3& p) {
                 const float d = me.GetDistance(p);
                 return d >= kT.startMin && d <= kT.startMax && p.GetDistance(pc->GetPosition()) <= kT.playerReach &&
-                       (!foe || p.GetDistance(foe->GetPosition()) >= kT.foeGap);
+                       (!foe || p.GetDistance(foe->GetPosition()) >= kT.foeGap) && (!a_haveNot || p.GetDistance(a_not) >= 60.0f) &&
+                       (!a_bow || (++lanes <= 12 && BowLane(f, foe, p)));   // bounded: each lane read is three rays under the world lock
             };
             std::string nav;
             for (const auto& n : WalkPoints(f, foe, 450.0f, nav)) {
@@ -103,13 +117,17 @@ namespace MFO::SelfTest {
                     o = { true, p, me.GetDistance(p), "open ground (navmesh: " + nav + ")" };
                     return o;
                 }
+            if (a_haveNot) { o.why = "no other point with a clear lane here"; return o; }
+            if (a_bow && !BowLane(f, foe, me)) { o.why = "no point with a clear lane to the foe (his own spot included; navmesh: " + nav + ")"; return o; }
             o = { true, me, 0.0f, "HIS OWN SPOT, no other point here (navmesh: " + nav + ")", true };
             return o;
         }
-        std::uint32_t PostPlan(RE::FormID a_f, RE::FormID a_foe) {
+        std::uint32_t PostPlan(RE::FormID a_f, RE::FormID a_foe, bool a_bow, const RE::NiPoint3* a_not = nullptr) {
             const auto t = g_ticket++;
-            MainThread::Post([t, a_f, a_foe]() {
-                Plan p = PlanOnMain(a_f, a_foe);
+            const bool haveNot = a_not != nullptr;
+            const RE::NiPoint3 notPt = a_not ? *a_not : RE::NiPoint3{};
+            MainThread::Post([t, a_f, a_foe, a_bow, haveNot, notPt]() {
+                Plan p = PlanOnMain(a_f, a_foe, a_bow, haveNot, notPt);
                 std::lock_guard lk(g_planMx);
                 g_plans[t] = std::move(p);
             });
@@ -141,6 +159,11 @@ namespace MFO::SelfTest {
             float maxD = 0, worstBack = 0, worstOver = 0, roleLostT = 0, leashT = 0, notCarriedT = 0, phaseT[9]{};
             std::vector<float> dist;               // per sample after the arrival
             int   excursions = 0, inAttack = 0, late = 0, attacks = 0, shots = 0, attacks0 = 0, shots0 = 0;   // the 0s: at the arrival
+            // 11-25: attacks counts None -> attack EDGES, so a chain of 8 swings counted 1. swings = entries into a swing or bash state (chained ones too).
+            int   swings = 0, swings0 = 0, chain = 0, chainMax = 0, travelStarts = 0, travelSwings = 0;
+            float laneT = 0, laneBlockedT = 0, laneRun = 0, laneAskT = 0, repointAt = 0;
+            bool  repointing = false;
+            int   repointsN = 0;
             bool  out = false, have = false, everLive = false, dropped = false;
             float outT = 0, outMax = 0;
             RE::NiPoint3 prev{};
@@ -162,7 +185,8 @@ namespace MFO::SelfTest {
             bool  bow = false;
             Phase phase = Phase::Start;
             float phaseT = 0, waitT = 0, healT = 0, pathLen = 0;
-            std::uint32_t ticket = 0;
+            std::uint32_t ticket = 0, repointTicket = 0;
+            int           repoints = 0;
             RE::FormID    foe = 0;
             RE::NiPoint3  pt{};
             bool          ownSpot = false;   // the planner found no other point: the arrival proves nothing
@@ -220,11 +244,19 @@ namespace MFO::SelfTest {
                 if (v < 1500.0f) { s.drift += step; s.moveT += dt; }
             }
             bool attackStart = false, busy = false, attacking = false;
+            // Travelling or Returning under OUR order (not after the release): Harbinger refuses new attacks then (11-25 fix 2).
+            const bool travelling = leg.kind != Kind::Free && !s.released && [&] { const auto ph = APMFBridge::DevStrictRead(a_id).phase; return ph == 2 || ph == 4; }();
             if (auto* as = a->AsActorState()) {
                 const int at = static_cast<int>(as->GetAttackState());
                 const auto released = [](int x) { return (x >= 11 && x <= 13) || x == 16 || x == 17; };
                 attacking = at != 0;
-                if (s.have && s.prevAtk == 0 && at != 0) { ++s.attacks; attackStart = true; }
+                if (s.have && s.prevAtk == 0 && at != 0) { ++s.attacks; attackStart = true; if (travelling) ++s.travelStarts; }
+                if (at == 0) s.chain = 0;
+                if (s.have && (at == 2 || at == 6) && !(s.prevAtk == 2 || s.prevAtk == 6)) {   // a swing or bash begins, a chained one too
+                    ++s.swings;
+                    s.chainMax = std::max(s.chainMax, ++s.chain);
+                    if (travelling) ++s.travelSwings;
+                }
                 if (s.have && !released(s.prevAtk) && released(at)) ++s.shots;
                 s.prevAtk = at;
                 busy = as->GetKnockState() != RE::KNOCK_STATE_ENUM::kNormal || as->actorState2.staggered != 0 || as->IsBleedingOut();
@@ -253,7 +285,13 @@ namespace MFO::SelfTest {
             const auto st   = APMFBridge::DevStrictRead(a_id);
             s.state   = hold.state;
             s.applied = std::max(s.applied, hold.applied);
-            if (hold.ended) { s.dropped = hold.dropped; return end(std::format("Harbinger ended it: {}", hold.state)); }
+            if (hold.ended) {
+                s.dropped = hold.dropped;
+                // 11-25: Harbinger's own [hold] watchdog drops a hold whose fighter makes no "progress" for 20 s and gives the foe up. That measures nothing
+                // about the order: the leg is INVALID (it runs again, bounded), never a verdict.
+                if (hold.dropped) return end("INVALID: Harbinger's [hold] watchdog dropped the hold (EngineDropped), the foe was given up; the leg runs again");
+                return end(std::format("Harbinger ended it: {}", hold.state));
+            }
             if (!hold.ours && s.t > 1.0f && !hold.waiting) return end("INVALID: another ch.24 claim owns him");
             if (std::string_view(hold.state) == "Leashed" && (s.leashT += dt) > 1.0f) return end("INVALID: the pursuit leash excluded the point (the player moved off)");
             const auto ph = std::min<std::uint32_t>(st.phase, 8);
@@ -279,12 +317,45 @@ namespace MFO::SelfTest {
             if (s.dist.empty() && s.arriveAt < 0 && s.startD == 0.0f) s.startD = d;
             const bool down = busy || (st.passed & 1u) != 0;   // kMovePass_EssentialDown
             if (s.arriveAt < 0) {
-                if (d <= leg.radius && (ph == 3 || d <= 24.0f)) { s.arriveAt = s.t; s.attacks0 = s.attacks; s.shots0 = s.shots; }
+                if (d <= leg.radius && (ph == 3 || d <= 24.0f)) { s.arriveAt = s.t; s.attacks0 = s.attacks; s.shots0 = s.shots; s.swings0 = s.swings; }
                 else if (s.t - s.excludedT > std::max(r.pathLen, s.startD) / kT.arriveSpeed + kT.arrivePlus) return end("never arrived in time");
                 if (down) s.excludedT += dt;
                 if (s.arriveAt < 0) return;
             }
             if (down) { s.excludedT += dt; return; }
+            if (s.repointing) {   // walking to the spot he was re-pointed to: not held time
+                if (d <= leg.radius && (ph == 3 || d <= 24.0f)) s.repointing = false;
+                else {
+                    s.excludedT += dt;
+                    if (s.t - s.repointAt > r.pathLen / kT.arriveSpeed + kT.arrivePlus) return end("never arrived at the spot he was re-pointed to");
+                    return;
+                }
+            }
+            if (r.bow && leg.kind == Kind::Stand) {   // the lane: his own ray to the foe and no teammate in the line
+                if (r.foe && (s.laneAskT += dt) >= 0.5f) { s.laneAskT = 0.0f; Sightline::Want(a_id, { r.foe }, Sightline::Basis::Own); }
+                const bool blocked = r.foe && (Sightline::TeammateInFireLine(a_id, r.foe) || Sightline::Check(a_id, r.foe, Sightline::Basis::Own) == Sightline::Verdict::Occluded);
+                s.laneT += dt;
+                if (blocked) { s.laneBlockedT += dt; s.laneRun += dt; } else s.laneRun = 0.0f;
+                if (s.laneRun >= kT.laneRepointSec && !r.repointTicket && r.repoints < kT.maxRepoints) { r.repointTicket = PostPlan(a_id, r.foe, true, &r.pt); s.laneRun = 0.0f; }
+            }
+            if (r.repointTicket) {
+                if (auto p = TakePlan(r.repointTicket)) {
+                    r.repointTicket = 0;
+                    if (p->ok && APMFBridge::DevHoldRepoint(a_id, p->pt, leg.radius)) {
+                        spdlog::info("[strict] {:08X} lane blocked {:.1f}s: re-pointed {:.0f},{:.0f},{:.0f} -> {:.0f},{:.0f},{:.0f} ({}/{})", a_id, kT.laneRepointSec, r.pt.x, r.pt.y, r.pt.z,
+                                     p->pt.x, p->pt.y, p->pt.z, r.repoints + 1, kT.maxRepoints);
+                        ++r.repoints;
+                        ++s.repointsN;
+                        r.pt = p->pt;
+                        r.pathLen = p->walk;
+                        s.repointing = true;
+                        s.repointAt = s.t;
+                        if (s.out) { s.out = false; --s.excursions; }   // the old point's excursion is not the order's
+                        return;
+                    }
+                    spdlog::info("[strict] {:08X} lane blocked: no re-point ({})", a_id, p->ok ? "the repoint call failed" : p->why);
+                }
+            }
             s.heldT += dt;
             s.dist.push_back(d);
             s.maxD = std::max(s.maxD, d);
@@ -311,11 +382,12 @@ namespace MFO::SelfTest {
         std::string StatLine(const Stats& s, float a_minutesT) {
             const float in = s.heldT > 0.2f ? 100.0f * s.insideT / s.heldT : -1.0f;
             return std::format("arrived {:.1f}s (start {:.0f}u), inside {:.1f}% of {:.1f}s held (excluded {:.1f}s), dist p50/p90/p99/max {:.0f}/{:.0f}/{:.0f}/{:.0f}, "
-                               "displacedCount {}, stopError {:.0f} (max {:.0f}), excursions {} (in an attack {}, walked back late {}, worst {:.1f}s), "
+                               "displacedCount {}, stopError {:.0f} (max {:.0f}), excursions {} (in an attack {}, walked back late {}, worst {:.1f}s), swings {} (longest chain {}, began travelling {}, swings travelling {}), lane clear {:.0f}% ({} re-point), "
                                "standing {:.1f}s travelling {:.1f}s returning {:.1f}s not carried {:.1f}s yielded {:.1f}s pending {:.1f}s, attacks {} shots {} in {:.0f}s, "
                                "EngineDropped {}, order changes {}, applied {}, passed 0x{:X}, ch.24 {} | timeline: {}",
                                s.arriveAt, s.startD, in, s.heldT, s.excludedT, Quantile(s.dist, 0.5f), Quantile(s.dist, 0.9f), Quantile(s.dist, 0.99f), s.maxD,
-                               s.displaced, s.stopError, s.maxStopError, s.excursions, s.inAttack, s.late, s.worstBack, s.phaseT[3], s.phaseT[2], s.phaseT[4], s.phaseT[7],
+                               s.displaced, s.stopError, s.maxStopError, s.excursions, s.inAttack, s.late, s.worstBack, s.swings, s.chainMax, s.travelStarts, s.travelSwings,
+                               s.laneT > 0.5f ? 100.0f * (1.0f - s.laneBlockedT / s.laneT) : -1.0f, s.repointsN, s.phaseT[3], s.phaseT[2], s.phaseT[4], s.phaseT[7],
                                s.phaseT[6], s.phaseT[1], s.attacks, s.shots, a_minutesT, s.dropped ? 1 : 0, s.genChanges, s.applied, s.passed, s.state, s.timeline);
         }
 
@@ -324,6 +396,11 @@ namespace MFO::SelfTest {
             const auto& leg = t.legs[r.leg];
             auto&       s   = r.st;
             ReleaseClaim(a_id);
+            if (r.repointTicket) { TakePlan(r.repointTicket); r.repointTicket = 0; }
+            const float laneShare = s.laneT > 0.5f ? 1.0f - s.laneBlockedT / s.laneT : -1.0f;
+            if (r.bow && leg.kind == Kind::Stand && s.laneT >= 3.0f && laneShare < kT.laneMin && !r.endWhy.starts_with("INVALID"))
+                r.endWhy = std::format("INVALID: his line to the foe was clear only {:.0f}% of the held time (needs {:.0f}%, {} re-point(s)); the bow could not have shot", 100 * laneShare,
+                                       100 * kT.laneMin, r.repoints);
             const bool invalid = r.endWhy.starts_with("INVALID") || r.endWhy.find("CombatEnded") != std::string::npos || r.endWhy.starts_with("the foe died");
             if (invalid && r.redo < 2) {   // it measured the wrong thing: again (bounded)
                 ++r.redo;
@@ -334,7 +411,7 @@ namespace MFO::SelfTest {
             if (s.out && s.outT > MayBeOut(s)) CloseExcursion(s);   // still out at the leg's end and already late
             const bool  order = leg.kind != Kind::Free;   // under an order only the held time counts
             const float over  = order ? s.heldT : s.t;
-            const int   hits  = (r.bow ? s.shots : s.attacks) - (order ? (r.bow ? s.shots0 : s.attacks0) : 0);
+            const int   hits  = (r.bow ? s.shots : s.swings) - (order ? (r.bow ? s.shots0 : s.swings0) : 0);   // melee: swings, a chain of 8 is 8
             const float rate  = over > 1.0f ? 60.0f * static_cast<float>(hits) / over : 0.0f;
             const float drift = s.moveT > 1.0f ? s.drift / s.moveT : 0.0f;
             std::string fail, extra, note;   // note: in the RESULT and in the evidence
@@ -362,10 +439,16 @@ namespace MFO::SelfTest {
                     if (r.bow) {
                         if (inside < kT.insideBow) no(std::format("inside {:.1f}% < {:.0f}%", 100 * inside, 100 * kT.insideBow));
                         if (s.maxD > leg.radius + kT.maxBow) no(std::format("max {:.0f} > R + {:.0f}", s.maxD, kT.maxBow));
+                    } else if (leg.minInside > 0.0f && inside < leg.minInside) {   // a floor lunges do not excuse (strict.keep: 11-25 it read PASS at 70%)
+                        no(std::format("inside {:.1f}% < the {:.0f}% floor", 100 * inside, 100 * leg.minInside));
                     } else if (inside < kT.insideMelee && s.late > 0) {   // lunges are allowed: either inside, or every excursion walked back in time
                         no(std::format("inside {:.1f}% < {:.0f}% and {} of {} excursions walked back late (worst {:.1f}s over)", 100 * inside, 100 * kT.insideMelee, s.late,
                                        s.excursions, s.worstOver));
                     }
+                    // Harbinger refuses new attacks while he travels or returns (11-25 fix 2): a melee leg sees none begin there. A swing that was already
+                    // under way continues and a chained follow-up is the combo seat's (fix 7), so those are data only.
+                    if (!r.bow && s.travelStarts > 0)
+                        no(std::format("{} attack(s) BEGAN while travelling or returning ({} swing(s) in those phases, longest chain {})", s.travelStarts, s.travelSwings, s.chainMax));
                     // the rate: only a whole leg against a baseline of the same test
                     if (leg.kind == Kind::Stand && leg.judge && t.legs.front().kind == Kind::Free) {   // the stand_* rows
                         const float need = (r.bow ? kT.rateBow : kT.rateMelee) * r.baseAtk;
@@ -469,7 +552,9 @@ namespace MFO::SelfTest {
                 r.phaseT = 0.0f;
                 r.ending = false;
                 r.endWhy.clear();
-                r.ticket = leg.kind == Kind::Free ? 0 : PostPlan(c.id, r.foe);
+                r.repointTicket = 0;
+                r.repoints      = 0;
+                r.ticket = leg.kind == Kind::Free ? 0 : PostPlan(c.id, r.foe, r.bow);
                 r.phase  = leg.kind == Kind::Free ? Phase::Filing : Phase::Planning;
                 return Step::Continue();
             }

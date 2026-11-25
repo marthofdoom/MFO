@@ -477,4 +477,24 @@ namespace MFO::Sightline {
         return false;
     }
 
+    // Same test from a POINT (the caster's body is not at it yet): the strict-order dev client picks a point with a lane before he stands there.
+    bool TeammateInFireLineFrom(RE::FormID a_caster, const RE::NiPoint3& a_from, RE::FormID a_target) {
+        auto* cf = a_caster ? RE::TESForm::LookupByID<RE::Actor>(a_caster) : nullptr;
+        auto* tf = a_target ? RE::TESForm::LookupByID<RE::Actor>(a_target) : nullptr;
+        if (!cf || !tf) return false;   // fail open, as above
+        const auto tpos = tf->GetPosition();
+        if (auto* pc = RE::PlayerCharacter::GetSingleton();
+            pc && pc != tf && pc != cf && SegDist(pc->GetPosition(), a_from, tpos) <= kFireLinePad)
+            return true;
+        if (auto active = Followers::ActiveSnapshot()) {
+            for (const RE::FormID id : *active) {
+                auto* ally = RE::TESForm::LookupByID<RE::Actor>(id);
+                if (!ally || ally == cf || ally == tf) continue;
+                if (ally->IsDead() || !ally->Is3DLoaded()) continue;
+                if (SegDist(ally->GetPosition(), a_from, tpos) <= kFireLinePad) return true;
+            }
+        }
+        return false;
+    }
+
 }

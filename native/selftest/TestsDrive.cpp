@@ -274,6 +274,9 @@ namespace MFO::SelfTest {
             if (chan || NowMs() - s.n[4] < 1500.0) return Step::Continue();   // still channelling (or just ended)
             if (!applies)
                 return Step::Info("parity does NOT apply to this follower and spell (the engine cost stands); " + s.note);
+            // 11-25 field: "the channel lasted only -131808.6 s" -- n[4] is the last channel-open stamp and stays 0 when the channel was never seen
+            // open (a cast the sampler missed), and the difference was against the epoch.
+            if (!(s.n[4] > 0.0)) return Step::Retry("the channel was never seen open by the sampler (no drain to read); " + s.note);
             const auto [t1, p1] = g_cs[static_cast<std::size_t>(s.n[2])];
             const double dt = (s.n[4] - t1) / 1000.0;
             if (dt < 3.0) return Step::Retry(std::format("the channel lasted only {:.1f}s (needs >= 3 s to read a rate); {}", dt, s.note));
@@ -365,6 +368,11 @@ namespace MFO::SelfTest {
             r.rows.push_back(Row(Vocab::kCondAlways, Vocab::kActCastSelf, w));
             AddFightRows(r);
             r.spawn.on = true;
+            // 11-25 field: the default mudcrab died before the second buff could be cast and a ward could land (the fight ended early, "landed 0"). A foe that
+            // outlives the window, on clear ground.
+            r.spawn.health    = 20000.0f;
+            r.spawn.clearSpot = true;
+            r.spawn.respawns  = 2;
         }
         bool EffectUp(RE::Actor* a, RE::SpellItem* sp) {
             const auto fx = a ? EffectMirror::Get(a) : nullptr;   // INVARIANTS #84: the main-built mirror (not yet = not up: a step polls again)

@@ -127,6 +127,8 @@ namespace MFO::Sightline {
     // Unresolvable ids fail OPEN (false): this is a hold on friendly fire,
     // never a wall that silently disables the cast rule.
     bool TeammateInFireLine(RE::FormID a_caster, RE::FormID a_target);
+    // The same test with the caster standing at a_from instead of where he is (a point still to be taken). Any thread. Fails open.
+    bool TeammateInFireLineFrom(RE::FormID a_caster, const RE::NiPoint3& a_from, RE::FormID a_target);
 
     // Session teardown, same shape as every sibling module: the cache keys are
     // this-session FormID pairs and must not survive a revert.
