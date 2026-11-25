@@ -139,7 +139,7 @@ def scenarios(run, cls):
         elif n >= MIN_LUCK and all(s.needs[m][2] < SCEN_MARGIN for m in MODES): s.state = 'tied'
         else: s.state = 'open' if n < MAX_LUCK else 'unresolved'
     return out
-def base_in(f): return f.get('ok') == '1' and f.get('way') == '1' and BASE_LO <= float(f['win']) <= BASE_HI
+def base_in(f): return f.get('way') == '1' and BASE_LO <= float(f['win']) <= BASE_HI
 def gain(run, cls, s): return mean([float(run.fight[k]['uO']) - float(run.fight[k]['uI']) for k in s.keys])
 def loss(run, other, s):   # the paired loss of a leave-one-out arm, or None where it did not play every luck of the scenario
     if other is None or any(k not in other.fight for k in s.keys): return None

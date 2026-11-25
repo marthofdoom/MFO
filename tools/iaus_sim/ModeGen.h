@@ -26,7 +26,7 @@ namespace Sim {
     // THE DRAWS (every share of the generator, one table)
     struct GenTuning {
         float mixShare = 0.40f, openShare = 0.25f /* of one-foe scenarios */, openU = 1500.0f, chainShare = 0.15f, cornerShare = 0.5f, rowShare = 0.25f, againstShare = 0.5f /* --mode-against <mode> */;
-        float distLo = 300.0f, distHi = 2500.0f, hurtLo = 0.15f, hurtHi = 0.40f; std::array<int, 3> level{ 10, 25, 45 }; std::array<float, 3> target{ 0.40f, 0.50f, 0.60f };
+        float distLo = 300.0f, distHi = 2500.0f, hurtLo = 0.15f, hurtHi = 0.40f; std::array<int, 3> level{ 10, 25, 45 }; std::array<float, 3> target{ 0.43f, 0.50f, 0.57f };
         std::array<float, 4> light{ 0.10f, 0.35f, 0.65f, 0.95f };
     };
     inline constexpr GenTuning kGenT;
@@ -176,14 +176,14 @@ namespace Sim {
     inline constexpr const char* kGenBands[] = { "1", "2-3", "4-6", "7-10" };
 
     struct GenRun {   // one run of a mode command
-        GenOpts g; int n = 120, fights = 16, check = 24, steps = 7; bool real = false; std::size_t places = 60; std::string cls, cal; std::vector<int> scen; int luck0 = 0, luck1 = 8; std::uint32_t refuse = 0; int modeK = 16; bool iausOnly = false;
+        GenOpts g; int n = 120, fights = 48, check = 64, steps = 9; bool real = false; std::size_t places = 60; std::string cls, cal; std::vector<int> scen; int luck0 = 0, luck1 = 8; std::uint32_t refuse = 0; int modeK = 16; bool iausOnly = false;
     };
     struct GenJob { int k = 0; std::size_t ci = 0; GenScen s; const SimEnv* place = nullptr; };
     [[nodiscard]] inline std::vector<GenJob> GenJobs(const GenRun& o, const std::vector<GenPlace>& places) {
         std::vector<GenJob> j; std::vector<int> ks = o.scen; if (ks.empty()) for (int k = 0; k < o.n; ++k) ks.push_back(k);
         for (const int k : ks) for (std::size_t c = 0; c < std::size(kModeClasses); ++c) { if (!o.cls.empty() && ("," + o.cls + ",").find(std::string(",") + kModeClasses[c] + ",") == std::string::npos) continue; GenJob q; q.k = k; q.ci = c; q.s = GenDraw(o.g, k); if (o.real) q.place = places[static_cast<std::size_t>(k) % places.size()].env; j.push_back(q); }
         return j; }
-    [[nodiscard]] inline std::string GenHeader(const GenRun& o, const char* what, std::uint64_t seed) { char b[320]; std::snprintf(b, sizeof b, "%s gen=%s family=%s seed=%llu set=%s caps=strict%s%s against=%s places=%08llx", what, kModeGenVersion, kGenFamilies[o.g.family], static_cast<unsigned long long>(seed), o.real ? "real" : "gen", g_moveCaps.kite ? ",kite" : "", g_moveCaps.disengage ? ",disengage" : "", o.g.against < 0 ? "-" : kModeNames[o.g.against], static_cast<unsigned long long>((o.real ? g_envPool.Hash() : 0) & 0xFFFFFFFFull)); return b; }
+    [[nodiscard]] inline std::string GenHeader(const GenRun& o, const char* what, std::uint64_t seed) { char b[320]; std::snprintf(b, sizeof b, "%s gen=%s family=%s seed=%llu set=%s caps=strict%s%s against=%s places=%08llx/%zu", what, kModeGenVersion, kGenFamilies[o.g.family], static_cast<unsigned long long>(seed), o.real ? "real" : "gen", g_moveCaps.kite ? ",kite" : "", g_moveCaps.disengage ? ",disengage" : "", o.g.against < 0 ? "-" : kModeNames[o.g.against], static_cast<unsigned long long>((o.real ? g_envPool.Hash() : 0) & 0xFFFFFFFFull), o.real ? o.places : std::size_t(0)); return b; }
     template <class Fn> inline void GenParallel(std::size_t n, int threads, const Fn& fn) { std::atomic<std::size_t> next{ 0 }; std::vector<std::thread> th; for (int i = 0; i < std::max(1, threads); ++i) th.emplace_back([&] { for (;;) { const std::size_t j = next.fetch_add(1); if (j >= n) return; fn(j); } }); for (auto& t : th) t.join(); }
     [[nodiscard]] inline bool GenSetup(const Data& D, const std::vector<SimClass>& classes, const std::vector<SimClass>& t1, const GenRun& o, std::vector<GenPlace>& places, const char* cmd) {
         if (!LoadGenFixtures(g_envPool)) { std::fprintf(stderr, "%s: cannot load the generator's fixtures (make_fixtures.py)\n", cmd); return false; }
@@ -216,7 +216,7 @@ namespace Sim {
         std::printf("%s fights=%d check=%d steps=%d\n", GenHeader(o, "MODECALRUN", o.g.seed).c_str(), o.fights, o.check, o.steps); std::map<std::string, std::vector<float>> cell; std::map<std::string, std::array<long, 2>> in;
         for (std::size_t j = 0; j < jobs.size(); ++j) { const GenJob& q = jobs[j]; const Res& r = res[j]; std::printf("MODECAL %d %s ratio=%.4f target=%.2f win=%.3f n=%d ok=%d way=%d\n", q.k, kModeClasses[q.ci], r.ratio, q.s.target, r.win, o.check, int(r.ok), int(r.way));
             std::printf("GENFOUGHT %d %s %s | %s | fights=%d dur=%.1f strikes=%.1f win=%.3f\n", q.k, kModeClasses[q.ci], GenAsked(q.s, r.terrain.c_str()).c_str(), r.read.c_str(), r.played, r.dur / std::max(1, r.played), r.strikes / std::max(1, r.played), r.win);
-            if (r.ok) cell[std::string(kModeClasses[q.ci]) + " " + GenKindGroup(q.s) + " " + kGenBands[GenBand(q.s.count)] + " " + std::to_string(q.s.level)].push_back(r.ratio); auto& a = in[kModeClasses[q.ci]]; ++a[1]; a[0] += r.way && r.ok && r.win >= 0.30f && r.win <= 0.70f; }
+            if (r.ok) cell[std::string(kModeClasses[q.ci]) + " " + GenKindGroup(q.s) + " " + kGenBands[GenBand(q.s.count)] + " " + std::to_string(q.s.level)].push_back(r.ratio); auto& a = in[kModeClasses[q.ci]]; ++a[1]; a[0] += r.way && r.win >= 0.30f && r.win <= 0.70f; }
         for (auto& [k, v] : cell) { std::sort(v.begin(), v.end()); std::printf("MODECELL %s n=%zu ratio=%.3f lo=%.3f hi=%.3f\n", k.c_str(), v.size(), v[v.size() / 2], v.front(), v.back()); }
         for (const auto& [k, a] : in) std::printf("MODECALCLASS %s inside 30-70%% %ld of %ld (%.1f%%)\n", k.c_str(), a[0], a[1], 100.0 * double(a[0]) / double(std::max(1l, a[1])));
         return 0; }

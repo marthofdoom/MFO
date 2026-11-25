@@ -863,10 +863,11 @@ static int RealMain(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--mode-cover")) modeCover = true;
         else if (!std::strcmp(argv[i], "--mode-test")) modeTest = true;
         else if (!std::strcmp(argv[i], "--mode-n") && i + 1 < argc) modeOpts.n = std::max(0, std::atoi(argv[++i]));
-        else if (!std::strcmp(argv[i], "--mode-fights") && i + 1 < argc) modeOpts.fights = std::max(2, std::atoi(argv[++i]));
+        else if (!std::strcmp(argv[i], "--mode-fights") && i + 1 < argc) gen.fights = modeOpts.fights = std::max(2, std::atoi(argv[++i]));
         else if (!std::strcmp(argv[i], "--mode-class") && i + 1 < argc) modeOpts.cls = argv[++i];
         else if (!std::strcmp(argv[i], "--mode-null")) modeOpts.null = true;
         else if (!std::strcmp(argv[i], "--mode-gen")) modeRun = 1;   // S5-D, ModeGen.h / ModeAccept.h
+        else if (!std::strcmp(argv[i], "--mode-unit")) return RunModeUnit();
         else if (!std::strcmp(argv[i], "--mode-calib")) modeRun = 2;
         else if (!std::strcmp(argv[i], "--mode-accept")) modeRun = 3;
         else if (!std::strcmp(argv[i], "--mode-source") && i + 1 < argc) { const std::string v = argv[++i]; if (v != "cells" && v != "gen") { std::fprintf(stderr, "--mode-source cells|gen\n"); return 2; } modeOpts.gen = v == "gen"; }
@@ -1114,7 +1115,7 @@ static int RealMain(int argc, char** argv) {
         if (spotTest) return RunSpotTests(D, allClasses, seed, threads);
         modeOpts.real = !envSet.empty() || !envFile.empty();
         if (modeCover) return RunModeCover(D, allClasses, seed, modeOpts.real);
-        gen.g.seed = seed; gen.n = std::max(1, modeOpts.n); gen.real = modeOpts.real; gen.cls = modeOpts.cls; if (modeRun == 2) gen.fights = std::min(modeOpts.fights, 256); 
+        gen.g.seed = seed; gen.n = std::max(1, modeOpts.n); gen.real = modeOpts.real; gen.cls = modeOpts.cls; 
         std::vector<GenPlace> genPlaces;   // --mode-test --mode-source gen: the forced arms on the generator's scenarios (the residue arms of s5-plan.md 9, DESIGN seeds). Difficulty from --mode-cal, else 1.1
         if (modeTest && modeOpts.gen) { if (!GenSetup(D, allClasses, t1, gen, genPlaces, "--mode-test")) return 2; auto cal = std::make_shared<CalTable>(); std::string err; if (!gen.cal.empty() && !GenLoadCal(gen, *cal, err)) { std::fprintf(stderr, "--mode-test: %s\n", err.c_str()); return 2; }
             std::printf("%s cal=%s\n", GenHeader(gen, "MODETESTGEN", seed).c_str(), gen.cal.empty() ? "none" : "table");
