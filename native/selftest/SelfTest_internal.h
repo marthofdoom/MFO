@@ -161,13 +161,15 @@ namespace MFO::SelfTest {
     void                         RegisterAnimSession();// TestsAnim.cpp: anim.session, LAST of all
     void                         AnimSinks();          // TestsAnim.cpp, MAIN: its passive spell-cast event sink (from RegisterSinks)
     void                         ClearAnimState();     // TestsAnim.cpp: per-load caches (the UNANIMATED session counts stay)
+    void                         AnimEnd(RE::FormID a_follower);   // TestsAnim.cpp, WORKER, every way a run ends: the OTHER followers' dev claims of anim.self_blast
     bool                         OnlyBlockedLeft(const char* a_self);   // Runner.cpp, WORKER: no run is live and nothing but a_self can still start
     void                         HoldTick(float a_dt); // TestsHold.cpp, WORKER, every unpaused pump tick: sample the standing dev holds
     void                         HoldEnd(RE::FormID a_follower);   // WORKER, every way a run ends (Runner Finish): release his dev claims
     void                         ClearHoldState();     // TestsHold.cpp: forget every hold run and release its claims (ClearAll)
     // NavSpots.cpp, MAIN THREAD: navmesh points he can walk to (around obstacles), nearest walk first. a_why = the counts / why none.
+    // a_minWalk: points of a shorter walk are not listed (a far search must not spend the point cap near him).
     struct NavPoint { RE::NiPoint3 p{}; float walk = 0.0f; };
-    std::vector<NavPoint>        WalkPoints(RE::Actor* a_from, RE::Actor* a_foe, float a_maxWalk, std::string& a_why);
+    std::vector<NavPoint>        WalkPoints(RE::Actor* a_from, RE::Actor* a_foe, float a_maxWalk, std::string& a_why, float a_minWalk = 0.0f);
     void                         LightTick(float a_dt);// LightProbe.cpp, WORKER: [probe-light]
     void                         ClearT2State();       // TestsT2.cpp: their main-thread result cache (called by ClearTestState)
     const std::vector<ManualItem>& T2ManualItems();    // TestsT2.cpp: the T2 steps a human must judge (appended to ManualItems())

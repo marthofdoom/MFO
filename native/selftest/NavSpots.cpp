@@ -59,7 +59,7 @@ namespace MFO::SelfTest {
         }
     }
 
-    std::vector<NavPoint> WalkPoints(RE::Actor* a_from, RE::Actor* a_foe, float a_maxWalk, std::string& a_why) {
+    std::vector<NavPoint> WalkPoints(RE::Actor* a_from, RE::Actor* a_foe, float a_maxWalk, std::string& a_why, float a_minWalk) {
         std::vector<NavPoint>     out;
         std::vector<RE::NavMesh*> pool;
         Collect(a_from->GetParentCell(), pool);
@@ -91,7 +91,7 @@ namespace MFO::SelfTest {
                     const float  u = (static_cast<float>(i) + 1.0f / 3.0f) / static_cast<float>(k), v = (static_cast<float>(j) + 1.0f / 3.0f) / static_cast<float>(k);
                     const auto   p = c[0] + (c[1] - c[0]) * u + (c[2] - c[0]) * v;
                     const float  w = n.g + n.at.GetDistance(p);
-                    if (w > a_maxWalk) continue;
+                    if (w > a_maxWalk || w < a_minWalk) continue;
                     const auto   q = [](float f) { return static_cast<std::uint64_t>(static_cast<std::uint32_t>(static_cast<std::int32_t>(std::floor(f / 60.0f))) & 0x1FFFFF); };
                     if (cells.insert((q(p.x) << 42) | (q(p.y) << 21) | q(p.z)).second) out.push_back({ p, w });   // one point per 60 u
                 }

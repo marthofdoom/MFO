@@ -483,6 +483,7 @@ namespace MFO::SelfTest {
         }
         void FinishStep(RE::FormID a_id, Run& a_run, const Step& a_step, const char* a_word, bool a_error, std::chrono::seconds a_backoff) {
             StrictEnd(a_id);
+            AnimEnd(a_id);
             HoldEnd(a_id);   // G0b: his dev claims (ch.24 hold, ch.33 quiet style) never outlive the run
             const auto* d    = a_run.def;
             const bool  done = a_step.v == Verdict::Pass || a_step.v == Verdict::Fail || a_step.v == Verdict::Info;

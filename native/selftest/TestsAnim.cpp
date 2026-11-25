@@ -18,6 +18,7 @@
 #include "apmf/APMFBridge.h"
 #include "cast/Actuation.h"
 #include "classes/Classes.h"
+#include "iaus/AreaActors.h"
 #include "iaus/AreaCensus.h"
 #include "iaus/EffectMirror.h"
 #include "iaus/Engine.h"
@@ -115,7 +116,7 @@ namespace MFO::SelfTest {
                 if (!Followers::IsTrackedFast(id)) return RE::BSEventNotifyControl::kContinue;
                 std::lock_guard lk(g_fireMx);
                 g_fires.push_back({ id, a_e->spell, NowMs() });
-                while (g_fires.size() > 128) g_fires.pop_front();
+                while (g_fires.size() > 512) g_fires.pop_front();   // the whole party casts in a 330 s run
                 return RE::BSEventNotifyControl::kContinue;
             }
         };
@@ -601,41 +602,347 @@ namespace MFO::SelfTest {
 
 
         // ── anim.self_blast (M4) ────────────────────────────────────────────────────────────────
-        // A lent Self hostile-area blast (picked at runtime by the shared readers, Scan().areaBlasts: the smallest guard first), a foe placed INSIDE its radius, and nobody
-        // friendly within the guard. LEG 1: the claim (the [buff] SELF BLAST line), ONE animated cast per claim, the foe hit, no UNANIMATED. LEG 2: once someone stands in the PARTY PAD ring
-        // (past the blast's reach, inside the guard's pad), NO cast while inside and no standing claim afterwards. LEG 3: once clear again, a cast while the foe remains.
-        // SAFETY: nothing here moves or hurts the player. Leg 1 starts only with the player and every party member beyond the pad; leg 2 is judged only while the
-        // nearest friend is OUTSIDE the blast's own reach (guard units + 96), so a failed guard still cannot reach him. A leg nobody stands in is SKIPPED, never forced.
-        // Per run state (WORKER-ONLY), keyed by the follower; cleared by ClearAnimState and at Begin.
-        struct SelfBlastRun {
-            bool   fired = false, leg1 = false, ring = false, leg2 = false, clearSeen = false;
-            float  firedAt = 0, clearAt = 0, ringAt = 0, clearSecs = 0, lastElapsed = 0, foeHp = 0;
-            int    firesAtClear = 0, firesGrace = 0;
-            bool   graceTaken = false;
-            std::string leg1Note, leg2Note;
+        // A lent Self hostile-area blast (picked at runtime by the shared readers, Scan().areaBlasts: the smallest guard first). THE TEST ARRANGES EVERYTHING, the player does nothing:
+        //   Plan    a navmesh point (NavSpots) at least guard + body + ally margin + safety margin from the player and every other follower (and clear of bystanders).
+        //   Travel  one dev Stand order (DevHold, strict where served, else the plain point hold) takes him there in the fight; every OTHER follower is held where he stands.
+        //           Our own foe is set down inside the hostile radius on the main thread (bounded).
+        //   Leg 1   the claim ([buff] SELF BLAST), one animated cast per claim, the foe hit BY THE BLAST (FoeHit: spell id / proxy / magic effect, never a health step alone).
+        //   Leg 2   another follower is re-pointed into the PARTY PAD ring (past the blast's reach, inside the pad): no cast for the dwell, no standing claim. None = not judged.
+        //   Leg 3   he is sent back to his place: a cast again.
+        // SAFETY: the ring is past the blast's own reach, so a failed guard cannot hurt the ally; the player is never moved. Numbers: kB.
+        // All claims are released at every end (AnimEnd for the others, HoldEnd for him); the foe is the run's own fixture.
+        struct BlastTuning {
+            float reachPad = 96.0f;       // a friend counts for leg 2 only this far past the blast's own reach
+            float clearPad = 64.0f;       // leg 1 / 3 "clear": past the pad by this much (the census margin has hysteresis)
+            float planSlack = 48.0f;      // a point this much better than needed is taken first
+            float maxWalk = 4500.0f, allyWalk = 2500.0f;
+            float radius = 32.0f, radiusPlain = 64.0f;   // Stand order / plain hold
+            float bookWait = 20.0f, planWait = 8.0f, travelWait = 50.0f, allyWait = 45.0f, leg2Max = 75.0f, leg3Cast = 40.0f;
+            float dwell = 8.0f, grace = 2.0f;   // grace: a charge already in flight is the engine's, not MFO's, to cut
+            float foeFar = 3.0f, placeEvery = 6.0f;
+            int   placements = 8, refiles = 4, plans = 2, recasts = 3;
+            float careEvery = 3.0f;
+            double hitBefore = 250.0, hitAfter = 3500.0;   // ms round the cast
         };
-        std::unordered_map<RE::FormID, SelfBlastRun>                           g_selfBlast;   // WORKER-ONLY
-        std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point>  g_selfBlastWait;   // WORKER-ONLY: since when the party stood too close
-        constexpr float kBlastReachPad  = 96.0f;    // leg 2 only counts a friend this far past the blast's own reach
-        constexpr float kBlastClearPad  = 64.0f;    // leg 1 / 3 "clear": past the pad by this much (the census margin has hysteresis)
-        constexpr float kBlastGiveUpSec = 150.0f;   // leg 1 never started because the party never stood clear: SKIP
+        constexpr BlastTuning kB{};
+        enum class SbPhase : std::uint8_t { Book, Plan, Travel, Leg1, Leg1Read, RingPlan, RingWalk, Dwell, Back, Leg3 };
+        struct SbHeld { RE::FormID id = 0; RE::NiPoint3 pt{}; int refiles = 0; float at = 0; };
+        struct SelfBlastRun {
+            SbPhase       phase = SbPhase::Book;
+            float         phaseAt = 0, lastElapsed = 0, secs = 0, careAt = 0, farSecs = 0, placeAt = -99, padSecs = 0, ringSecs = 0;
+            std::uint32_t ticket = 0, placeTicket = 0;
+            int           plans = 0, placements = 0, refiles = 0, firesSeen = 0, firesMark = 0, recasts = 0;
+            bool          filed = false, strict = false, graceTaken = false;
+            float         refileAt = 0;
+            RE::NiPoint3  pt{}, home{};
+            std::vector<SbHeld> held;
+            std::vector<std::pair<RE::FormID, double>> proxies;   // a proxy of this blast's claim, and since when (a pool slot may have served another spell before)
+            RE::FormID    ally = 0;
+            double        fireMs = 0;
+            float         fireFoeDist = -1, hpBefore = 0, hpPrev = 0;
+            std::string   planWhy, leg1Note, leg2Note, placeWhy;
+        };
+        std::unordered_map<RE::FormID, SelfBlastRun> g_selfBlast;   // WORKER-ONLY
+
+        // ── passive hit sinks (any thread, ids only): what reached whom by which spell / magic effect ──
+        struct BlastHit { RE::FormID cause = 0, target = 0, source = 0, mgef = 0; double ms = 0; };
+        std::mutex           g_blastMx;   // leaf
+        std::deque<BlastHit> g_blastHits;
+        void NoteBlastHit(const BlastHit& a_h) {
+            std::lock_guard lk(g_blastMx);
+            g_blastHits.push_back(a_h);
+            while (g_blastHits.size() > 256) g_blastHits.pop_front();
+        }
+        class BlastHitSink final : public RE::BSTEventSink<RE::TESHitEvent>, public RE::BSTEventSink<RE::TESMagicEffectApplyEvent> {
+        public:
+            static BlastHitSink* GetSingleton() { static BlastHitSink s; return &s; }
+            RE::BSEventNotifyControl ProcessEvent(const RE::TESHitEvent* a_e, RE::BSTEventSource<RE::TESHitEvent>*) override {
+                if (a_e && a_e->cause && a_e->target && a_e->source && Followers::IsTrackedFast(a_e->cause->GetFormID()))
+                    NoteBlastHit({ a_e->cause->GetFormID(), a_e->target->GetFormID(), a_e->source, 0, NowMs() });
+                return RE::BSEventNotifyControl::kContinue;
+            }
+            RE::BSEventNotifyControl ProcessEvent(const RE::TESMagicEffectApplyEvent* a_e, RE::BSTEventSource<RE::TESMagicEffectApplyEvent>*) override {
+                if (a_e && a_e->caster && a_e->target && Followers::IsTrackedFast(a_e->caster->GetFormID()))
+                    NoteBlastHit({ a_e->caster->GetFormID(), a_e->target->GetFormID(), 0, a_e->magicEffect, NowMs() });
+                return RE::BSEventNotifyControl::kContinue;
+            }
+        };
+
+        // ── the main-thread jobs ──
+        struct SbSpot { bool ok = false; RE::NiPoint3 pt{}; std::string why; };
+        std::mutex                                g_sbMx;   // leaf
+        std::unordered_map<std::uint32_t, SbSpot> g_sbSpots;
+        std::uint32_t                             g_sbTicket = 1;   // WORKER
+        template <class Job> std::uint32_t PostSpot(Job a_job) {
+            const auto t = g_sbTicket++;
+            MainThread::Post([t, job = std::move(a_job)]() {
+                SbSpot s = job();
+                std::lock_guard lk(g_sbMx);
+                g_sbSpots[t] = std::move(s);
+            });
+            return t;
+        }
+        std::optional<SbSpot> TakeSpot(std::uint32_t a_t) {
+            std::lock_guard lk(g_sbMx);
+            const auto it = g_sbSpots.find(a_t);
+            if (it == g_sbSpots.end()) return std::nullopt;
+            auto s = std::move(it->second);
+            g_sbSpots.erase(it);
+            return s;
+        }
+        // MAIN. Somebody else than the run's foe fights the player: the test yields.
+        RE::FormID PlayerFoeOther(RE::FormID a_foe) {
+            auto*      pc = RE::PlayerCharacter::GetSingleton();
+            auto*      pl = RE::ProcessLists::GetSingleton();
+            RE::FormID who = 0;
+            if (pc && pl)
+                pl->ForEachHighActor([&](RE::Actor* x) {
+                    if (!x || x == pc || x->GetFormID() == a_foe || x->IsDead() || x->GetActorRuntimeData().currentCombatTarget.get().get() != pc)
+                        return RE::BSContainer::ForEachResult::kContinue;
+                    who = x->GetFormID();
+                    return RE::BSContainer::ForEachResult::kStop;
+                });
+            return who;
+        }
+        // MAIN. The nearest walk whose end is a_need from the player and every a_friends member, and a_byNeed from every other actor that is no foe of his.
+        SbSpot PlanFar(RE::FormID a_f, RE::FormID a_foe, const std::vector<RE::FormID>& a_friends, float a_need, float a_byNeed) {
+            SbSpot o;
+            auto*  f  = RE::TESForm::LookupByID<RE::Actor>(a_f);
+            auto*  pc = RE::PlayerCharacter::GetSingleton();
+            if (!f || !pc || f->IsDead() || !f->Is3DLoaded()) { o.why = "the follower is gone"; return o; }
+            if (const auto other = PlayerFoeOther(a_foe)) { o.why = std::format("the player is fought by {:08X}", other); return o; }
+            auto* foe = a_foe ? RE::TESForm::LookupByID<RE::Actor>(a_foe) : nullptr;
+            std::vector<RE::NiPoint3> fr{ pc->GetPosition() }, by;
+            for (const auto id : a_friends)
+                if (auto* a = RE::TESForm::LookupByID<RE::Actor>(id); a && !a->IsDead() && a->Is3DLoaded()) fr.push_back(a->GetPosition());
+            if (auto* pl = RE::ProcessLists::GetSingleton())
+                pl->ForEachHighActor([&](RE::Actor* x) {
+                    if (x && x != f && x != pc && x != foe && !x->IsDead() && !x->IsDisabled() && x->Is3DLoaded() && !x->IsCommandedActor() &&
+                        std::find(a_friends.begin(), a_friends.end(), x->GetFormID()) == a_friends.end() && (x->IsPlayerTeammate() || !x->IsHostileToActor(f)))
+                        (x->IsPlayerTeammate() ? fr : by).push_back(x->GetPosition());
+                    return RE::BSContainer::ForEachResult::kContinue;
+                });
+            const auto  me   = f->GetPosition();
+            const float skip = std::max(0.0f, a_need - me.GetDistance(pc->GetPosition()));   // a nearer walk cannot reach it (triangle inequality), so it is not listed
+            const auto  nearest = [](const std::vector<RE::NiPoint3>& v, const RE::NiPoint3& p) {
+                float d = 1.0e9f;
+                for (const auto& q : v) d = std::min(d, q.GetDistance(p));
+                return d;
+            };
+            std::string nav;
+            float       best = 0.0f;
+            const auto  pts = WalkPoints(f, foe, kB.maxWalk, nav, skip);
+            const NavPoint* pick = nullptr;
+            for (const auto& n : pts) {
+                if (nearest(by, n.p) < a_byNeed) continue;
+                const float d = nearest(fr, n.p);
+                best = std::max(best, d);
+                if (d >= a_need + kB.planSlack) { pick = &n; break; }
+                if (d >= a_need && !pick) pick = &n;
+            }
+            if (!pick) {
+                o.why = std::format("needs {:.0f}u from the player and {} other follower(s), the best point he can walk to within {:.0f}u has {:.0f}u ({}; {} bystander(s), {:.0f}u each)",
+                                    a_need, fr.size() - 1, kB.maxWalk, best, nav, by.size(), a_byNeed);
+                return o;
+            }
+            o = { true, pick->p, std::format("walk {:.0f}u, nearest friend {:.0f}u of {:.0f}u needed ({})", pick->walk, nearest(fr, pick->p), a_need, nav) };
+            return o;
+        }
+        // MAIN. A point the ally can walk to, a_lo to a_hi from the caster (the middle first).
+        SbSpot PlanRing(RE::FormID a_ally, RE::FormID a_caster, float a_lo, float a_hi) {
+            SbSpot o;
+            auto*  a = RE::TESForm::LookupByID<RE::Actor>(a_ally);
+            auto*  f = RE::TESForm::LookupByID<RE::Actor>(a_caster);
+            if (!a || !f || a->IsDead() || !a->Is3DLoaded()) { o.why = "the ally is gone"; return o; }
+            const auto  c = f->GetPosition();
+            std::string nav;
+            const auto  pts = WalkPoints(a, nullptr, kB.allyWalk, nav, std::max(0.0f, a->GetPosition().GetDistance(c) - a_hi));
+            const float mid = (a_lo + a_hi) * 0.5f;
+            const NavPoint* pick = nullptr;
+            for (const auto& n : pts) {
+                const float d = n.p.GetDistance(c);
+                if (d < a_lo || d > a_hi) continue;
+                if (!pick) pick = &n;
+                if (std::fabs(d - mid) <= (a_hi - a_lo) * 0.25f) { pick = &n; break; }
+            }
+            if (!pick) { o.why = std::format("no point {:.0f} to {:.0f}u from the caster the ally can walk to ({})", a_lo, a_hi, nav); return o; }
+            o = { true, pick->p, std::format("{:.0f}u from the caster, walk {:.0f}u", pick->p.GetDistance(c), pick->walk) };
+            return o;
+        }
+        // MAIN. Set the run's own foe down on standable ground a_dist from the caster (never past a_max).
+        SbSpot PlaceFoe(RE::FormID a_foe, RE::FormID a_caster, float a_dist, float a_max) {
+            SbSpot o;
+            auto*  foe = RE::TESForm::LookupByID<RE::Actor>(a_foe);
+            auto*  f   = RE::TESForm::LookupByID<RE::Actor>(a_caster);
+            auto*  bo  = foe ? foe->GetBaseObject() : nullptr;
+            if (!f || !foe || foe->IsDead() || foe->IsDisabled() || !bo || bo->GetFormID() != VanillaForm(SpawnSpec{}.baseLocal)) { o.why = "the foe is gone"; return o; }
+            if (const auto other = PlayerFoeOther(a_foe)) { o.why = std::format("the player is fought by {:08X}", other); return o; }
+            for (int i = 0; i < 8; ++i) {
+                std::uint32_t st = 0;
+                RE::NiPoint3  p{};
+                if (!APMFBridge::FindStandPoint(a_caster, f->GetAngleZ() + 0.7854f * static_cast<float>(i), a_dist, 40.0f, p, st)) continue;
+                const float d = f->GetPosition().GetDistance(p);
+                if (d < 60.0f || d > a_max) continue;
+                foe->SetPosition(p, true);
+                o = { true, p, std::format("set down {:.0f}u from him", d) };
+                return o;
+            }
+            o.why = std::format("no standable ground {:.0f}u round him", a_dist);
+            return o;
+        }
+        // The caster's lost health and magicka are given back while the test runs (the test must not cost him the fight, and a hold must not be an empty pool).
+        void PostCare(RE::FormID a_f) {
+            MainThread::Post([a_f]() {
+                auto* f   = RE::TESForm::LookupByID<RE::Actor>(a_f);
+                auto* avo = f && !f->IsDead() ? f->AsActorValueOwner() : nullptr;
+                if (!avo) return;
+                for (const auto av : { RE::ActorValue::kHealth, RE::ActorValue::kMagicka })
+                    if (const float lost = -f->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kDamage, av); lost > 0.0f)
+                        avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, av, lost);
+            });
+        }
+
+        std::vector<RE::FormID> OtherFollowers(RE::FormID a_id) {
+            std::vector<RE::FormID> out;
+            if (const auto snap = Followers::ActiveSnapshot())
+                for (const auto id : *snap) {
+                    auto* a = id == a_id ? nullptr : RE::TESForm::LookupByID<RE::Actor>(id);
+                    if (a && !a->IsDead() && !a->IsDisabled() && a->Is3DLoaded()) out.push_back(id);
+                }
+            return out;
+        }
         // The nearest friend (player or another party member): his distance from the follower, or a huge number. WORKER read.
         float NearestFriend(Ctx& c) {
             float best = 1.0e9f;
             const auto me = c.follower->GetPosition();
             if (auto* pc = RE::PlayerCharacter::GetSingleton()) best = std::min(best, pc->GetPosition().GetDistance(me));
-            if (const auto snap = Followers::ActiveSnapshot())
-                for (const auto id : *snap) {
-                    if (id == c.id) continue;
-                    auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
-                    if (a && !a->IsDead() && a->Is3DLoaded()) best = std::min(best, a->GetPosition().GetDistance(me));
-                }
+            for (const auto id : OtherFollowers(c.id))
+                if (auto* a = RE::TESForm::LookupByID<RE::Actor>(id)) best = std::min(best, a->GetPosition().GetDistance(me));
             return best;
+        }
+        // A bystander (no friend, no foe) inside a_guard + his body + the safety margin, or the picture not ready: the guard may hold by right. "" = none.
+        std::string BystanderWhy(Ctx& c, float a_guard) {
+            std::vector<Iaus::AreaActor> rows;
+            if (AreaActors::Read(c.id, rows) != Iaus::AreaPicture::Ready) return "the area picture is not ready";
+            const auto others = OtherFollowers(c.id);
+            const auto me     = c.follower->GetPosition();
+            for (const auto& b : rows) {
+                if (b.id == 0x14 || (c.hostile && b.id == c.hostile->GetFormID()) || std::find(others.begin(), others.end(), b.id) != others.end()) continue;
+                if ((b.kind == Iaus::AreaKind::PartySummon || b.kind == Iaus::AreaKind::PlayerHorse) && !Config::g_areaSummonsBlock.load()) continue;
+                const float d = RE::NiPoint3{ b.x, b.y, b.z }.GetDistance(me);
+                if (!(d > a_guard + std::max(b.radius, Iaus::Estimate::kFireBodyPad) + Iaus::kAreaGuard.safetyMargin)) return std::format("bystander {:08X} {:.0f}u away", b.id, d);
+            }
+            return {};
         }
         const Iaus::SpellEntry* BlastEntry(const std::shared_ptr<const Iaus::Book>& a_book, RE::FormID a_spell) {
             if (a_book) for (const auto& e : a_book->entries) if (e.form == a_spell) return &e;
             return nullptr;
         }
+        // Every proxy a standing claim of THIS blast drove (leg 3 may run on another one than leg 1).
+        void NoteBlastProxy(Ctx& c) {
+            if (Actuation::StandingSelfBlast(c.id) != Spell(c)) return;
+            const auto p = APMFBridge::GetOffenseCastProxy(c.id, APMFBridge::kApmfHandLeft);
+            if (!p || std::find(c.s->set[1].begin(), c.s->set[1].end(), p) != c.s->set[1].end()) return;
+            c.s->set[1].push_back(p);
+            g_selfBlast[c.id].proxies.emplace_back(p, NowMs() - 1500.0);   // the claim is at most a step or two old
+        }
+        // His casts of the blast: the spell itself, or a proxy once its claim drove it.
+        std::pair<int, double> BlastFires(Ctx& c) {   // count, ms of the last
+            const auto& px = g_selfBlast[c.id].proxies;
+            std::pair<int, double> o{ 0, 0.0 };
+            std::lock_guard        lk(g_fireMx);
+            for (const auto& f : g_fires) {
+                if (f.caster != c.id || f.ms < c.s->n[1]) continue;
+                if (f.spell != Spell(c) && std::none_of(px.begin(), px.end(), [&](const auto& q) { return q.first == f.spell && f.ms >= q.second; })) continue;
+                ++o.first;
+                o.second = f.ms;
+            }
+            return o;
+        }
+        bool IsBlastForm(Ctx& c, RE::FormID a_f) {
+            return a_f && (a_f == Spell(c) || std::find(c.s->set[1].begin(), c.s->set[1].end(), a_f) != c.s->set[1].end());
+        }
+        // The foe was hit BY THE BLAST cast at a_ms; "" = no proof. Never a health step alone (a melee swing or a teammate could make one).
+        std::string FoeHit(Ctx& c, double a_ms) {
+            const RE::FormID foe = c.hostile ? c.hostile->GetFormID() : 0;
+            auto*            sp  = SpellForm(c);
+            if (!foe || !sp) return {};
+            std::vector<BlastHit> hits;
+            {
+                std::lock_guard lk(g_blastMx);
+                for (const auto& h : g_blastHits)
+                    if (h.cause == c.id && h.target == foe && h.ms >= a_ms - kB.hitBefore && h.ms <= a_ms + kB.hitAfter) hits.push_back(h);
+            }
+            for (const auto& h : hits)
+                if (IsBlastForm(c, h.source)) return std::format("hit event by {:08X}", h.source);
+            // Other casts round the blast: his own that carry the same magic effect, or the same spell by another follower, make the weaker proofs ambiguous.
+            std::vector<RE::FormID> his;
+            bool                    sameByOther = false;
+            {
+                std::lock_guard lk(g_fireMx);
+                for (const auto& f : g_fires) {
+                    if (f.ms < a_ms - 30000.0 || f.ms > a_ms + kB.hitAfter) continue;
+                    if (f.caster == c.id) { if (!IsBlastForm(c, f.spell)) his.push_back(f.spell); }
+                    else if (IsBlastForm(c, f.spell)) sameByOther = true;
+                }
+            }
+            const auto carries = [](RE::FormID a_spell, RE::FormID a_mgef) {
+                if (auto* o = RE::TESForm::LookupByID<RE::SpellItem>(a_spell))
+                    for (auto* e : o->effects) if (e && e->baseEffect && e->baseEffect->GetFormID() == a_mgef) return true;
+                return false;
+            };
+            for (const auto& h : hits) {
+                if (!h.mgef) continue;
+                bool ours = false;
+                for (auto* e : sp->effects) ours = ours || (e && e->baseEffect && e->baseEffect->IsHostile() && e->effectItem.area > 0 && e->baseEffect->GetFormID() == h.mgef);
+                if (!ours || std::any_of(his.begin(), his.end(), [&](RE::FormID o) { return carries(o, h.mgef); })) continue;
+                return std::format("magic effect {:08X} of it applied by him {:+.0f} ms from the cast", h.mgef, h.ms - a_ms);
+            }
+            if (!sameByOther)
+                if (const auto fx = EffectMirror::Get(c.hostile))
+                    for (const auto& f : fx->fx)
+                        if (f.spell && f.Live() && IsBlastForm(c, f.spell->GetFormID())) return "its effect is live on the foe";
+            return {};
+        }
+        float FoeHealth(Ctx& c) {
+            auto* avo = c.hostile ? c.hostile->AsActorValueOwner() : nullptr;
+            return avo ? avo->GetActorValue(RE::ActorValue::kHealth) : 0.0f;
+        }
+        // One ch.24 dev claim: strict where this install serves it, else the plain point hold of the g0b tests. nullptr = filed.
+        const char* FileOrder(RE::FormID a_id, const RE::NiPoint3& a_pt, bool* a_strict = nullptr) {
+            const bool strict = APMFBridge::DevStrictServe(a_id, a_pt, kB.radius).empty();
+            if (a_strict) *a_strict = strict;
+            return APMFBridge::DevHoldFile(a_id, a_pt, strict ? kB.radius : kB.radiusPlain, strict);
+        }
+        // A re-point keeps the claim's own kind; the radius follows it.
+        bool Repoint(RE::FormID a_id, const RE::NiPoint3& a_pt) {
+            return APMFBridge::DevHoldRepoint(a_id, a_pt, APMFBridge::DevStrictServe(a_id, a_pt, kB.radius).empty() ? kB.radius : kB.radiusPlain);
+        }
+        void HoldOthers(Ctx& c, SelfBlastRun& g) {
+            for (const auto id : OtherFollowers(c.id)) {
+                auto it = std::find_if(g.held.begin(), g.held.end(), [&](const SbHeld& h) { return h.id == id; });
+                if (it == g.held.end()) {
+                    auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
+                    if (!a || a->IsOnMount()) continue;
+                    SbHeld h{ id, a->GetPosition(), 0, c.elapsed };
+                    const char* no = FileOrder(id, h.pt);
+                    spdlog::info("[anim] self_blast: {:08X} held where he stands: {}", id, no ? no : "filed");
+                    g.held.push_back(h);
+                } else if (c.elapsed - it->at >= 2.0f && it->refiles < kB.refiles) {
+                    const auto info = APMFBridge::DevHoldRead(id);
+                    if (info.stands && !info.ended) continue;
+                    APMFBridge::DevHoldRelease(id);   // Harbinger ended it (his fight ended): once more, bounded
+                    ++it->refiles;
+                    it->at = c.elapsed;
+                    (void)FileOrder(id, it->pt);
+                }
+            }
+        }
+        void SetHeldPoint(SelfBlastRun& g, RE::FormID a_id, const RE::NiPoint3& a_pt) {
+            for (auto& h : g.held) if (h.id == a_id) { h.pt = a_pt; h.refiles = 0; }
+            if (!Repoint(a_id, a_pt)) { APMFBridge::DevHoldRelease(a_id); (void)FileOrder(a_id, a_pt); }
+        }
+
         const char* SelfBlastPre(Ctx& c) {
             if (const char* r = Ready(c)) return r;
             auto& s = *c.s;
@@ -649,43 +956,14 @@ namespace MFO::SelfTest {
             RE::FormID pick = Affordable(c, sc.areaBlasts);
             if (!pick) pick = sc.areaBlasts.front();
             s.set[0] = { pick };
-            const auto& rad = sc.radii.at(pick);
-            s.n[4] = rad.second;   // foe units (the foe is placed half that far)
-            s.n[5] = rad.first;    // guard units, from the record (the book's own number is read in the run)
-            // The party stands clear: past the guard + the ally pad + a margin. The follower follows the player, so this waits for the player to walk off (bounded).
-            const float need = static_cast<float>(rad.first) + Iaus::Estimate::kFireBodyPad + Iaus::kAreaGuard.selfBlastAllyMargin + Iaus::kAreaGuard.safetyMargin;
-            const float near = NearestFriend(c);
-            if (near > need) { g_selfBlastWait.erase(c.id); return nullptr; }
-            const auto now = std::chrono::steady_clock::now();
-            auto&      at  = g_selfBlastWait[c.id];
-            if (at == std::chrono::steady_clock::time_point{}) at = now;
-            if (now - at >= std::chrono::duration<float>(kBlastGiveUpSec)) {
-                s.set[0].clear();
-                s.note = std::format("the player and the party never stood more than {:.0f} units from him in {:.0f} s (the blast's guard + party pad), so the claim could not be judged", need, kBlastGiveUpSec);
-                return nullptr;
-            }
-            static char buf[200];
-            std::snprintf(buf, sizeof buf, "the player and the party more than %.0f units from him (walk away; his blast's party pad)", need);
-            return buf;
+            return nullptr;
         }
         void SelfBlastFix(Ctx& c, FixtureRequest& r) {
             if (!Spell(c) || NoLog() || NoHarbinger() || !Config::g_iausAvailable.load()) return;
             Lend(c, r, 3.0f);
-            Foe(r);
-            r.spawn.distance = std::clamp(static_cast<float>(c.s->n[4]) * 0.5f, 96.0f, 450.0f);   // INSIDE the hostile effect's radius
+            Foe(r);   // at the usual distance: the fight must exist for the ch.24 order; the foe is set down inside the radius once he stands at the point
             Snap(c, r);
             r.iaus = 1;
-        }
-        // The foe was hit: the blast's effect on him, or his health below what it was at the cast.
-        bool FoeHit(Ctx& c, float a_hpAtFire) {
-            if (!c.hostile) return false;
-            if (EffectUp(c.hostile, SpellForm(c))) return true;
-            auto* avo = c.hostile->AsActorValueOwner();
-            return avo && avo->GetActorValue(RE::ActorValue::kHealth) < a_hpAtFire - 0.5f;
-        }
-        float FoeHealth(Ctx& c) {
-            auto* avo = c.hostile ? c.hostile->AsActorValueOwner() : nullptr;
-            return avo ? avo->GetActorValue(RE::ActorValue::kHealth) : 0.0f;
         }
         Step SelfBlastStep(Ctx& c) {
             auto& s = *c.s;
@@ -695,75 +973,223 @@ namespace MFO::SelfTest {
             if (!Spell(c)) return Step::Skip(s.note.empty() ? "no self hostile area blast to lend" : s.note);
             if (!s.b[0]) { Begin(c); TempClass(c, "evoker"); g_selfBlast[c.id] = {}; return Step::Continue(); }
             auto& g = g_selfBlast[c.id];
-            NoteProxy(c);
+            NoteBlastProxy(c);
             const float dt = std::max(0.0f, c.elapsed - g.lastElapsed);
             g.lastElapsed  = c.elapsed;
-            const auto book = Iaus::SpellBook::Read(c.follower);
-            const auto* e   = BlastEntry(book, Spell(c));
-            if (!e) return Step::Continue();   // the book refreshes within ~5 s of the lend
-            const float guard = e->areaUnits, reach = guard + kBlastReachPad, pad = guard + Iaus::AreaAllyPad(*e);
-            const float near  = NearestFriend(c);
-            const bool  clear = near > pad + kBlastClearPad;
-            const auto  facts = std::format("{} guard {:.0f}u, foe radius {:.0f}u, party pad edge {:.0f}u, nearest friend {:.0f}u", Facts(c), guard, e->FoeUnits(), pad, near);
+            const auto to = [&](SbPhase p) { g.phase = p; g.phaseAt = c.elapsed; g.secs = 0; g.ticket = 0; };
+            const float in = c.elapsed - g.phaseAt;
+            if (c.elapsed - g.careAt >= kB.careEvery) { g.careAt = c.elapsed; PostCare(c.id); }
+            HoldOthers(c, g);
+            if (const auto un = Unanimated(c); !un.empty()) return End(Step::Fail("UNANIMATED: " + un + "; " + s.note));
+
+            const auto  book = Iaus::SpellBook::Read(c.follower);
+            const auto* e    = BlastEntry(book, Spell(c));
+            if (!e) {
+                if (g.phase == SbPhase::Book && c.elapsed >= kB.bookWait) return Step::Retry(std::format("the lent spell never came into his IAUS book in {:.0f} s", kB.bookWait));
+                return Step::Continue();   // the book refreshes within ~5 s of the lend
+            }
+            const float guard = e->areaUnits, foeR = e->FoeUnits(), reach = guard + kB.reachPad, pad = guard + Iaus::AreaAllyPad(*e);
+            const float byNeed = guard + Iaus::Estimate::kFireBodyPad + Iaus::AreaBystanderMargin(*e);
+            const float need   = pad + std::max(Iaus::kAreaGuard.safetyMargin, kB.clearPad);   // guard + 64 + 384 + 128
+            const float near   = NearestFriend(c);
+            const auto  by     = BystanderWhy(c, guard);
+            const bool  clear  = near > pad + kB.clearPad && by.empty();
+            const float foeD   = c.hostile ? c.hostile->GetPosition().GetDistance(c.follower->GetPosition()) : -1.0f;
+            const bool  foeIn  = c.hostile && foeD <= foeR;
+            const bool  canPay = Cost(SpellForm(c), c.follower) <= Pool(c.follower);
+            const auto  st     = APMFBridge::DevStrictRead(c.id);
+            const auto  hold   = APMFBridge::DevHoldRead(c.id);
+            const auto  facts  = std::format("{} guard {:.0f}u, foe radius {:.0f}u, party pad edge {:.0f}u, nearest friend {:.0f}u, foe {:.0f}u{}, order {} ({}{}), {} placement(s){}{}", Facts(c), guard,
+                                             foeR, pad, near, foeD, by.empty() ? std::string{} : ", " + by, g.filed ? (g.strict ? "strict" : "plain hold") : "none", hold.state,
+                                             g.strict ? std::format(", {}", APMFBridge::DevStrictPhaseName(st.phase)) : std::string{}, g.placements,
+                                             g.placeWhy.empty() ? "" : ": ", g.placeWhy);
             s.note = facts;
             const auto claimLine = Lines(Since(c), "[buff] " + Hex(c.id), Hex(Spell(c)), "SELF BLAST");
-            if (const auto un = Unanimated(c); !un.empty()) return End(Step::Fail("UNANIMATED: " + un + "; " + facts));
-            // ── leg 1 ──
-            if (!g.fired) {
-                if (Fires(c) > 0) {
-                    g.fired = true; g.firedAt = c.elapsed; g.foeHp = FoeHealth(c);
-                    if (claimLine.empty()) return End(Step::Fail("he cast it without a SELF BLAST claim ([buff] line): " + facts));
+
+            // ── every phase: a cast while a friend has been inside the pad is the guard failing (a charge in flight excepted) ──
+            const auto [fires, lastFire] = BlastFires(c);
+            const bool newFire = fires > g.firesSeen;
+            g.firesSeen = fires;
+            if (newFire && g.padSecs >= kB.grace + 1.0f)
+                return End(Step::Fail(std::format("he cast with a friend inside the pad for {:.1f} s (edge {:.0f}u); {}", g.padSecs, pad, facts)));
+            g.padSecs = near <= pad - kB.clearPad ? g.padSecs + dt : 0.0f;
+            if (newFire && claimLine.empty()) return End(Step::Fail("he cast it without a SELF BLAST claim ([buff] line): " + facts));
+
+            const bool afterLeg1 = g.phase > SbPhase::Leg1Read;
+            if (!c.inCombat) {
+                if (!afterLeg1) return Step::Retry("the fight ended first; " + facts);
+                return End(Step::Pass(g.leg1Note + "; " + (g.leg2Note.empty() ? "leg 2 not judged: the fight ended" : g.leg2Note) + "; leg 3 not judged: the fight ended; " + facts));
+            }
+            const auto endNoLeg2 = [&](const std::string& why) { return End(Step::Pass(g.leg1Note + "; leg 2 not judged: " + why + "; leg 3 not judged (it follows leg 2); " + facts)); };
+
+            // ── the order: Harbinger ended it (the fight paused) = file it again, bounded ──
+            if (g.filed && (!hold.stands || hold.ended) && c.elapsed - g.refileAt >= 2.0f && g.refiles < kB.refiles) {
+                APMFBridge::DevHoldRelease(c.id);
+                ++g.refiles;
+                g.refileAt = c.elapsed;
+                (void)FileOrder(c.id, g.pt, &g.strict);
+            }
+            // ── the foe inside the hostile radius, set down on the main thread when it is not (only once he stands clear) ──
+            if (g.placeTicket)
+                if (auto p = TakeSpot(g.placeTicket)) {
+                    g.placeTicket = 0;
+                    g.placeWhy    = p->why;
+                    if (p->ok && c.hostile) PostEngage(c.hostile->GetFormID(), c.id);
+                    else if (p->why.starts_with("the player is fought")) {
+                        if (!afterLeg1) return Step::Retry(p->why + ": the test yields; " + facts);
+                        return End(Step::Pass(g.leg1Note + "; leg 2 / 3 not judged further: " + p->why + "; " + facts));
+                    }
+                }
+            g.farSecs = c.hostile && foeD > 0.85f * foeR ? g.farSecs + dt : 0.0f;
+            if (g.phase >= SbPhase::Leg1 && !g.placeTicket && c.hostile && g.farSecs >= kB.foeFar && g.placements < kB.placements && c.elapsed - g.placeAt >= kB.placeEvery) {
+                ++g.placements;
+                g.placeAt = c.elapsed;
+                g.placeTicket = PostSpot([foe = c.hostile->GetFormID(), id = c.id, d = std::clamp(foeR * 0.5f, 80.0f, 450.0f), m = std::max(foeR * 0.85f, 100.0f)]() { return PlaceFoe(foe, id, d, m); });
+            }
+
+            switch (g.phase) {
+            case SbPhase::Book:
+                if (!c.hostile) return Step::Continue();
+                to(SbPhase::Plan);
+                return Step::Continue();
+            case SbPhase::Plan: {
+                if (!g.ticket) {
+                    g.ticket = PostSpot([id = c.id, foe = c.hostile ? c.hostile->GetFormID() : RE::FormID{}, fr = OtherFollowers(c.id), need, byNeed]() { return PlanFar(id, foe, fr, need, byNeed); });
                     return Step::Continue();
                 }
-                if (!c.inCombat) return Step::Retry("the fight ended first; " + facts);
-                if (clear && c.hostile) g.clearSecs += dt;
-                if (g.clearSecs >= kT.claimWait)
+                auto p = TakeSpot(g.ticket);
+                if (!p) return in > kB.planWait ? Step::Retry("the main-thread planner did not answer; " + facts) : Step::Continue();
+                if (!p->ok && p->why.starts_with("the player is fought")) return Step::Retry(p->why + ": the test yields; " + facts);
+                if (!p->ok) return End(Step::Skip("the blast's guard cannot be reached here: " + p->why + "; " + facts));
+                ++g.plans;
+                g.pt      = p->pt;
+                g.planWhy = p->why;
+                const char* no = nullptr;
+                if (g.filed && hold.stands && !hold.ended) { if (!Repoint(c.id, g.pt)) no = "the kept claim is gone"; }
+                else { APMFBridge::DevHoldRelease(c.id); no = FileOrder(c.id, g.pt, &g.strict); }
+                spdlog::info("[anim] self_blast: {:08X} point {:.0f},{:.0f},{:.0f} ({}): {}", c.id, g.pt.x, g.pt.y, g.pt.z, p->why, no ? no : g.strict ? "strict order" : "plain point hold");
+                if (no) return End(Step::Skip(std::format("no order can take him there: {}; {}; {}", no, p->why, facts)));
+                g.filed    = true;
+                g.refileAt = c.elapsed;
+                to(SbPhase::Travel);
+                return Step::Continue();
+            }
+            case SbPhase::Travel:
+                if (clear) { g.firesMark = fires; g.hpPrev = FoeHealth(c); to(SbPhase::Leg1); return Step::Continue(); }
+                if (in >= kB.travelWait) {
+                    if (g.plans < kB.plans) { to(SbPhase::Plan); return Step::Continue(); }
+                    return Step::Retry(std::format("he did not stand clear of the party in {} tries of {:.0f} s (point {}, he is {:.0f}u from it); {}", g.plans, kB.travelWait, g.planWhy,
+                                                   c.follower->GetPosition().GetDistance(g.pt), facts));
+                }
+                return Step::Continue();
+            case SbPhase::Leg1:
+                if (fires > g.firesMark) {
+                    g.fireMs      = lastFire;
+                    g.fireFoeDist = foeD;
+                    g.hpBefore    = g.hpPrev;
+                    to(SbPhase::Leg1Read);
+                    return Step::Continue();
+                }
+                g.hpPrev = FoeHealth(c);
+                if (clear && foeIn && canPay) g.secs += dt;
+                if (g.secs >= kT.claimWait)
                     return End(Step::Fail(std::format("no cast in {:.0f} s of a foe inside his radius with nobody within the pad; last [buff]: {}; {}", kT.claimWait,
                                                       Last(Lines(Since(c), "[buff] " + Hex(c.id), Hex(Spell(c)))), facts)));
                 return Step::Continue();
-            }
-            if (!g.leg1) {
-                if (c.elapsed - g.firedAt < kT.settle) return Step::Continue();
-                if (claimLine.empty()) return End(Step::Fail("cast but no SELF BLAST claim line: " + facts));
-                if (Fires(c) > static_cast<int>(Claims(c))) return End(Step::Fail(std::format("{} cast(s) for {} claim(s): more than one cast per claim; {}", Fires(c), Claims(c), facts)));
-                if (c.hostile && !FoeHit(c, g.foeHp)) return End(Step::Fail("the foe inside his radius was not hit (no effect on him, his health unchanged); " + facts));
-                g.leg1 = true;
-                g.leg1Note = std::format("leg 1 PASS: claim line, {} cast(s) for {} claim(s), foe {}, no UNANIMATED", Fires(c), Claims(c), c.hostile ? "hit" : "gone before the read");
+            case SbPhase::Leg1Read: {
+                const auto proof = FoeHit(c, g.fireMs);
+                if (proof.empty() && in < kT.settle) return Step::Continue();
+                if (fires > static_cast<int>(Claims(c))) return End(Step::Fail(std::format("{} cast(s) for {} claim(s): more than one cast per claim; {}", fires, Claims(c), facts)));
+                if (proof.empty()) {
+                    if (!c.hostile || g.fireFoeDist < 0.0f || g.fireFoeDist > foeR) {   // the foe was not (or no longer) in it when the cast was read: no verdict on the hit, wait for another cast
+                        if (++g.recasts >= kB.recasts) return Step::Retry(std::format("{} cast(s), the foe never inside the radius at the read; {}", g.recasts, facts));
+                        g.firesMark = fires;
+                        to(SbPhase::Leg1);
+                        return Step::Continue();
+                    }
+                    return End(Step::Fail(std::format("the foe {:.0f}u away at the cast was not hit by the blast (no hit event, effect apply or live effect of it; his health {:.0f} -> {:.0f}); {}",
+                                                      g.fireFoeDist, g.hpBefore, FoeHealth(c), facts)));
+                }
+                g.leg1Note = std::format("leg 1 PASS: claim line, {} cast(s) for {} claim(s), foe hit by the blast ({}; foe {:.0f}u away, health {:.0f} -> {:.0f}), no UNANIMATED, {}", fires, Claims(c),
+                                         proof, g.fireFoeDist, g.hpBefore, FoeHealth(c), g.planWhy);
+                spdlog::info("[anim] self_blast: {:08X} {}", c.id, g.leg1Note);
+                to(SbPhase::RingPlan);
                 return Step::Continue();
             }
-            // ── leg 2: somebody in the ring (past the blast's reach, inside the party pad) ──
-            if (!g.leg2) {
-                if (!c.inCombat || !c.hostile) return End(Step::Pass(g.leg1Note + "; leg 2 SKIP: the fight ended before anyone stood in the pad; " + facts));
-                const bool inRing = near > reach && near <= pad;
-                if (!inRing) { g.ring = false; g.graceTaken = false; return Step::Continue(); }
-                if (!g.ring) { g.ring = true; g.ringAt = c.elapsed; g.graceTaken = false; return Step::Continue(); }
-                const float dwell = c.elapsed - g.ringAt;
-                if (!g.graceTaken && dwell >= 2.0f) { g.graceTaken = true; g.firesGrace = Fires(c); return Step::Continue(); }   // a charge already in flight is the engine's, not MFO's, to cut
-                if (g.graceTaken && Fires(c) > g.firesGrace)
-                    return End(Step::Fail(std::format("he cast while a friend stood {:.0f}u away, inside the pad (edge {:.0f}u); {}", near, pad, facts)));
-                if (dwell >= 8.0f) {
-                    if (Actuation::StandingSelfBlast(c.id)) return End(Step::Fail("the blast claim still stands 8 s after a friend came inside the pad (not released); " + facts));
-                    g.leg2 = true;
-                    g.leg2Note = std::format("leg 2 PASS: no cast in {:.0f} s with a friend {:.0f}u away inside the pad, no claim left standing; last guard line: {}", dwell, near,
-                                             Last(Lines(Since(c), "[cast-guard] " + Hex(c.id), "self blast party hold")));
+            // ── leg 2: another follower in the ring (past the blast's reach, inside the party pad) ──
+            case SbPhase::RingPlan: {
+                if (!g.ally) {
+                    float best = 1.0e9f;
+                    for (const auto& h : g.held)
+                        if (auto* a = RE::TESForm::LookupByID<RE::Actor>(h.id); a && !a->IsDead() && a->Is3DLoaded())
+                            if (const float d = a->GetPosition().GetDistance(c.follower->GetPosition()); d < best) { best = d; g.ally = h.id; }
+                    if (!g.ally) return endNoLeg2("no second follower in the party (the player is never asked to move)");
                 }
+                if (!g.ticket) {
+                    g.ticket = PostSpot([a = g.ally, id = c.id, lo = reach + 48.0f, hi = pad - kB.clearPad]() { return PlanRing(a, id, lo, hi); });
+                    return Step::Continue();
+                }
+                auto p = TakeSpot(g.ticket);
+                if (!p) return in > kB.planWait ? endNoLeg2("the main-thread planner did not answer") : Step::Continue();
+                if (!p->ok) return endNoLeg2(p->why);
+                spdlog::info("[anim] self_blast: {:08X} sent into the pad ring of {:08X}: {}", g.ally, c.id, p->why);
+                for (const auto& h : g.held) if (h.id == g.ally) g.home = h.pt;
+                SetHeldPoint(g, g.ally, p->pt);
+                to(SbPhase::RingWalk);
+                return Step::Continue();
+            }
+            case SbPhase::RingWalk:
+            case SbPhase::Dwell: {
+                if (near <= guard) {   // never leave anybody inside the blast itself: he goes back, the leg is not judged
+                    SetHeldPoint(g, g.ally, g.home);
+                    return endNoLeg2(std::format("a friend came {:.0f}u close, inside the blast itself: sent back", near));
+                }
+                const bool inRing = near > reach && near <= pad - 16.0f;
+                if (g.phase == SbPhase::RingWalk) {
+                    if (inRing) { g.graceTaken = false; g.ringSecs = 0; to(SbPhase::Dwell); return Step::Continue(); }
+                    if (in >= kB.allyWait) {
+                        const auto ai = APMFBridge::DevHoldRead(g.ally);
+                        return endNoLeg2(std::format("{:08X} did not reach the ring in {:.0f} s (his order: {}, nearest friend {:.0f}u, ring {:.0f} to {:.0f}u)", g.ally, kB.allyWait, ai.state, near, reach, pad));
+                    }
+                    return Step::Continue();
+                }
+                if (g.graceTaken && newFire)
+                    return End(Step::Fail(std::format("he cast while a friend stood {:.0f}u away, inside the pad (edge {:.0f}u); {}", near, pad, facts)));
+                if (in >= kB.leg2Max) return endNoLeg2(std::format("no {:.0f} s in a row with the ally in the ring, the foe in the radius and the magicka for it in {:.0f} s", kB.dwell, kB.leg2Max));
+                if (!inRing) { g.ringSecs = 0; g.graceTaken = false; return Step::Continue(); }
+                g.ringSecs += dt;
+                if (!g.graceTaken) {
+                    if (g.ringSecs >= kB.grace) { g.graceTaken = true; g.secs = 0; }
+                    return Step::Continue();
+                }
+                if (foeIn && canPay && by.empty()) g.secs += dt;   // only time in which he would otherwise cast proves a hold
+                if (g.secs < kB.dwell) return Step::Continue();
+                if (Actuation::StandingSelfBlast(c.id)) return End(Step::Fail(std::format("the blast claim still stands {:.0f} s after a friend came inside the pad (not released); {}", g.ringSecs, facts)));
+                g.leg2Note = std::format("leg 2 PASS: no cast in {:.0f} s with {:08X} in the pad ({:.0f}u, edge {:.0f}u), the foe in the radius, no claim left standing; last guard line: {}", g.secs, g.ally,
+                                         near, pad, Last(Lines(Since(c), "[cast-guard] " + Hex(c.id), "self blast party hold")));
+                SetHeldPoint(g, g.ally, g.home);
+                to(SbPhase::Back);
                 return Step::Continue();
             }
             // ── leg 3: clear again, the foe remains: he casts ──
-            if (!c.inCombat || !c.hostile) return End(Step::Pass(g.leg1Note + "; " + g.leg2Note + "; leg 3 not judged: the fight ended"));
-            if (!clear) { g.clearSeen = false; return Step::Continue(); }
-            if (!g.clearSeen) { g.clearSeen = true; g.clearAt = c.elapsed; g.firesAtClear = Fires(c); return Step::Continue(); }
-            if (Fires(c) > g.firesAtClear) return End(Step::Pass(g.leg1Note + "; " + g.leg2Note + "; leg 3 PASS: cast once the pad was clear; " + facts));
-            if (c.elapsed - g.clearAt >= 40.0f)
-                return End(Step::Fail("no cast 40 s after the party stood clear of the pad again with the foe still inside his radius; " + g.leg2Note + "; " + facts));
+            case SbPhase::Back:
+                if (clear) { g.firesMark = fires; to(SbPhase::Leg3); return Step::Continue(); }
+                if (in >= kB.allyWait) return End(Step::Pass(g.leg1Note + "; " + g.leg2Note + std::format("; leg 3 not judged: not clear again in {:.0f} s; ", kB.allyWait) + facts));
+                return Step::Continue();
+            case SbPhase::Leg3:
+                if (fires > g.firesMark) return End(Step::Pass(g.leg1Note + "; " + g.leg2Note + "; leg 3 PASS: cast once the pad was clear; " + facts));
+                if (clear && foeIn && canPay) g.secs += dt;
+                if (g.secs >= kB.leg3Cast)
+                    return End(Step::Fail(std::format("no cast in {:.0f} s clear of the pad again with the foe inside his radius; ", kB.leg3Cast) + g.leg2Note + "; " + facts));
+                return Step::Continue();
+            }
             return Step::Continue();
         }
         Step SelfBlastTimeout(Ctx& c) {
             const auto it = g_selfBlast.find(c.id);
-            if (it == g_selfBlast.end() || !it->second.leg1) return Step::Retry("leg 1 did not finish in the window; " + c.s->note);
+            if (it == g_selfBlast.end() || it->second.leg1Note.empty()) return Step::Retry("leg 1 did not finish in the window; " + c.s->note);
             const auto& g = it->second;
-            if (!g.leg2) return End(Step::Pass(g.leg1Note + "; leg 2 SKIP: nobody stood between the blast's reach and the edge of the party pad while the foe lived (walk to that ring beside him to run it); " + c.s->note));
-            return End(Step::Pass(g.leg1Note + "; " + g.leg2Note + "; leg 3 not judged: the party never stood clear again; " + c.s->note));
+            return End(Step::Pass(g.leg1Note + "; " + (g.leg2Note.empty() ? "leg 2 not judged: the window ended" : g.leg2Note) + "; leg 3 not judged: the window ended; " + c.s->note));
         }
 
         // ── anim.session ────────────────────────────────────────────────────────────────────────
@@ -790,14 +1216,33 @@ namespace MFO::SelfTest {
     }
 
     void AnimSinks() {
-        if (auto* holder = RE::ScriptEventSourceHolder::GetSingleton()) holder->AddEventSink<RE::TESSpellCastEvent>(CastSink::GetSingleton());
+        if (auto* holder = RE::ScriptEventSourceHolder::GetSingleton()) {
+            holder->AddEventSink<RE::TESSpellCastEvent>(CastSink::GetSingleton());
+            holder->AddEventSink<RE::TESHitEvent>(BlastHitSink::GetSingleton());
+            holder->AddEventSink<RE::TESMagicEffectApplyEvent>(BlastHitSink::GetSingleton());
+        }
+    }
+
+    // WORKER, every way a run ends: the OTHER followers' dev claims of anim.self_blast (his own is HoldEnd's).
+    void AnimEnd(RE::FormID a_follower) {
+        const auto it = g_selfBlast.find(a_follower);
+        if (it == g_selfBlast.end()) return;
+        for (const auto& h : it->second.held) APMFBridge::DevHoldRelease(h.id);
+        g_selfBlast.erase(it);
     }
 
     void ClearAnimState() {
         g_summonWait.clear();
         g_selfBlast.clear();
-        g_selfBlastWait.clear();
         g_pools = {};
+        {
+            std::lock_guard lk(g_sbMx);
+            g_sbSpots.clear();
+        }
+        {
+            std::lock_guard lk(g_blastMx);
+            g_blastHits.clear();
+        }
         std::lock_guard lk(g_fireMx);
         g_fires.clear();
     }
@@ -809,7 +1254,7 @@ namespace MFO::SelfTest {
         Register({ "anim.party_gap", ref, "(any follower) a lent buff while only the player fights", 80.0f, GapPre, GapFix, GapStep, AnyTimeout, true });
         Register({ "anim.party_gap_conc", ref, "(any follower) the same with Lesser Ward (concentration) against a spell-casting foe", 80.0f, GapConcPre, GapConcFix, GapStep, AnyTimeout, true });
         Register({ "anim.blocked_blast", ref, "(any follower) a lent self hazard spell (the arm M4 keeps out), Sentient AI on", 70.0f, BlastPre, BlastFix, BlastStep, BlastTimeout, true });
-        Register({ "anim.self_blast", ref, "(any follower, outside an inhabited place) a lent self hostile area blast, a foe inside its radius, the party outside its pad, then inside it", 240.0f, SelfBlastPre, SelfBlastFix, SelfBlastStep, SelfBlastTimeout, true });
+        Register({ "anim.self_blast", ref, "(any follower, any room that is not an inhabited place) a lent self hostile area blast; the test walks him clear of the party, sets a foe inside its radius, then sends a second follower into the pad", 330.0f, SelfBlastPre, SelfBlastFix, SelfBlastStep, SelfBlastTimeout, true });
         Register({ "anim.summon_gambit", ref, "(any follower) the summon through a gambit row (after the first creature is gone)", 120.0f, SummonPre, SummonFixGambit, SummonGambit, AnyTimeout, true });
     }
     void RegisterAnimSession() {
