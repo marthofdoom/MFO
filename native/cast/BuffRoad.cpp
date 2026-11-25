@@ -597,6 +597,12 @@ namespace MFO::Actuation {
         return BuffRoad::Claim;
     }
 
+    // The target a buff claim is filed with (BuffClaim), and the one its fire-once latch is keyed by.
+    static RE::FormID BuffClaimTarget(RE::SpellItem* a_spell, bool a_other, RE::FormID a_recip, RE::FormID a_corpseTarget) {
+        if (a_corpseTarget) return a_corpseTarget;
+        return (a_other || ExplicitSelfBuff(a_spell)) ? a_recip : 0;
+    }
+
     SelfCast BuffClaim(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient, RE::Actor* a_corpse) {
         const bool other = a_recipient && a_recipient != a_follower;
         RE::Actor* recip = other ? a_recipient : a_follower;
@@ -621,9 +627,13 @@ namespace MFO::Actuation {
             return SelfCast::Declined;
         // 11-25 deck-strict: the claim was released (or replaced) by another road after Harbinger said Fired, before this gate read it.
         // The bridge read the Fired end at the release; it counts as the fire the refresh gate would have seen (never a second cast).
-        if (!conc && !instant && APMFBridge::TakeFireOnceSpent(id, spellID)) {
+        // Keyed by the claim's target, and the never-landed window runs from the LATCH (review A2). Not taken before the up-read has
+        // an answer (Unknown declines this lap anyway, below): TickBuffLanded must not judge an aged latch on a read never made.
+        if (const auto spent = (!conc && !instant && BuffUp(recip, a_spell, placement) != Up::Unknown)
+                                   ? APMFBridge::TakeFireOnceSpent(id, spellID, BuffClaimTarget(a_spell, other, rid, corpseTarget))
+                                   : std::nullopt) {
             g_fired[id].insert(sk);
-            g_fireReleased[id][sk] = { rid, spellID, placement, std::chrono::steady_clock::now() };
+            g_fireReleased[id][sk] = { rid, spellID, placement, *spent };
             spdlog::info("[buff] {:08X} {} ({:08X}): his fire-once claim had FIRED before it was released -- counted as fired, not cast again",
                          id, a_spell->GetName() ? a_spell->GetName() : "?", spellID);
             return SelfCast::Declined;
@@ -662,10 +672,9 @@ namespace MFO::Actuation {
         // target 0 = self (Harbinger resolves a self claim to the claimant for a Self-delivery spell,
         // APMF 85a8f2f, and a placement spell's target 0 to the claimant too); a buff at another recipient, or a
         // non-kSelf buff at the caster (explicitSelf), names that actor. LEFT, the hand Prepare equipped; stopPct 0 (a heal-only concept).
-        const bool explicitSelf = !other && ExplicitSelfBuff(a_spell);
         // G7: a corpse claim names the corpse; the bridge's request builder sets kCastFlag_CorpseTarget for a
         // Reanimate spell claimed at another actor (apmf/Bridge.cpp BuildCastRequestLocked).
-        const RE::FormID target = corpseTarget ? corpseTarget : (other || explicitSelf) ? rid : 0;
+        const RE::FormID target = BuffClaimTarget(a_spell, other, rid, corpseTarget);
         // ABI v47: an ambiguous-row buff the bounded set refused is filed fire-once (the claim's own bound), decided by BuffFireOnce.
         const bool fireOnce = BuffClaimFireOnce(a_spell, other);
         if (!APMFBridge::ClaimOffenseCast(id, spellID, target, APMFBridge::kApmfHandLeft, conc, /*stopPct=*/0, fireOnce)) {
@@ -759,7 +768,7 @@ namespace MFO::Actuation {
                     spdlog::info("[buff] {:08X} {} ({:08X}): instant cast fired -- claim released (one cast per "
                                  "claim)", id, a_spell->GetName() ? a_spell->GetName() : "?", spellID);
                     EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
-                    APMFBridge::TakeFireOnceSpent(id, spellID);   // this gate saw the fire itself: drop the release-time latch
+                    APMFBridge::TakeFireOnceSpent(id, spellID, BuffClaimTarget(a_spell, other, rid, corpseTarget));   // this gate saw the fire itself: drop the release-time latch
                     return Outcome{ Result::NoOp, "instant buff cast fired: claim released", true };
                 }
             }
@@ -782,7 +791,7 @@ namespace MFO::Actuation {
                                  "equipped now){}", id, a_spell->GetName() ? a_spell->GetName() : "?", spellID,
                                  g_autoBuffSeries ? " (fan series: the spell stays in hand)" : "");
                     EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/!g_autoBuffSeries);
-                    APMFBridge::TakeFireOnceSpent(id, spellID);   // this gate saw the fire itself: drop the release-time latch
+                    APMFBridge::TakeFireOnceSpent(id, spellID, BuffClaimTarget(a_spell, other, rid, corpseTarget));   // this gate saw the fire itself: drop the release-time latch
                     return Outcome{ Result::NoOp, "buff cast fired: left hand released", true };
                 }
             }

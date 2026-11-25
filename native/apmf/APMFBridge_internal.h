@@ -354,12 +354,13 @@ namespace MFO::APMFBridge {
         // *** ALL of them are guarded by g_mx. ***
         extern std::mutex                             g_mx;
         extern std::unordered_map<RE::FormID, Owned>  g_owned;
-        // ABI v47 fire-once claims whose Fired end was read just before their release or supersede: (owner << 32 | spell) -> when.
+        // ABI v47 fire-once claims whose Fired end was read just before their release or supersede: (owner << 32 | spell) -> {claim target, when}.
         // Guarded by g_mx. Taken (consumed) by TakeFireOnceSpent; cleared at the load boundary.
-        extern std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> g_fireOnceSpent;
+        struct FireOnceSpent { RE::FormID target = 0; std::chrono::steady_clock::time_point when{}; };
+        extern std::unordered_map<std::uint64_t, FireOnceSpent> g_fireOnceSpent;
         // Reads GetClaimEndReason on a live fire-once claim and latches a Fired one into g_fireOnceSpent. Caller holds g_mx, calls it
-        // BEFORE api->Release(c.handle).
-        void NoteFireOnceEnd(const CastClaim& a_c);
+        // BEFORE api->Release(c.handle). True = the claim had fired (latched).
+        bool NoteFireOnceEnd(const CastClaim& a_c);
         extern std::unordered_set<RE::FormID>         g_equipAuthRefused;
         extern std::unordered_set<RE::FormID>         g_selectOverflow;
         extern std::unordered_set<RE::FormID>         g_selectRefused;

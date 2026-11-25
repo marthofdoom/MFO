@@ -826,7 +826,36 @@ namespace APMF_API {
                                             //   bystander within that area + 64u of the actor (0x0A refuses on a
                                             //   fresh reading, 0x06 holds unless a fresh reading says clear).
                                             //   Gate on abiVersion >= 32: an older APMF REFUSES a claim with this bit.
-        kCastGuard_All          = 0xFu,     // every bit this ABI defines (0x7 before ABI v32)
+        kCastGuard_SelfBlastParty   = 1u << 4,  // NO ABI BUMP (see DETECT). HOLD a SELF delivered spell with a hostile
+                                            //   area (Frost Nova, Fire Storm: the blast is centred on the actor) while
+                                            //   the PLAYER or a player TEAMMATE is within its radius + 160u. Radius =
+                                            //   the engine's: EFIT area x fMagicUnitsPerFoot (22), or a harmful
+                                            //   explosion's (the larger of its record radius and that area, x the
+                                            //   dual-cast scale). Someone PROVEN behind world geometry, from every
+                                            //   point the engine may blast from (the magic node, or the explosion
+                                            //   height of an effect's explosion), does not count (a live cast
+                                            //   claim's blast only), unless the spell ignores line of
+                                            //   sight, carries a harmful explosion, or that point is unknown.
+                                            //   CLAIM IT AT TARGET 0 OR THE ACTOR: a Self spell claimed at anybody
+                                            //   else is minted as an aimed (TargetActor) proxy, so it is no longer
+                                            //   Self delivered and this bit does not read it.
+                                            //   ONE GUARD CLAIM: the best-basis guard claim wins whole, bits of
+                                            //   several claims are not united, so put these bits in the actor's one
+                                            //   guard claim. Measured each frame. 0x06 (start): NO unless a <= 250 ms
+                                            //   reading says clear. 0x0A (start, the release action, and the engine's
+                                            //   own last test in the call that lands the blast, channel ticks):
+                                            //   REFUSED unless a <= 250 ms reading says clear; the engine's own
+                                            //   interrupt then ends the cast. The cast claim stands and may start
+                                            //   again until its TTL or Release: do not Repoint it for ever. Lapsed
+                                            //   unfired, IsClaimLive reads false and GetClaimEndReason does not read
+                                            //   kClaimEnd_Fired. Independent of kCastGuard_Bystanders.
+                                            //   DETECT: an APMF without the bit REFUSES the claim, and drops a Repoint.
+                                            //   Ask CanServe (v35) with the bits once, or drop them on a refusal.
+                                            //   abiVersion does not tell.
+        kCastGuard_SelfBlastSummons = 1u << 5,  // With kCastGuard_SelfBlastParty only (alone: refused): count also what
+                                            //   the actor, the player or a teammate COMMANDS (summons, thralls) and a
+                                            //   creature the player owns (a horse).
+        kCastGuard_All          = 0x3Fu,    // every bit this header defines (0x7 before v32, 0xF before the SelfBlast bits)
     };
 
     // ── Combat approach flags (kIntent_CombatApproach's param.ival, ABI v19) ────

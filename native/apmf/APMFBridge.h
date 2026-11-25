@@ -1,6 +1,7 @@
 #pragma once
 #include <RE/Skyrim.h>
 #include <chrono>   // FacetExpiry()'s std::chrono::milliseconds return type
+#include <optional>   // TakeFireOnceSpent
 #include <string>   // TauntIdleReading::detail
 #include <vector>   // DeclareEquipSet's declared worn set
 #include "APMF_API.h"   // APMF_EquipEntry -- DeclareEquipSet's entry type (ABI v8); EquipCategory bits (v9)
@@ -347,7 +348,9 @@ namespace MFO::APMFBridge {
     // 11-25 deck-strict: the bridge reads GetClaimEndReason BEFORE it releases or supersedes a fire-once claim, so a Fired end is
     // never lost with the claim. TakeFireOnceSpent: true ONCE if that follower's fire-once claim for a_spell was found Fired at its
     // release (the caller then treats it as a fire observed). Cleared when a new fire-once claim is filed and at the load boundary.
-    bool TakeFireOnceSpent(RE::FormID a_follower, RE::FormID a_spell);
+    // Review A2: the latch names the claim's TARGET (a_target = the one the caller would file); another target's latch is left alone.
+    // Returns WHEN it was latched (the never-landed window starts there), nullopt for none or one older than kHoldLastSeenCapMs.
+    std::optional<std::chrono::steady_clock::time_point> TakeFireOnceSpent(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target);
 
     // Worker-safe. Is the offense-cast CLAIM CHANNEL itself available right now --
     // i.e. would a `false` from ClaimOffenseCast above mean "APMF REFUSED" rather
