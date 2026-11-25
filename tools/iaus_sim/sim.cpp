@@ -202,7 +202,7 @@ namespace {
     void PrintOrders(const char* who, const OracleStats& s, const Agg* iaus = nullptr, const Agg* orc = nullptr) {
         if (!s.orders) return; const double d = double(s.orders);
         std::printf("ORCORDER %s  windows %ld  options %.1f  rollouts %.0f  ceiling bound %.1f%%  kept %.1f%%  unpaired %.1f%%", who, s.orders, double(s.orderOpts) / d, double(s.orderRolls) / d, 100.0 * double(s.orderBound) / d, 100.0 * double(s.orderKept) / d, 100.0 * double(s.unpaired) / d);
-        std::printf("  kept unraced %ld  clustered %.1f", s.orderSkip, double(s.orderClust) / d);
+        std::printf("  kept unraced %ld  clustered %.1f  the pass goes on %.1f%%  fresh lead %.3f U over %ld tests", s.orderSkip, double(s.orderClust) / d, 100.0 * double(s.orderPass) / d, s.freshU / double(std::max(1L, s.freshN)), s.freshN);
         for (std::size_t i = 0; i < 5; ++i) if (s.modeWin[i] || s.modeIaus[i]) std::printf("  %s %.1f%% (the pass %.1f%%)", kModeName[i], 100.0 * double(s.modeWin[i]) / d, 100.0 * double(s.modeIaus[i]) / d);
         if (iaus && orc) { const auto a = Metrics(*iaus), b = Metrics(*orc); if (a.count("claim%") && b.count("claim%")) std::printf("  claim%% iaus %.1f oracle %.1f", a.at("claim%"), b.at("claim%")); }
         std::printf("\n");
@@ -1032,7 +1032,7 @@ static int RealMain(int argc, char** argv) {
         else if (!std::strcmp(argv[i], "--oracle-shared-stream")) oc.split = false;   // DIAGNOSTIC: the rollouts draw from ONE stream in world order, as before the per-actor streams (World.h Fight::split)
         else if (!std::strcmp(argv[i], "--oracle-orders") && i + 1 < argc) { const std::string v = argv[++i]; if (v != "on" && v != "rank" && v != "off") { std::fprintf(stderr, "--oracle-orders on|rank|off\n"); return 2; } g_oracleOrders = v == "on" ? OracleOrders::On : v == "rank" ? OracleOrders::Rank : OracleOrders::Off; }   // S5-C: on (the default; races orders on the strict road, the claim on every road). DIAGNOSTIC rank = the claim without the order race, off = neither
         else if (!std::strcmp(argv[i], "--oracle-pick") && i + 1 < argc) { const std::string v = argv[++i]; if (v != "lead" && v != "best") { std::fprintf(stderr, "--oracle-pick lead|best\n"); return 2; } oc.leadRule = v == "lead"; }   // strict road. DIAGNOSTIC best = the highest mean picks (the 0.3 rule)
-        else if (!std::strcmp(argv[i], "--oracle-order-cuts") && i + 1 < argc) oc.cuts = std::atoi(argv[++i]);   // DIAGNOSTIC: the order race's cost cuts, a sum of 1 pair width, 2 screen, 4 skip, 8 cluster (15 = all)
+        else if (!std::strcmp(argv[i], "--oracle-order-cuts") && i + 1 < argc) oc.cuts = std::atoi(argv[++i]);   // DIAGNOSTIC: the order race's cost cuts, a sum of 1 pair width (the default), 4 skip, 8 cluster
         else if (!std::strcmp(argv[i], "--gap-luck") && i + 1 < argc) gapLuck = std::max(1, std::atoi(argv[++i]));   // the gap pass: every fight is played N times with other luck (as ModeSet.h does), its gap is the mean over them
         else if (!std::strcmp(argv[i], "--oracle-order-sec") && i + 1 < argc) oc.orderSec = std::max(0.5, std::atof(argv[++i]));   // S5-C: how long an order to a place stands before he is asked again (OrderPick)
         else if (!std::strcmp(argv[i], "--oracle-every") && i + 1 < argc) oc.every = std::atof(argv[++i]);   // DIAGNOSTIC: a throttle on his decisions (0 = every decision point)

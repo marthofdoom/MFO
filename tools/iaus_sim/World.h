@@ -471,6 +471,8 @@ namespace Sim {
         float arenaX = 0, arenaY = 0, arenaR = 0; bool arenaSet = false;   // --space: the enclosed fight's bounds (0 = open)
         float light = 0.6f; bool interior = false; double nextDetect = 0; Detect::Gmst dg;   // stealth: the cell's light on him, 0 dark .. 1 daylight (MODEL)
         std::uint64_t raceSeed = 0;                // S5-C: the oracle's streams (Oracle.h RaceSeed). No draw of the world reads it
+        std::uint64_t avHold = 0; std::int64_t avHoldWin = -1;   // an oracle stream: the 6 s window whose draws stay the fight's own
+        [[nodiscard]] static std::int64_t AvWindow(double t) { return static_cast<std::int64_t>(t / 6.0); }
         std::uint64_t avSeed = 0;                  // ch.32: the per (foe, follower, 6 s window) draws come from a hash of this, never from R
         bool estimates = true;                     // fill the Snapshot's estimate inputs (iaus/Estimate.h) as the game's gather will   // card I6: the game fills Combatant::taunted
         Tally t;
@@ -1099,7 +1101,7 @@ namespace Sim {
         // draw is a hash of the fight's seed, the pair and the window: it never touches R, so a fight's other draws are the same with it on or off.
         [[nodiscard]] bool AvertedNow(const Body& foe, const Body& o) const {
             const float w = AversionOf(o); if (!(w > 0.0f)) return false; if (w >= 1.0f) return true;
-            const std::uint64_t h = Mix64(avSeed ^ Mix64(static_cast<std::uint64_t>(foe.c.id) * 0x10001ULL + o.c.id) ^ Mix64(static_cast<std::uint64_t>(now / 6.0) + 77u));
+            const std::uint64_t h = Mix64((AvWindow(now) == avHoldWin ? avHold : avSeed) ^ Mix64(static_cast<std::uint64_t>(foe.c.id) * 0x10001ULL + o.c.id) ^ Mix64(static_cast<std::uint64_t>(now / 6.0) + 77u));
             return static_cast<double>(h >> 11) * (1.0 / 9007199254740992.0) < static_cast<double>(w);
         }
         // ch.18 ATTACK SELECTION (Harbinger ABI v34, apmf/AttackMix.cpp; FACT = that file's contract): DENY ONLY, over the follower's last 8
