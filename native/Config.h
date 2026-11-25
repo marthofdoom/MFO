@@ -622,6 +622,11 @@ namespace MFO::Config {
     // follower's choice. ANDed into `iausOn` in scheduler/CombatScan.cpp Tick, so the existing IausToggleEdge stands
     // a running follower down. Read on the worker (scan) and the render thread (board button grey-out).
     inline std::atomic<bool>  g_iausAvailable{ true };
+    // SUMMONS AND HORSES BLOCK AREA SPELLS ([General] bAreaSummonsBlock, MCM "Combat & Casting", default OFF; marth 2026-11-24 ruling on placed-spells review F2).
+    // OFF = a summon the party commands and the player's horse are NOT bystanders of an area spell (Harbinger's cast guard parity, "Bystanders only"): the
+    // area guard's table still lists them and the ONE census reader (iaus/AreaCensus.h CountsAsBystander) skips them. ON = they close an area as any bystander does.
+    // Read on the worker (iaus/Candidates.cpp Gather fills Snapshot::areaPartyOwnedBlock).
+    inline std::atomic<bool>  g_areaSummonsBlock{ false };
     // IAUS LOOTING ([General] bIausLoot, INI-only, default ON, ClickUp 1dfcuabd18f). For a follower whose Sentient AI switch is on
     // (FollowerState::iausCombat, under g_iausAvailable): LootScan still FINDS the loot, but the act.loot_* gambit rows (except museum /
     // steal / pick locks) are skipped and logistics/LootNeed.cpp scores WHAT he takes by his current inventory (iaus/LootNeed.h).

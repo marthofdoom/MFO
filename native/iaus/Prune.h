@@ -97,9 +97,12 @@ namespace MFO::Iaus::Prune {
     };
     // M1 (marth's end state: no static drop): a SUMMON is kept whatever its delivery. The engine places the creature itself (plan 2.2), so there is no
     // point to choose, and the claim road (cast/BuffRoad.cpp, target 0) animates it.
+    // M3: a WALL is kept. It is an aimed concentration stream at a foe (the offense claim road), its hazard lands where the stream does, and the area guard
+    // (iaus/AreaCensus.h) closes it round the hazard's footprint and along the stream's line. A wall that is ALSO a target-location spell is still dropped:
+    // `targetLocationDelivery` has no point to name (a rune or burst shape, M5 / M6). `wall` stays in the struct so the lab and the harness fill it.
     [[nodiscard]] inline bool IsPlacement(const PlacementIn& a_in) {
         if (a_in.summon) return false;
-        return a_in.targetLocationDelivery || a_in.rune || a_in.wall || a_in.tlBurst || a_in.selfBlast;
+        return a_in.targetLocationDelivery || a_in.rune || a_in.tlBurst || a_in.selfBlast;
     }
 
     // Order matters: a summon / ward is its own family whatever ClassifySpell calls it; a control archetype is
@@ -259,6 +262,12 @@ namespace MFO::Iaus::Prune {
     inline constexpr float kUnitsPerFoot = 64.0f / 3.0f;
     [[nodiscard]] inline float AreaUnits(float a_areaFeet) {
         return (std::isfinite(a_areaFeet) && a_areaFeet > 0.0f) ? a_areaFeet * kUnitsPerFoot : 0.0f;
+    }
+    // A ground hazard's footprint radius in UNITS (M3 review F1). BGSHazardData::radius is in FEET like the EFIT area (the engine's Hazard::update multiplies it
+    // by 22.0 per foot before its hit test, 1.6.1170), so a 3 ft Fire Barrier is ~64 units, not 3. A kInheritRadius hazard takes the effect's EFIT area (feet) when
+    // it has one. Same conversion as the sim's BlastUnits (1 ft = 64/3 units; the engine's 22 is 3% larger, inside the guard's pads). 0 = unreadable.
+    [[nodiscard]] inline float HazardFootprintUnits(bool a_inherit, std::uint32_t a_efitFeet, float a_hazardRadiusFeet) {
+        return AreaUnits(a_inherit && a_efitFeet > 0 ? static_cast<float>(a_efitFeet) : a_hazardRadiusFeet);
     }
     // The radius the never-splash rule and foes-in-area read (I4 review F2): the LARGER of the EFIT area and the
     // explosion radius of the spell's effect / projectile (BGSExplosion radius, already in units). The explosion

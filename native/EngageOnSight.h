@@ -99,4 +99,9 @@ namespace MFO::EngageOnSight {
     // Worker, inside the StopPump bracket (Scheduler::ClearTransientState).
     void ClearTransientState();
 
+    // ONE reader of "is a_actor fighting the party right now" (its currentCombatTarget resolves to the player or a teammate): the crime filter's
+    // exemption here and the area guard's (iaus/AreaActors.cpp: a crime-faction actor who is not fighting the party is a BYSTANDER whatever
+    // IsHostileToActor says). Field reads only: main thread or the worker.
+    [[nodiscard]] bool FightingParty(RE::Actor* a_actor);
+
 }

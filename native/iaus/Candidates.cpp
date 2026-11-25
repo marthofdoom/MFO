@@ -470,11 +470,13 @@ namespace MFO::Iaus::Candidates {
             addAlly(ptr.get());
         }
         // ── M2: the bystander picture (main-built, iaus/AreaActors.h). Himself, his foes and his allies are left out by id: they are read live above, and a
-        // foe of his own combat group stays a foe whatever the table's faction answer is. Harbinger's anchor is not a body anybody can hit. ──
+        // foe of his own combat group stays a foe whatever the table's faction answer is (a crime-faction non-fighter stays a bystander too, M3 F1). Harbinger's anchor is not a body anybody can hit. ──
         s.areaPicture = AreaActors::Read(selfID, s.areaActors);
+        s.areaPartyOwnedBlock = Config::g_areaSummonsBlock.load();   // M3 F2: the MCM option, enforced by AreaCensus.h CountsAsBystander
         std::erase_if(s.areaActors, [&](const AreaActor& a) {
             const auto listed = [&](const std::vector<Combatant>& v) { return std::any_of(v.begin(), v.end(), [&](const Combatant& u) { return u.id == a.id; }); };
-            return listed(s.foes) || listed(s.allies) || APMFBridge::IsSubstrateAnchor(a.id);
+            // M3 F1: a crime-faction actor who is not fighting the party stays a bystander even when the follower's combat group lists him as a foe (hitting him is a crime)
+            return (listed(s.foes) && !a.crimeNotFighting) || listed(s.allies) || APMFBridge::IsSubstrateAnchor(a.id);
         });
         // Review F2: a concentration Self buff at an ally runs as a minted 0xFF proxy (Harbinger's claim or the ConcProxy), so
         // the book's activeOn (keyed to ae->spell == source) never reads it up there. The stream registries are keyed to the
