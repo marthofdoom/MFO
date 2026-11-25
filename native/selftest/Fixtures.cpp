@@ -45,12 +45,19 @@ namespace MFO::SelfTest {
         // MAIN THREAD. SpawnSpec::clearSpot: a standable point 500 to 700 units off that the follower sees, the front first.
         bool ClearSpot(RE::Actor* a_follower, RE::NiPoint3& a_out) {
             const float ang = a_follower->GetAngleZ();
-            for (const float d : { 700.0f, 500.0f })
+            for (const float d : { 700.0f, 500.0f, 350.0f, 250.0f })
                 for (const float off : { 0.0f, 0.5f, -0.5f, 1.0f, -1.0f, 1.6f, -1.6f, 2.3f, -2.3f, 3.1f }) {
                     std::uint32_t st = 0;
                     if (!APMFBridge::FindStandPoint(a_follower->GetFormID(), ang + off, d, 40.0f, a_out, st)) continue;
-                    if (a_follower->GetPosition().GetDistance(a_out) < 350.0f) continue;   // clamped to a wall
+                    if (a_follower->GetPosition().GetDistance(a_out) < 180.0f) continue;   // clamped to a wall
                     if (Sightline::PointSeenNow(a_follower, a_out, 128.0f) == Sightline::PointSight::Seen) return true;
+                }
+            // no point in his view (a tight room): any standable one
+            for (const float d : { 350.0f, 250.0f, 180.0f })
+                for (int i = 0; i < 8; ++i) {
+                    std::uint32_t st = 0;
+                    if (APMFBridge::FindStandPoint(a_follower->GetFormID(), ang + 0.7854f * static_cast<float>(i), d, 40.0f, a_out, st) &&
+                        a_follower->GetPosition().GetDistance(a_out) >= 120.0f) return true;
                 }
             return false;
         }
@@ -66,7 +73,7 @@ namespace MFO::SelfTest {
             const float ang = a_follower->GetAngleZ();
             pos.x += std::sin(ang) * 700.0f;
             pos.y += std::cos(ang) * 700.0f;
-            if (a_spec.clearSpot && !ClearSpot(a_follower, pos)) { a_note = "no clear standable ground 350 to 700 units around the follower"; return false; }
+            if (a_spec.clearSpot && !ClearSpot(a_follower, pos)) { a_note = "no standable ground around the follower"; return false; }
             auto ref = a_follower->PlaceObjectAtMe(base, false);
             auto* foe = ref ? ref->As<RE::Actor>() : nullptr;
             if (!foe) { a_note = "PlaceObjectAtMe returned no actor"; return false; }
@@ -79,9 +86,11 @@ namespace MFO::SelfTest {
             if (a_spec.health > 0.0f)
                 if (auto* avo = foe->AsActorValueOwner()) avo->SetBaseActorValue(RE::ActorValue::kHealth, a_spec.health);
             foe->SetPosition(pos, true);
-            const bool engaged = StartCombatOn(foe, a_follower);
-            a_note = std::format("spawned {:08X} '{}' (Skyrim.esm base {:06X}) ~700 units from the follower; StartCombat {}",
-                                 foe->GetFormID(), foe->GetName() ? foe->GetName() : "?", a_spec.baseLocal,
+            RE::Actor*  on = a_spec.onPlayer ? static_cast<RE::Actor*>(RE::PlayerCharacter::GetSingleton()) : a_follower;
+            const bool engaged = on && StartCombatOn(foe, on);
+            a_note = std::format("spawned {:08X} '{}' (Skyrim.esm base {:06X}) {:.0f} units from the follower; StartCombat on {} {}",
+                                 foe->GetFormID(), foe->GetName() ? foe->GetName() : "?", a_spec.baseLocal, pos.GetDistance(a_follower->GetPosition()),
+                                 a_spec.onPlayer ? "the player" : "him",
                                  engaged ? "issued" : "NOT issued (runtime/seat refused: it fights only if it aggroes on its own)");
             return true;
         }
@@ -117,7 +126,7 @@ namespace MFO::SelfTest {
                 RE::NiPoint3 spot{};
                 if (req.spawn.clearSpot && !ClearSpot(actor, spot)) {
                     std::lock_guard lk(g_mx);
-                    g_acks[a_token] = { false, "refused, no clear standable ground 350 to 700 units around the follower: move to an open place", true };
+                    g_acks[a_token] = { false, "no standable ground for the foe around the follower", true, true };
                     return;
                 }
             }
@@ -155,6 +164,15 @@ namespace MFO::SelfTest {
                     }
                     rec.push_back({ a_token, testId, a_follower, FixtureKind::Spell, sid, 1, 0 });
                     did.push_back(std::format("taught '{}'", FormName(sid)));
+                }
+            }
+            if (failed.empty() && req.fillMagicka) {
+                if (auto* avo = actor->AsActorValueOwner()) {
+                    const float lost = std::max(0.0f, -actor->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kMagicka));
+                    if (lost > 0.0f) {
+                        avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kMagicka, lost);
+                        did.push_back(std::format("magicka refilled by {:.0f}", lost));
+                    }
                 }
             }
             if (failed.empty() && req.spawn.hurtPct > 0.0f) {
@@ -298,6 +316,15 @@ namespace MFO::SelfTest {
                     }
                 }
             }
+        });
+    }
+
+    void PostEngage(RE::FormID a_foe, RE::FormID a_follower) {
+        MainThread::Post([a_foe, a_follower]() {
+            auto* foe = RE::TESForm::LookupByID<RE::Actor>(a_foe);
+            auto* f   = RE::TESForm::LookupByID<RE::Actor>(a_follower);
+            if (!foe || !f || foe->IsDead() || foe->IsDisabled() || f->IsDead()) return;
+            spdlog::info("[selftest] hostile {:08X} set on {:08X}: {}", a_foe, a_follower, StartCombatOn(foe, f) ? "issued" : "NOT issued");
         });
     }
 

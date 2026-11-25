@@ -42,6 +42,11 @@ namespace MFO::SelfTest {
     // so a save made mid-run never carries them (Docs/SELFTEST.md "Mid-run saves"). Leaf-locked reads.
     bool HasRunRows(RE::FormID a_follower);
     bool IsRunRow(RE::FormID a_follower, std::uint32_t a_uid);
+    // Same writer: the follower's OWN Sentient AI switch while a run forces it, else a_live. Leaf-locked read.
+    bool SavedIaus(RE::FormID a_follower, bool a_live);
+    // plugin.cpp SetupLog: the dev log tap (selftest/TestsAnim.cpp): the tests read MFO's own log lines, the UNANIMATED lines are counted from
+    // the first one of the session. It writes nothing and calls no engine function.
+    void InstallLogTap();
 
 #else
 

@@ -581,6 +581,7 @@ namespace MFO::SelfTest {
             if (g_sinkLive.load()) return;
             if (auto* holder = RE::ScriptEventSourceHolder::GetSingleton()) {
                 holder->AddEventSink<RE::TESHitEvent>(ShotSink::GetSingleton());
+                AnimSinks();
                 g_sinkLive.store(true);
                 spdlog::info("[selftest] passive hit sink registered (bound_bow.fires shot signal)");
             }
@@ -598,6 +599,7 @@ namespace MFO::SelfTest {
         }
         ClearDrivenState();
         ClearHoldState();
+        ClearAnimState();
         ClearT2State();
         std::lock_guard lk(g_hmsMx);
         g_hms.clear();
@@ -631,7 +633,9 @@ namespace MFO::SelfTest {
     }
 
     void RegisterAll() {
-        RegisterHold();   // TestsHold.cpp: g0b.* first, so a session starts with them
+        RegisterHold(true);    // TestsHold.cpp: g0b.cover, g0b.doorway first
+        RegisterAnim();        // TestsAnim.cpp: anim.*
+        RegisterHold(false);   // the other g0b.*
         Register({ "b1.heal_left_offense_right", "MFO-B1",
                    "(self-setup) a caster loadout (no one-hander in the right hand); temp heal + offense rules and a spawned fight",
                    120.0f, B1Pre, B1Fix, B1Step, B1Timeout });
@@ -657,6 +661,7 @@ namespace MFO::SelfTest {
         RegisterBuffPotion();   // TestsBuffPotion.cpp: buffpotion.resist_scores (feat/buff-potions)
         RegisterStorage();      // TestsStorage.cpp: storage.* (feat/offclass-storage, pure + one INFO)
         RegisterPerkEffects();  // TestsPerkEffects.cpp: perk.effects_table (1dfcuabd2pk, read-only)
+        RegisterAnimSession();  // LAST: the session's UNANIMATED count
     }
 
 }

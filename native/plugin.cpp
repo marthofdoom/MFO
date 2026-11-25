@@ -34,6 +34,7 @@
 #include "apmf/APMFBridge.h"
 #include "MainThread.h"
 #include "TradeBridge.h"
+#include "selftest/SelfTest.h"   // dev builds only: InstallLogTap
 
 // MFO — marth's Follower Overhaul.
 // Scope as of M3 (DESIGN.md §10, ROADMAP.md): the DLL loads, resolves its
@@ -158,6 +159,9 @@ namespace {
         log->flush_on(spdlog::level::info);
         spdlog::set_default_logger(std::move(log));
         spdlog::set_pattern("[%H:%M:%S.%e] [%l] %v");
+#ifdef MFO_DEV_SELFTEST
+        SelfTest::InstallLogTap();   // dev builds only
+#endif
 
         for (const auto& f : rotated.failed)
             spdlog::warn("[startup] could not shift an older MFO.log generation ({}) -- skipped", f);

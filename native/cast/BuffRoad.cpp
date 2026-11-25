@@ -85,6 +85,15 @@ namespace MFO::Actuation {
         void DevNoteBuffClaim(RE::FormID a_spell) { std::scoped_lock lk(g_devBuffMx); ++g_devBuff[a_spell].first; }
         void DevNoteBuffLanded(RE::FormID a_spell) { std::scoped_lock lk(g_devBuffMx); ++g_devBuff[a_spell].second; }
     }
+    namespace {
+        std::unordered_map<RE::FormID, std::uint32_t> g_devFiredEnd;   // g_devBuffMx
+        void DevNoteFiredEnd(RE::FormID a_spell) { std::scoped_lock lk(g_devBuffMx); ++g_devFiredEnd[a_spell]; }
+    }
+    std::uint32_t DevBuffFiredEndCount(RE::FormID a_spell) {
+        std::scoped_lock lk(g_devBuffMx);
+        const auto it = g_devFiredEnd.find(a_spell);
+        return it == g_devFiredEnd.end() ? 0 : it->second;
+    }
     std::uint32_t DevBuffClaimCount(RE::FormID a_spell) {
         std::scoped_lock lk(g_devBuffMx);
         const auto it = g_devBuff.find(a_spell);
@@ -704,6 +713,9 @@ namespace MFO::Actuation {
         // so the release (and the never-landed window) are the ones the observed-fire road already makes; the claim is then
         // released, and a re-cast is a NEW claim.
         const bool fireOnceFired = APMFBridge::OffenseCastFired(id, APMFBridge::kApmfHandLeft, spellID);
+#ifdef MFO_DEV_SELFTEST
+        if (fireOnceFired) DevNoteFiredEnd(spellID);
+#endif
 
         // R3-1: a fire observed within the recency window is recorded in BuffRoad's own set.
         if (fireOnceFired || ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID,

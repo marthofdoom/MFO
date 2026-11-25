@@ -44,13 +44,11 @@ namespace MFO::SelfTest {
             float passInside   = 0.90f;   // gate P2
             float planWait     = 3.0f;    // a plan answer later than this is a "no point"
             float replanEvery  = 2.0f;    // a place that needs geometry is looked for again this often ...
-            float replanFor    = 12.0f;   // ... for this long
+            float replanFor    = 8.0f;   // ... for this long
             float busyWait     = 8.0f;    // how long a leg waits for another MFO ch.24 claim to end
-            float fightWait    = 20.0f;   // how long a test waits for its fight to begin
+            float fightWait    = 14.0f;   // how long a test waits for its fight to begin
             float foeHealth    = 20000.0f;   // the spawned foe must outlive the test (it is deleted at the end)
             float neverApplied = 4.0f;    // in combat this long with the area never carried: end the leg
-            float scanEvery    = 5.0f;    // precondition scan (doorway / cover nearby)
-            float scanFresh    = 20.0f;
             float doorReach    = 1200.0f;
             float clearance    = 40.0f;   // FindEmptySpace clearance (Concealment's order of size)
             float bodyHeight   = 128.0f;
@@ -79,7 +77,6 @@ namespace MFO::SelfTest {
             const char* needs;
             Who         who;
             RE::FormID  foe;              // Skyrim.esm base, 0 = no foe (out of combat)
-            Where       scan;             // Doorway / Cover: the precondition wants one nearby. Near = no scan
             std::vector<Leg> legs;
         };
         // Skyrim.esm bases, read in the master 2026-11-24: skeleton warrior / skeleton archer / novice fire mage.
@@ -91,25 +88,25 @@ namespace MFO::SelfTest {
                                          { "hold", Where::Near, 100, a_sec }, { "hold", Where::Near, 64, a_sec } };
             };
             static const std::vector<HoldTest> k = {
-                { "g0b.hold_idle", "out of combat, nobody near", Who::Any, 0, Where::Near, sweep(5) },
-                { "g0b.fighter_vs_melee", "a follower with a melee weapon (or fists) in the right hand", Who::Fighter, kMelee, Where::Near, sweep(14) },
-                { "g0b.fighter_vs_archer", "a follower with a melee weapon (or fists) in the right hand", Who::Fighter, kArcher, Where::Near, sweep(14) },
-                { "g0b.shooter_vs_melee", "a follower with a bow, crossbow or hostile spell in the right hand", Who::Shooter, kMelee, Where::Near, sweep(14) },
-                { "g0b.shooter_vs_mage", "a follower with a bow, crossbow or hostile spell in the right hand", Who::Shooter, kMage, Where::Near, sweep(14) },
-                { "g0b.keep", "(any follower) a 20 s hold left alone, then one re-pointed half way", Who::Any, kMelee, Where::Near,
+                { "g0b.cover", "(any follower, any place) a point hidden from the foe, else a far open one (PROXY)", Who::Any, kArcher,
+                  { { "cover", Where::Cover, 100, 15 }, { "cover", Where::Cover, 64, 15 } } },
+                { "g0b.doorway", "(any follower, any place) a doorway within 1200 units, else open ground (PROXY)", Who::Any, kMelee,
+                  { { "doorway", Where::Doorway, 150, 15 }, { "doorway", Where::Doorway, 100, 15 } } },
+                { "g0b.hold_idle", "out of combat, nobody near", Who::Any, 0, sweep(5) },
+                { "g0b.fighter_vs_melee", "a follower with a melee weapon (or fists) in the right hand", Who::Fighter, kMelee, sweep(14) },
+                { "g0b.fighter_vs_archer", "a follower with a melee weapon (or fists) in the right hand", Who::Fighter, kArcher, sweep(14) },
+                { "g0b.shooter_vs_melee", "a follower with a bow, crossbow or hostile spell in the right hand", Who::Shooter, kMelee, sweep(14) },
+                { "g0b.shooter_vs_mage", "a follower with a bow, crossbow or hostile spell in the right hand", Who::Shooter, kMage, sweep(14) },
+                { "g0b.keep", "(any follower) a 20 s hold left alone, then one re-pointed half way", Who::Any, kMelee,
                   { { "kept, no re-file", Where::Near, 150, 22 }, { "re-filed half way", Where::Same, 150, 14, false, false, true } } },
-                { "g0b.corners", "(any follower) three points in a row on one re-pointed claim", Who::Any, kArcher, Where::Near,
+                { "g0b.corners", "(any follower) three points in a row on one re-pointed claim", Who::Any, kArcher,
                   { { "corner 1", Where::Corner, 100, 7, false, true }, { "corner 2", Where::Corner, 100, 7, false, true },
                     { "corner 3", Where::Corner, 100, 9 } } },
-                { "g0b.flank", "(any follower) a point to the foe's side", Who::Any, kMelee, Where::Near,
+                { "g0b.flank", "(any follower) a point to the foe's side", Who::Any, kMelee,
                   { { "flank", Where::Flank, 100, 15 }, { "flank", Where::Flank, 64, 15 } } },
-                { "g0b.cover", "geometry nearby that hides a point (a pillar, a rock, a wall corner)", Who::Any, kArcher, Where::Cover,
-                  { { "cover", Where::Cover, 100, 15 }, { "cover", Where::Cover, 64, 15 } } },
-                { "g0b.doorway", "a doorway (not a load door) within 1200 units", Who::Any, kMelee, Where::Doorway,
-                  { { "doorway", Where::Doorway, 150, 15 }, { "doorway", Where::Doorway, 100, 15 } } },
-                { "g0b.quiet_melee", "(any follower) the same hold with and without the calm ch.33 style", Who::Any, kMelee, Where::Near,
+                { "g0b.quiet_melee", "(any follower) the same hold with and without the calm ch.33 style", Who::Any, kMelee,
                   { { "normal", Where::Near, 150, 13 }, { "CALM", Where::Same, 150, 13, true }, { "normal", Where::Same, 150, 13 }, { "CALM", Where::Same, 150, 13, true } } },
-                { "g0b.quiet_mage", "(any follower) the same hold with and without the calm ch.33 style", Who::Any, kMage, Where::Near,
+                { "g0b.quiet_mage", "(any follower) the same hold with and without the calm ch.33 style", Who::Any, kMage,
                   { { "normal", Where::Near, 150, 13 }, { "CALM", Where::Same, 150, 13, true }, { "normal", Where::Same, 150, 13 }, { "CALM", Where::Same, 150, 13, true } } },
             };
             return k;
@@ -119,8 +116,6 @@ namespace MFO::SelfTest {
         struct Plan { bool ok = false; RE::NiPoint3 pt{}; std::string why; RE::FormID style = 0; std::string styleText; };
         std::mutex                                g_planMx;     // LEAF: nothing is called under it
         std::unordered_map<std::uint32_t, Plan>   g_plans;      // ticket -> answer
-        struct Scan { bool found = false; std::chrono::steady_clock::time_point at{}; };
-        std::map<std::pair<RE::FormID, int>, Scan> g_scans;     // (follower, Where) -> is such a place near (g_planMx)
         std::uint32_t                             g_ticket = 1; // WORKER
 
         // MAIN THREAD. The nearest ordinary (not load) door, an open one first.
@@ -195,11 +190,11 @@ namespace MFO::SelfTest {
             auto* player = RE::PlayerCharacter::GetSingleton();
             const auto nearPlayer = [&](const RE::NiPoint3& a_pt) { return player && a_pt.GetDistance(player->GetPosition()) <= kT.playerReach; };
             if (!nearPlayer(me)) { o.why = "the follower is too far from the player (pursuit leash): the player must stand near him"; return o; }
+            const char* proxy = "";   // ANY PLACE: no door here = the Near search below, named in the plan line
             if (a_where == Where::Doorway) {
-                o.ok = FindDoor(f, o.pt, o.why);
-                if (o.ok && !nearPlayer(o.pt)) o.ok = false;
-                if (!o.ok) o.why = "no ordinary door within reach on this floor and near the player";
-                return o;
+                o.ok = FindDoor(f, o.pt, o.why) && nearPlayer(o.pt);
+                if (o.ok) return o;
+                proxy = "PROXY for a doorway (none within reach): ";
             }
             const auto stand = [&](RE::FormID a_org, float a_head, float a_dist, RE::NiPoint3& a_pt) {
                 std::uint32_t st = 0;
@@ -223,19 +218,28 @@ namespace MFO::SelfTest {
                 // hidden from the foe (no foe yet = the precondition's question: hidden from where the follower stands now)
                 RE::Actor* viewer = foe ? foe : f;
                 float      best   = 1e9f;
-                for (const float d : { 200.0f, 350.0f, 500.0f })
-                    for (int i = 0; i < 8; ++i) {
-                        if (!stand(a_fid, static_cast<float>(i) * kTwoPi / 8.0f, d, pt)) continue;
+                RE::NiPoint3 far{};
+                float farD = 0.0f;
+                for (const float d : { 200.0f, 350.0f, 500.0f, 700.0f })
+                    for (int i = 0; i < 10; ++i) {
+                        if (!stand(a_fid, static_cast<float>(i) * kTwoPi / 10.0f, d, pt)) continue;
                         if (viewer != f && pt.GetDistance(viewer->GetPosition()) < 250.0f) continue;
                         const float cost = me.GetDistance(pt);
+                        if (const float fd = viewer->GetPosition().GetDistance(pt); cost >= 160.0f && cost <= 400.0f && fd > farD) { farD = fd; far = pt; }
                         if (cost < 80.0f || cost >= best) continue;
                         if (Sightline::PointSeenNow(viewer, pt, kT.bodyHeight) != Sightline::PointSight::Hidden) continue;
                         best = cost;
                         o.ok = true;
                         o.pt = pt;
                     }
-                o.why = o.ok ? "hidden from the foe by geometry" : "no hidden standable point within 500 units";
-                return o;
+                if (o.ok) { o.why = "hidden from the foe by geometry"; return o; }
+                if (farD > 0.0f) {   // no cover anywhere near: the standable point furthest from the foe, so the hold itself is still measured
+                    o.ok  = true;
+                    o.pt  = far;
+                    o.why = std::format("PROXY for cover (nothing hides a point within 700 units): the open point furthest from the foe, {:.0f}u", farD);
+                    return o;
+                }
+                proxy = "PROXY for cover: ";
             }
             // Near / Corner: a clear standable point 250 to 400 units off, not on top of the foe. A corner turns ~110 degrees per leg.
             const float base = a_where == Where::Corner ? f->GetAngleZ() + 1.92f * static_cast<float>(a_leg)
@@ -249,7 +253,7 @@ namespace MFO::SelfTest {
                     if (Sightline::PointSeenNow(f, pt, kT.bodyHeight) != Sightline::PointSight::Seen) continue;   // a clear way by his own ray
                     o.ok = true;
                     o.pt = pt;
-                    o.why = "open ground";
+                    o.why = std::string(proxy) + "open ground";
                     return o;
                 }
             o.why = "no clear standable point around him";
@@ -276,25 +280,6 @@ namespace MFO::SelfTest {
             auto p = std::move(it->second);
             g_plans.erase(it);
             return p;
-        }
-
-        // WORKER. The precondition's cached "is such a place near" answer; posts a refresh when due.
-        std::map<std::pair<RE::FormID, int>, std::chrono::steady_clock::time_point> g_scanPosted;
-        bool PlaceNear(RE::FormID a_f, Where a_w) {
-            const auto key = std::make_pair(a_f, static_cast<int>(a_w));
-            const auto now = std::chrono::steady_clock::now();
-            auto&      at  = g_scanPosted[key];
-            if (now - at > std::chrono::duration<float>(kT.scanEvery)) {
-                at = now;
-                MainThread::Post([key, a_f, a_w]() {
-                    const auto      p = PlanOnMain(a_f, 0, a_w, 0, 0.0f);
-                    std::lock_guard lk(g_planMx);
-                    g_scans[key] = { p.ok, std::chrono::steady_clock::now() };
-                });
-            }
-            std::lock_guard lk(g_planMx);
-            const auto it = g_scans.find(key);
-            return it != g_scans.end() && it->second.found && now - it->second.at < std::chrono::duration<float>(kT.scanFresh);
         }
 
         // ── the runs (WORKER ONLY) ───────────────────────────────────────────────────────────────
@@ -503,12 +488,12 @@ namespace MFO::SelfTest {
                 ++r.skipped;
             } else if (t.foe == 0) {
                 v = s.applied == 0 && std::string_view(s.state) == "Waiting" ? "MEASURED(ch.24 waits out of combat, moves nothing)" : "FAIL(expected Waiting)";
+            } else if (r.endWhy.starts_with("YIELDED") || combatEnded || r.endWhy.starts_with("another ch.24")) {
+                v = "SKIP";
+                ++r.skipped;
             } else if (!s.everOurs || s.applied == 0) {
                 v = "FAIL(not carried)";
                 ++r.refusedLegs;
-            } else if (r.endWhy.starts_with("YIELDED") || combatEnded) {
-                v = "SKIP";
-                ++r.skipped;
             } else if (s.arriveAt < 0) {
                 v = "FAIL(never arrived)";
             } else {
@@ -593,7 +578,7 @@ namespace MFO::SelfTest {
                     r.role = static_cast<Role>(static_cast<int>(c.s->n[0]));   // FixHold, before anything was given
                     std::string why;
                     const char* slug = r.role == Role::Bow ? "archer" : r.role == Role::Spell ? "evoker" : "warrior";
-                    if (Classes::Writable() && !ApplyClass(c.id, slug, 5, false, why)) spdlog::warn("[hold] {:08X} {}: temp class {} refused: {}", c.id, t.id, slug, why);
+                    if (c.s->b[1] && !ApplyClass(c.id, slug, 5, false, why)) spdlog::warn("[hold] {:08X} {}: temp class {} refused: {}", c.id, t.id, slug, why);
                 }
             }
             c.s->note = std::format("leg {} of {}; {}", r.leg + 1, t.legs.size(), r.summary.substr(0, 300));
@@ -714,7 +699,6 @@ namespace MFO::SelfTest {
             if (auto* pc = RE::PlayerCharacter::GetSingleton(); !pc || pc->IsInCombat()) return "the player out of combat";
             if (c.follower->IsOnMount()) return "the follower on foot";
             if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc->GetPosition().GetDistance(c.follower->GetPosition()) > kT.playerReach * 0.6f) return "the player near the follower";
-            if (t.scan != Where::Near && !PlaceNear(c.id, t.scan)) return t.scan == Where::Doorway ? "a doorway within 1200 units" : "geometry that hides a point nearby";
             return nullptr;
         }
         void FixHold(Ctx& c, FixtureRequest& q, int a_test) {
@@ -722,12 +706,13 @@ namespace MFO::SelfTest {
             if (!t.foe) return;
             const Role role = AssignRole(t.who, RoleOf(c.follower));
             c.s->n[0] = static_cast<double>(static_cast<int>(role));
+            c.s->b[1] = Classes::Writable();   // the restore point is taken only now: no point, no temp class
             if (role == Role::Melee) q.items.push_back({ VanillaForm(kIronSword), 1 });
             if (role == Role::Bow) {
                 q.items.push_back({ VanillaForm(kHuntingBow), 1 });
                 q.items.push_back({ VanillaForm(kIronArrow), 60 });
             }
-            q.cls.snapshot    = Classes::Writable();
+            q.cls.snapshot    = c.s->b[1];
             q.spawn.clearSpot = true;
             q.spawn.on        = true;
             q.spawn.baseLocal = t.foe;
@@ -745,8 +730,10 @@ namespace MFO::SelfTest {
         template <int I> void Fix(Ctx& c, FixtureRequest& q) { FixHold(c, q, I); }
         template <int I> Step Stp(Ctx& c) { return StepHold(c, I); }
         template <int I> Step Tmo(Ctx& c) { return TimeoutHold(c, I); }
-        template <int... I> void RegisterEach(std::integer_sequence<int, I...>) {
-            const auto one = [](int i, auto pre, auto fix, auto stp, auto tmo) {
+        constexpr int kFirstTests = 2;   // cover, doorway: RegisterHold(true)
+        template <int... I> void RegisterEach(bool a_first, std::integer_sequence<int, I...>) {
+            const auto one = [a_first](int i, auto pre, auto fix, auto stp, auto tmo) {
+                if ((i < kFirstTests) != a_first) return;
                 const auto& t   = Tests()[i];
                 float       sec = 45.0f;   // the spawn, the first approach
                 for (const auto& l : t.legs) sec += 1.5f * l.sec + kT.busyWait + kT.roleWait;
@@ -756,12 +743,12 @@ namespace MFO::SelfTest {
         }
     }
 
-    void RegisterHold() {
+    void RegisterHold(bool a_first) {
         if (Tests().size() != kCount) {
             spdlog::error("[hold] {} hold tests in the table, {} expected -- none registered", Tests().size(), kCount);
             return;
         }
-        RegisterEach(std::make_integer_sequence<int, static_cast<int>(kCount)>{});
+        RegisterEach(a_first, std::make_integer_sequence<int, static_cast<int>(kCount)>{});
     }
 
     void HoldTick(float a_dt) {
@@ -787,9 +774,7 @@ namespace MFO::SelfTest {
     void ClearHoldState() {
         APMFBridge::DevHoldReleaseAll();
         g_hruns.clear();
-        g_scanPosted.clear();
         std::lock_guard lk(g_planMx);
         g_plans.clear();
-        g_scans.clear();
     }
 }

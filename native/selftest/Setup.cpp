@@ -83,6 +83,12 @@ namespace MFO::SelfTest {
         return it != g_runRows.end() && std::find(it->second.begin(), it->second.end(), a_uid) != it->second.end();
     }
 
+    bool SavedIaus(RE::FormID a_follower, bool a_live) {
+        std::lock_guard lk(g_mx);
+        const auto it = g_iausOwn.find(a_follower);
+        return it == g_iausOwn.end() ? a_live : it->second;
+    }
+
     void SetupApply(RE::FormID a_follower, FollowerState& a_st, std::uint32_t a_token, const FixtureRequest& a_req, RunSetup& a_out) {
         // 1. class snapshot FIRST (so a failure below still restores)
         if (a_req.cls.snapshot) {
@@ -99,6 +105,19 @@ namespace MFO::SelfTest {
             }
             spdlog::info("[selftest] setup {:08X}: class snapshot taken (equipped {}, mastered mask {:X}, unlocked mask {:X}, record {})",
                          a_follower, ClassName(s.equipped), s.mastered, s.unlocked, s.hadRecord ? "existed" : "none");
+        }
+        // 1b. his Sentient AI switch (worker-owned, like the board's marshalled edit): the scan stands the old source down on the edge
+        if (const int want = a_req.iaus >= 0 ? a_req.iaus : (a_req.rows.empty() ? -1 : 0); want >= 0) {
+            a_out.iausForced = true;
+            a_out.iausPrev   = a_st.iausCombat;
+            a_out.iausNow    = want != 0;
+            {
+                std::lock_guard lk(g_mx);   // registered BEFORE the change: a save can never see the forced value as his own
+                g_iausOwn[a_follower] = a_st.iausCombat;
+            }
+            a_st.iausCombat = a_out.iausNow;
+            spdlog::info("[selftest] setup {:08X}: Sentient AI switch {} for the run (his own: {})", a_follower, a_out.iausNow ? "ON" : "OFF",
+                         a_out.iausPrev ? "on" : "off");
         }
         // 2. rows (front of the table = highest priority; the player's rows keep their order below)
         for (const auto& r : a_req.rows) {
@@ -167,6 +186,16 @@ namespace MFO::SelfTest {
                 if (it->second.empty()) g_runRows.erase(it);
             }
             a_setup.rowUids.clear();
+        }
+        if (a_setup.iausForced) {
+            if (a_st && a_st->iausCombat == a_setup.iausNow) a_st->iausCombat = a_setup.iausPrev;   // switched on the board meanwhile: that stands
+            {
+                std::lock_guard lk(g_mx);
+                g_iausOwn.erase(a_follower);
+            }
+            spdlog::info("[selftest] teardown ({}) {:08X}: Sentient AI switch back to {}", a_why, a_follower,
+                         a_st ? (a_st->iausCombat ? "on" : "off") : "(his record is gone)");
+            a_setup.iausForced = false;
         }
         // class state
         if (a_setup.haveSnap) {

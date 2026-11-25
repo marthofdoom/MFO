@@ -33,6 +33,7 @@ namespace MFO::SelfTest {
         static Step Pass(std::string e) { return { Verdict::Pass, std::move(e) }; }
         static Step Fail(std::string e) { return { Verdict::Fail, std::move(e) }; }
         static Step Retry(std::string e) { return { Verdict::Retry, std::move(e) }; }
+        static Step Skip(std::string e) { return { Verdict::Info, "SKIP: " + std::move(e) }; }   // COMPLETE, not judged (logged SKIP, kept as INFO)
         static Step Info(std::string e) { return { Verdict::Info, std::move(e) }; }
     };
 
@@ -67,6 +68,7 @@ namespace MFO::SelfTest {
         float       hurtPct = 0.0f;
         float       health = 0.0f;            // > 0: the SPAWNED hostile gets this base Health (it must outlive a timed test; it is deleted at the end)
         bool        clearSpot = false;        // place it on standable ground in the follower's clear view (Harbinger's FindEmptySpace); none = refused, RETRY
+        bool        onPlayer = false;         // the hostile is set on the PLAYER, not on the follower (the party-fight gap)
         int         respawns = 3;             // re-spawned when the hostile dies while the test still runs
     };
     // Log-only probe flags switched on IN MEMORY for the run (never the INI file) and put back.
@@ -82,6 +84,10 @@ namespace MFO::SelfTest {
         ClassSpec               cls;
         SpawnSpec               spawn;
         unsigned                probes = 0;
+        // His Sentient AI switch for the run: -1 = as it is (OFF when the run has temp rows: an IAUS follower never reads a row), 0 / 1 = forced.
+        // Put back at the end; a mid-run save writes his own value (SavedIaus).
+        int                     iaus = -1;
+        bool                    fillMagicka = false;   // his magicka pool is refilled once (main thread)
     };
 
     // Everything a test reads. Built by the runner on the WORKER each call (re-found, #2). Pure reads
@@ -99,6 +105,7 @@ namespace MFO::SelfTest {
         Scratch*                              s = nullptr;
         RE::Actor*                            hostile = nullptr;   // the run's spawned hostile while it lives (re-found each call)
         int                                   respawnsLeft = 0;
+        int                                   tries = 0;           // RETRYs of this test so far this session
         bool                                  spawnRun = false;
         bool                                  everInCombat = false;
     };
@@ -143,7 +150,12 @@ namespace MFO::SelfTest {
     void                         RegisterBuffPotion(); // TestsBuffPotion.cpp: the buff-potion scoring test (feat/buff-potions; called from RegisterAll, after RegisterT2)
     void                         RegisterStorage();    // TestsStorage.cpp: the off-class storage tests (feat/offclass-storage; called from RegisterAll, after RegisterBuffPotion)
     void                         RegisterPerkEffects();// TestsPerkEffects.cpp: the perk-effect table test (1dfcuabd2pk; called from RegisterAll, after RegisterStorage)
-    void                         RegisterHold();       // TestsHold.cpp: the G0b hold exerciser (movement-plan.md; called FIRST from RegisterAll)
+    void                         RegisterHold(bool a_first);   // TestsHold.cpp: the G0b hold exerciser (movement-plan.md): true = cover + doorway (FIRST in RegisterAll), false = the rest
+    void                         RegisterAnim();       // TestsAnim.cpp: the animated-cast tests (anim.*), after the first hold tests
+    void                         RegisterAnimSession();// TestsAnim.cpp: anim.session, LAST of all
+    void                         AnimSinks();          // TestsAnim.cpp, MAIN: its passive spell-cast event sink (from RegisterSinks)
+    void                         ClearAnimState();     // TestsAnim.cpp: per-load caches (the UNANIMATED session counts stay)
+    bool                         OnlyBlockedLeft(const char* a_self);   // Runner.cpp, WORKER: no run is live and nothing but a_self can still start
     void                         HoldTick(float a_dt); // TestsHold.cpp, WORKER, every unpaused pump tick: sample the standing dev holds
     void                         HoldEnd(RE::FormID a_follower);   // WORKER, every way a run ends (Runner Finish): release his dev claims
     void                         ClearHoldState();     // TestsHold.cpp: forget every hold run and release its claims (ClearAll)
@@ -197,7 +209,7 @@ namespace MFO::SelfTest {
     inline std::vector<Fixture>           g_ledger;        // every fixture still on a follower
     inline std::uint32_t                  g_resetGeneration = 0;
     // Fixture add acks, by run token (Fixtures.cpp writes on main, the runner polls on the worker).
-    struct FixtureAck { bool ok = false; std::string note; bool refuse = false; };   // refuse: a SAFETY refusal (RETRY, info level)
+    struct FixtureAck { bool ok = false; std::string note; bool refuse = false; bool scene = false; };   // refuse: not run (RETRY, info level); scene: no room here (counts as a try)
     inline std::vector<ClassSnap>         g_classSnaps;    // g_mx
     inline std::unordered_map<std::uint32_t, RE::FormID> g_spawnRef;   // run token -> the live spawned ref (g_mx)
     inline std::atomic<bool>              g_classOrphans{ false };
@@ -213,6 +225,8 @@ namespace MFO::SelfTest {
                         FixtureRequest a_req);
     // Removes every ledger entry of a_token (0 = the orphans a load brought in).
     void PostFixtureCleanup(std::uint32_t a_token, const char* a_why);
+    // Any thread: posts the spawned foe's fight with a follower (Fixtures.cpp's StartCombat row).
+    void PostEngage(RE::FormID a_foe, RE::FormID a_follower);
     // Main thread, from the closure that spawned the first one: another hostile for the same run (the first died).
     void PostRespawn(std::uint32_t a_token, const std::string& a_testId, RE::FormID a_follower, const SpawnSpec& a_spec);
 
@@ -223,6 +237,7 @@ namespace MFO::SelfTest {
         ClassSnap                  snap;
         unsigned                   probes = 0;
         bool                       probePrev[8]{};
+        bool                       iausForced = false, iausPrev = false, iausNow = false;
     };
     // Insert the rows (front of their tables), snapshot the class state, switch the probes on. Logs every step at info.
     void SetupApply(RE::FormID a_follower, FollowerState& a_st, std::uint32_t a_token, const FixtureRequest& a_req, RunSetup& a_out);
@@ -235,6 +250,8 @@ namespace MFO::SelfTest {
     bool ApplyClass(RE::FormID a_follower, const char* a_slug, std::uint8_t a_level, bool a_mastered, std::string& a_why);
     // true = the situation is safe for a spawned hostile; else a short reason. MAIN THREAD.
     const char* SpawnUnsafeReason(RE::Actor* a_follower);
+    // Followers whose Sentient AI switch a run forced -> their own value (the FLWR writer's SavedIaus). g_mx.
+    inline std::unordered_map<RE::FormID, bool> g_iausOwn;
     // The run-row registry the FLWR writer consults (SelfTest.h HasRunRows / IsRunRow).
     inline std::unordered_map<RE::FormID, std::vector<std::uint32_t>> g_runRows;   // g_mx
 

@@ -590,7 +590,11 @@ namespace MFO {
             // (still FLWR's v5 byte, VALUE-SPACE only, card I5): bit 3 carries the per-follower combat IAUS
             // toggle under the same rule; bit 4 (logistics IAUS, card 1dfcuabcr0g) and bits 5-7 are written 0.
             // The encoding is FlwrEnabledByte::Encode (FlwrEnabledByte.h), the helmet expression moved verbatim.
+#ifdef MFO_DEV_SELFTEST
+            a_intfc->WriteRecordData(FlwrEnabledByte::Encode(st.mfoEnabled, st.helmetOverride, SelfTest::SavedIaus(formID, st.iausCombat)));   // a run's forced switch is never saved
+#else
             a_intfc->WriteRecordData(FlwrEnabledByte::Encode(st.mfoEnabled, st.helmetOverride, st.iausCombat));
+#endif
 
             // Two tables, written in Table enum order (DESIGN.md 4.8).
             // The table COUNT is written explicitly so a future third table

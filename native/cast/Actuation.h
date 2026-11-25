@@ -993,6 +993,8 @@ namespace MFO::Actuation {
     std::uint32_t DevBuffClaimCount(RE::FormID a_spell);
     // ... and the casts the road saw LAND ("buff is up ... claim released").
     std::uint32_t DevBuffLandedCount(RE::FormID a_spell);
+    // ... and the fire-once claims (ABI v47) whose GetClaimEndReason read Fired in BuffRefreshGate.
+    std::uint32_t DevBuffFiredEndCount(RE::FormID a_spell);
     // What RunSpellShapeCensus counted at kDataLoaded: ran = it ran to its totals line (false = bSpellShapeCensus 0 / no handler).
     struct DevShapeCensusStats { bool ran = false; std::uint32_t total = 0, skipped = 0, buckets = 0, wall = 0, selfHazard = 0, scriptRider = 0; };
     DevShapeCensusStats DevShapeCensus();

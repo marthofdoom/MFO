@@ -236,6 +236,7 @@ if(MFO_DEV_SELFTEST)
         selftest/TestsStorage.cpp
         selftest/Setup.cpp
         selftest/TestsHold.cpp
+        selftest/TestsAnim.cpp
         selftest/LightProbe.cpp
         apmf/DevHold.cpp
     )

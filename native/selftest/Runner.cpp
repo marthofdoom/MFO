@@ -87,8 +87,17 @@ namespace MFO::SelfTest {
         bool                                                   g_blockedAnnounced = false;
 
         // EXCLUSIVE runs (WORKER-ONLY). g_exclGap: unpaused seconds in which only an exclusive test may start (armed at load and by every
-        // exclusive run that completed, so one that keeps RETRYing never starves the rest). g_exclDrain: an exclusive test could start but other runs are live, so nothing new may start.
+        // exclusive run that completed; a RETRY is bounded by kMaxTries). g_exclDrain: an exclusive test could start but other runs are live, so nothing new may start.
         constexpr float kExclusiveGapSec = 45.0f;
+        // BOUNDED (marth 2026-11-24): a test that RETRYs kMaxTries times in a session is closed as SKIP; a hostile that cannot be deleted for
+        // kStuckSec stops all new starts until a load (never force-deleted). Worker-only.
+        constexpr int   kMaxTries = 3;
+        constexpr float kStuckSec = 30.0f, kStuckOrphanSec = 100.0f;   // an orphan's second pass comes kOrphanRetrySec (30 s) after its first
+        constexpr float kFoeHealth[kMaxTries] = { 1500.0f, 6000.0f, 20000.0f };   // the spawned foe's least health on try 1 / 2 / 3 (a mudcrab dies in one blow)
+        std::map<std::string, int>               g_tries;
+        std::unordered_map<std::uint32_t, float> g_stuck;   // run token -> seconds its hostile has been waiting to be deleted
+        bool                                     g_stopped = false;
+        bool                                     g_doneToast = false;
         constexpr float kRetireEverySec  = 1.5f;   // the second pass of a spawned hostile's removal (Fixtures.cpp)
         float g_exclGap    = kExclusiveGapSec;
         float g_exclDrain  = 0.0f;
@@ -104,6 +113,7 @@ namespace MFO::SelfTest {
         const char* WordOf(Verdict v) {
             return v == Verdict::Pass ? "PASS" : v == Verdict::Fail ? "FAIL" : v == Verdict::Info ? "INFO" : "RETRY";
         }
+        const char* WordFor(const Step& s) { return s.v == Verdict::Info && s.evidence.starts_with("SKIP") ? "SKIP" : WordOf(s.v); }
         const char* NameOf(RE::Actor* a) {
             const char* n = a ? a->GetName() : nullptr;
             return (n && *n) ? n : "?";
@@ -126,6 +136,11 @@ namespace MFO::SelfTest {
                 results = g_results;
             }
             int pass = 0, fail = 0, info = 0;
+            const auto toast = [&](std::string t) {
+                if (g_doneToast || pass + fail + info == 0) return;
+                g_doneToast = true;
+                MainThread::Post([t = std::move(t)]() { RE::DebugNotification(t.c_str()); });
+            };
             for (const auto& [id, r] : results) (r.info ? info : (r.pass ? pass : fail))++;
             std::string ids;
             for (const auto& d : Reg()) {
@@ -154,6 +169,7 @@ namespace MFO::SelfTest {
             if (pending.empty()) {
                 spdlog::info("[selftest] ALL DONE: PASS {}, FAIL {}, MANUAL {} ({}), INFO {}", pass, fail, ManualItems().size(),
                              manual.empty() ? "none" : manual, info);
+                toast("MFO tests finished. Save normally now.");
             } else {
                 // every pending test is waiting on an input the runner cannot supply (its last precondition answer): say so, once
                 std::string blocked;
@@ -163,6 +179,7 @@ namespace MFO::SelfTest {
                     if (it == g_lastPre.end() || it->second.empty()) { all = false; break; }
                     blocked += (blocked.empty() ? "" : "; ") + std::string(d->id) + " (needs " + it->second + ")";
                 }
+                if (all) toast("MFO tests finished (some cannot run here). Save normally now.");
                 if (all)
                     spdlog::info("[selftest] ALL RUNNABLE DONE: PASS {}, FAIL {}, MANUAL {} ({}), INFO {} | BLOCKED {}: {}", pass, fail,
                                  ManualItems().size(), manual.empty() ? "none" : manual, info, pending.size(), blocked);
@@ -396,8 +413,17 @@ namespace MFO::SelfTest {
 
         // One end for every way a run stops. a_complete = PASS / FAIL / INFO (persisted); else RETRY / ABORT.
         // EVERY end tears the run's setup down first (rows, class state, probes), then removes its fixtures / spawn / damage.
+        void FinishStep(RE::FormID a_id, Run& a_run, const Step& a_step, const char* a_word, bool a_error, std::chrono::seconds a_backoff);
         void Finish(RE::FormID a_id, Run& a_run, const Step& a_step, const char* a_word, bool a_error = false,
-                    std::chrono::seconds a_backoff = std::chrono::seconds(30)) {
+                    std::chrono::seconds a_backoff = std::chrono::seconds(30), bool a_countTry = true) {
+            Step own = a_step;
+            if (a_word == std::string_view("RETRY") && a_countTry && ++g_tries[a_run.def->id] >= kMaxTries) {
+                own    = Step::Skip(std::format("{} tries, could not be judged: {}", kMaxTries, a_step.evidence));
+                a_word = "SKIP";
+            }
+            FinishStep(a_id, a_run, own, a_word, a_error, a_backoff);
+        }
+        void FinishStep(RE::FormID a_id, Run& a_run, const Step& a_step, const char* a_word, bool a_error, std::chrono::seconds a_backoff) {
             HoldEnd(a_id);   // G0b: his dev claims (ch.24 hold, ch.33 quiet style) never outlive the run
             const auto* d    = a_run.def;
             const bool  done = a_step.v == Verdict::Pass || a_step.v == Verdict::Fail || a_step.v == Verdict::Info;
@@ -422,6 +448,10 @@ namespace MFO::SelfTest {
             if (d->exclusive && done) g_exclGap = kExclusiveGapSec;
             g_retireWait = kRetireEverySec;
             g_blockedAnnounced = false;
+            if (done && std::string_view(d->id).starts_with("anim."))
+                spdlog::info("[anim] RESULT {}: {} | {:08X} | {}", d->id, a_word, a_id, a_step.evidence);
+            if (done)
+                MainThread::Post([t = std::format("MFO test {}: {}", d->id, a_word)]() { RE::DebugNotification(t.c_str()); });
             if (done) LogPending(std::format("after {}", d->id).c_str(), false);
             else g_backoff[{ a_id, d->id }] = Clock::now() + a_backoff;
         }
@@ -437,7 +467,7 @@ namespace MFO::SelfTest {
             bool       inCombat = a->IsInCombat();   // a spawn run may raise it for the grace window below
             auto       it       = g_runs.find(a_id);
             if (it == g_runs.end()) {
-                if (a_blockStarts) return;
+                if (a_blockStarts || g_stopped) return;
                 auto& wait = g_pick[a_id];
                 wait -= a_dt;
                 if (wait > 0.0f) return;
@@ -471,6 +501,7 @@ namespace MFO::SelfTest {
                     }
                     Scratch s;
                     Ctx     c{ a, a_id, &a_st, inCombat, 0.0f, d.timeoutSec, now, g_seen[a_id], &s };
+                    if (const auto k = g_tries.find(d.id); k != g_tries.end()) c.tries = k->second;
                     const char* why = d.precondition ? d.precondition(c) : nullptr;
                     g_lastPre[d.id] = why ? why : "";
                     if (why) continue;
@@ -486,6 +517,8 @@ namespace MFO::SelfTest {
                     r.startedAt = now;
                     FixtureRequest req;
                     if (d.fixtures) d.fixtures(c, req);
+                    if (const auto k = g_tries.find(d.id); req.spawn.on)
+                        req.spawn.health = std::max(req.spawn.health, kFoeHealth[std::clamp(k == g_tries.end() ? 0 : k->second, 0, kMaxTries - 1)]);
                     if (req.spawn.on) {   // ONE spawn-using run at a time, globally: a second waits (this test is tried again next pass)
                         bool other = false;
                         for (const auto& [fid, rr] : g_runs) other = other || rr.spawnRun;
@@ -501,7 +534,7 @@ namespace MFO::SelfTest {
                                  req.cls.snapshot ? "yes" : "no", req.spawn.on ? "yes" : "no",
                                  req.spawn.hurtPct > 0 ? std::format(" (follower hurt {:.0f}%)", req.spawn.hurtPct) : std::string{}, req.probes);
                     r.req = req;
-                    if (req.items.empty() && req.spells.empty() && !req.spawn.on && req.spawn.hurtPct <= 0.0f) {
+                    if (req.items.empty() && req.spells.empty() && !req.fillMagicka && !req.spawn.on && req.spawn.hurtPct <= 0.0f) {
                         r.fixturesReady = true;
                         SetupApply(a_id, a_st, r.token, r.req, r.setup);
                         r.setupApplied = true;
@@ -542,7 +575,7 @@ namespace MFO::SelfTest {
                     }
                 }
                 if (ack && !ack->ok && ack->refuse) {
-                    Finish(a_id, r, Step::Retry("not run: " + ack->note), "RETRY", false, std::chrono::seconds(120));
+                    Finish(a_id, r, Step::Retry("not run: " + ack->note), "RETRY", false, std::chrono::seconds(ack->scene ? 20 : 120), ack->scene);
                     g_runs.erase(it);
                     return;
                 }
@@ -594,13 +627,14 @@ namespace MFO::SelfTest {
                 if (!inCombat && r.elapsed < r.graceUntil) inCombat = true;   // the hostile is still walking up: the fight has not begun, not ended
             }
             Ctx c{ a, a_id, &a_st, inCombat, r.elapsed, r.def->timeoutSec, r.startedAt, g_seen[a_id], &r.s,
-                   hostile, r.respawnsLeft, r.spawnRun, r.everInCombat };
+                   hostile, r.respawnsLeft, 0, r.spawnRun, r.everInCombat };
+            if (const auto k = g_tries.find(r.def->id); k != g_tries.end()) c.tries = k->second;
             if (r.elapsed >= r.def->timeoutSec) {
                 Step s = r.def->onTimeout ? r.def->onTimeout(c) : Step{};
                 if (s.v == Verdict::Running)
                     s = Step::Fail(std::format("timeout after {:.0f}s{}", r.def->timeoutSec,
                                                r.s.note.empty() ? std::string{} : ": " + r.s.note));
-                Finish(a_id, r, s, WordOf(s.v));
+                Finish(a_id, r, s, WordFor(s));
                 g_runs.erase(it);
                 return;
             }
@@ -608,9 +642,20 @@ namespace MFO::SelfTest {
             r.sinceStep = 0.0f;
             const Step s = r.def->step(c);
             if (s.v == Verdict::Running) return;
-            Finish(a_id, r, s, WordOf(s.v));
+            Finish(a_id, r, s, WordFor(s));
             g_runs.erase(it);
         }
+    }
+
+    bool OnlyBlockedLeft(const char* a_self) {
+        if (!g_runs.empty()) return false;
+        std::lock_guard lk(g_mx);
+        for (const auto& d : Reg()) {
+            if (std::string_view(d.id) == a_self || g_results.contains(d.id)) continue;
+            const auto it = g_lastPre.find(d.id);
+            if (it == g_lastPre.end() || it->second.empty()) return false;
+        }
+        return true;
     }
 
     // ── registry ─────────────────────────────────────────────────────────────────────────────────
@@ -709,15 +754,27 @@ namespace MFO::SelfTest {
         g_retireWait -= dt;
         if (g_retireWait <= 0.0f) {   // second pass: a hostile disabled by the cleanup of a run that is over
             g_retireWait = kRetireEverySec;
-            std::unordered_set<std::uint32_t> tokens;
+            std::unordered_set<std::uint32_t> tokens, waiting;
             {
                 std::lock_guard lk(g_mx);
                 for (const auto& f : g_ledger) {
-                    if (f.token == 0 || f.kind != FixtureKind::Spawn) continue;
+                    if (f.kind != FixtureKind::Spawn) continue;
                     bool live = false;
                     for (const auto& [fid, rr] : g_runs) live = live || rr.token == f.token;
-                    if (!live) tokens.insert(f.token);
+                    if (live) continue;
+                    waiting.insert(f.token);
+                    if (f.token != 0) tokens.insert(f.token);
                 }
+            }
+            std::erase_if(g_stuck, [&](const auto& kv) { return !waiting.contains(kv.first); });
+            for (const auto t : waiting) {
+                auto& sec = g_stuck[t];
+                sec += kRetireEverySec;
+                if (g_stopped || sec < (t ? kStuckSec : kStuckOrphanSec)) continue;
+                g_stopped = true;
+                spdlog::error("[selftest] STOPPED: a finished test's hostile could not be deleted for {:.0f} s (an actor still has it as combat target, see "
+                              "'not deleted yet' above). It stays disabled, NOTHING is force-deleted, and no further test starts until a save is loaded", sec);
+                MainThread::Post([]() { RE::DebugNotification("MFO tests STOPPED: a test foe is stuck. Reload a save to go on."); });
             }
             for (const auto t : tokens) PostFixtureCleanup(t, "a finished test");
         }
@@ -765,6 +822,10 @@ namespace MFO::SelfTest {
         g_classWait  = 0.0f;
         g_lastPre.clear();
         g_blockedAnnounced = false;
+        g_tries.clear();
+        g_stuck.clear();
+        g_stopped   = false;
+        g_doneToast = false;
         g_devEntries.clear();   // card C5c: applied once per load
         g_devParsed         = false;
         g_devWaited         = 0.0f;
@@ -777,6 +838,7 @@ namespace MFO::SelfTest {
         g_classSnaps.clear();
         g_runRows.clear();
         g_spawnRef.clear();
+        g_iausOwn.clear();
         g_classOrphans.store(false);
         g_acks.clear();
         g_resetGeneration       = 0;
