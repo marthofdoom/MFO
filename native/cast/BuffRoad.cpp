@@ -681,6 +681,7 @@ namespace MFO::Actuation {
         // target 0 = self (Harbinger resolves a self claim to the claimant for a Self-delivery spell,
         // APMF 85a8f2f, and a placement spell's target 0 to the claimant too); a buff at another recipient, or a
         // non-kSelf buff at the caster (explicitSelf), names that actor. LEFT, the hand Prepare equipped; stopPct 0 (a heal-only concept).
+        const bool explicitSelf = !other && ExplicitSelfBuff(a_spell);
         // G7: a corpse claim names the corpse; the bridge's request builder sets kCastFlag_CorpseTarget for a
         // Reanimate spell claimed at another actor (apmf/Bridge.cpp BuildCastRequestLocked).
         const RE::FormID target = BuffClaimTarget(a_spell, other, rid, corpseTarget);
