@@ -148,6 +148,7 @@ namespace MFO::Iaus::Move {
         std::vector<Area>   areas;
         std::vector<LightAt> light;
         RoadCaps caps;
+        Env::SightTuning sight;                        // the geometry rays' rules (what is worth asking). Shipped = Env::kSightTuning; the sim's sight layers are switches
         // carried across windows
         std::map<PairKey, PairFact> facts;
         std::map<PathKey, PathFact> paths;

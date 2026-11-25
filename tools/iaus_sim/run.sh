@@ -25,6 +25,8 @@
 #        [--loot-plan mixed|stands|walks-on|opens-chest|loots-too|faces-away] [--loot-wave mixed|off|<seconds>] [--loot-sec S] [--loot-guards N]
 #        [--loot-list <loot.json> (tools/list_balance/extract_loot.py; with --env-set <set>)] [--loot-museum <share>] [--loot-rule <name>=<v> | gate=old1117]
 #        [--env-set <set>/heldout] (the set's held-out places); the field side: tools/iaus_sim/calib_loot.py <run-dir> ...
+#        S2, the movement pass (movement-plan.md S2; needs --world v4): [--position-road off|point|pinned] (off by default; naming it also prints the cover / spot
+#        metrics) [--spots-replace <kind,...>] [--move-fault <name>] [--spot-test] (the seven scenarios of 8.5 and a fault variant of each)
 #   <sim.json> comes from tools/list_balance (extract_world.py -> compile_world.py), default dir ~/.cache/mfo-list-balance/,
 #   never committed. Without --list the built-in fixture set runs (no game data).
 # SIM_CLITEST=1 runs the command-line assertions (backlog MFO-B710..B714, B755..B757) instead of a run and prints CLI-CHECKS PASS|FAIL.
@@ -54,7 +56,7 @@ if [[ -z "${SIM_NOBUILD:-}" ]]; then
     "${CXX:-g++}" -std=c++23 -O2 -pthread -Wall -Wextra -Wno-misleading-indentation -Wno-parentheses ${SIM_CXXFLAGS:-} \
         -DSIM_ENV_DIR="\"${SIM_ENV_DIR:-$ROOT/tools/iaus_sim/envs}\"" -include "$GEN/simknobs.h" -I "$P" -I "$GEN" -I "$ROOT/tools/iaus_sim/stub" -I "$ROOT/native" -I "$ROOT/tools" \
         "$P/iaus/Curves.cpp" "$P/iaus/Catalogue.cpp" "$P/iaus/ClassCurves.cpp" "$P/iaus/Score.cpp" \
-        "$P/iaus/Decide.cpp" "$P/iaus/Explain.cpp" "$P/iaus/Generate.cpp" "$P/iaus/EnvQuery.cpp" "$P/iaus/PathSearch.cpp" "$P/iaus/SpellWorth.cpp" \
+        "$P/iaus/Decide.cpp" "$P/iaus/Explain.cpp" "$P/iaus/Generate.cpp" "$P/iaus/EnvQuery.cpp" "$P/iaus/PathSearch.cpp" "$P/iaus/SpellWorth.cpp" "$P/iaus/Spots.cpp" "$P/iaus/MovePass.cpp" \
         "$ROOT/native/classes/ClassTable.cpp" "$ROOT/tools/iaus_sim/RealClasses.cpp" \
         "$ROOT/tools/iaus_sim/sim.cpp" -o "$OUT"
 fi

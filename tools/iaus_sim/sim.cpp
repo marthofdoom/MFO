@@ -70,6 +70,9 @@ namespace {
             S(pathLegs); S(pathUnreach); S(pathBlocked); S(pathReblock); S(pathStuckLegs); S(pathOsc); S(pathDrops); S(pathDoors); S(pathPlans); S(detourN); for (int k = 0; k < 16; ++k) S(detourHist[k]);
             S(pathStuckSec); S(pathHoldUnreachSec); S(pathWalked); S(detourSum); S(envBad); S(envStuckForever); S(pathAwaySec); S(pathCorneredSec); S(castHeldTurns); S(pathHoldSec); S(pathRepeat); S(castZeroFires); S(castZeroHeld);
             S(castUnseated); S(castNeverShort); S(castNeverLong); S(castHeldOff); S(castInterrupted); S(foeCastInterrupted); S(castOccRelease); S(neverSec); S(apprDrops); S(apprBlocked);
+            // S2 (the movement pass)
+            S(spotFiled); S(spotChanges); S(spotArrived); S(spotBlocked); S(spotDropped); S(spotReleased); for (std::size_t k = 0; k < MFO::Iaus::kSpotKindCount; ++k) S(spotKind[k]); S(spotPathLen); S(spotClaimSec); S(spotWalkSec); S(threatSec); S(coverSec); S(exposedSec);
+            S(moveWindows); S(moveUnfinished); S(movePathShort); S(moveAskShort); S(moveSpotShort); S(moveTripleShort); S(movePaths); S(moveRays);
             S(deathsWithHeal); S(retreatSec); S(kiteDmgTaken); S(wastedCasts); S(hitsWhileCtl); S(wwDeclined); S(spTop); S(spTie); S(spUnmTop); S(spCapTop); S(scrollsUsed); S(extActions); S(moveOrderSec);
 #undef S
             // kill order: a priority foe (healer / caster / archer) that dies before every grunt is "good"
@@ -163,6 +166,14 @@ namespace {
           m["doors/f"] = double(s.pathDoors) / n; m["drops/f"] = double(s.pathDrops) / n; m["walked/f"] = s.pathWalked / n; m["env.bad"] = double(s.envBad); m["env.stuckForever"] = double(s.envStuckForever);
           m["cs.unseated/f"] = double(s.castUnseated) / n; m["cs.neverShort/f"] = double(s.castNeverShort) / n; m["cs.neverLong/f"] = double(s.castNeverLong) / n; m["cs.heldOff/f"] = double(s.castHeldOff) / n; m["cs.zeroFire/f"] = double(s.castZeroFires) / n; m["cs.zeroHeld/f"] = double(s.castZeroHeld) / n; m["cs.never.s/f"] = s.neverSec / n;
           m["cs.intr/f"] = double(s.castInterrupted) / n; m["cs.foeIntr/f"] = double(s.foeCastInterrupted) / n; m["cs.occRel/f"] = double(s.castOccRelease) / n; m["appr.drop/f"] = double(s.apprDrops) / n; m["appr.block/f"] = double(s.apprBlocked) / n; }
+        // S2 (the movement pass): the places, the cover, the refusals. Only when a --position-road was named, so every other run's metric set is what it was.
+        if (g_road != Road::Off || g_spotMeter) { const double up = std::max(1e-9, s.upSec);
+          m["cover%"] = s.threatSec > 0 ? 100.0 * s.coverSec / s.threatSec : -1; m["exposed%"] = s.threatSec > 0 ? 100.0 * s.exposedSec / s.threatSec : -1;
+          m["spot/f"] = double(s.spotFiled) / n; m["spotChange/f"] = double(s.spotChanges) / n; m["spotArr/f"] = double(s.spotArrived) / n; m["spotLen"] = s.spotFiled ? s.spotPathLen / double(s.spotFiled) : -1;
+          m["spotBlocked/f"] = double(s.spotBlocked) / n; m["spotDropped/f"] = double(s.spotDropped) / n; m["spotRel/f"] = double(s.spotReleased) / n; m["claim%"] = 100.0 * s.spotClaimSec / up; m["toSpot%"] = 100.0 * s.spotWalkSec / up;
+          const double w = std::max(1e-9, double(s.moveWindows)); m["mv.win/f"] = double(s.moveWindows) / n; m["mv.unfin"] = double(s.moveUnfinished); m["mv.paths"] = double(s.movePaths) / w; m["mv.rays"] = double(s.moveRays) / w;
+          m["mv.pathShort"] = double(s.movePathShort) / w; m["mv.askShort"] = double(s.moveAskShort) / w; m["mv.spotShort"] = double(s.moveSpotShort) / w; m["mv.tripleShort"] = double(s.moveTripleShort) / w;
+          for (const MV::SpotKindRow& r : MV::kSpotKinds) m[std::string("sk.") + r.name] = double(s.spotKind[static_cast<std::size_t>(r.kind)]) / n; }
         m["pow/min"] = double(s.powerAttacks) / mins; m["powCtl%"] = pct(double(s.powOnControlled), double(s.powerAttacks)); m["powWhiff%"] = pct(double(s.powerWhiffs), double(s.powerAttacks)); m["ground/min"] = double(s.grounds) / mins; m["block/min"] = double(s.blocks) / mins; m["bash/min"] = double(s.bashes) / mins;
         return m;
     }
@@ -238,6 +249,10 @@ namespace {
         return bad == 0 && inv == 0 ? 0 : 1;
     }
 
+    int RunSpotTests(const Data&, const std::vector<SimClass>&, std::uint64_t, int) { return 0; }
+    void PrintMoveCost() {   // host time: in no metric, no compare
+        if (g_road == Road::Off || !g_moveFights) return;
+        std::fprintf(stderr, "MOVECOST %lld fights  %.2f ms a fight  %.3f ms a window (worst %.2f)  %.1f windows and %.0f rays a fight\n", g_moveFights.load(), 1e-6 * double(g_moveNs) / double(g_moveFights), 1e-6 * double(g_moveNs) / double(std::max<long long>(1, g_moveWindows)), 1e-6 * double(g_moveWorstNs), double(g_moveWindows) / double(g_moveFights), double(g_moveRays) / double(g_moveFights)); }
     // The headline's scenarios: the 17 of main, and while a stealth road is modelled (--stealth g1|hide|g3, the default is g3) the
     // stealth / disengage scenarios that are not parked. The 17 keep their indexes, so their fights are the same in every mode.
     std::vector<Scenario> HeadlineScenarios() { std::vector<Scenario> v; for (Scenario& s : AllScenarios(g_stealth > 0, false, g_casterPressure)) if (!s.parked || g_parked) v.push_back(std::move(s)); return v; }
@@ -260,7 +275,7 @@ namespace {
         if (!g_v3.Any() && !g_v4.Any()) return "";
         std::string o = std::string(lead) + (g_v4.Any() ? "world=v4" : "world=v3");
         if (g_v4.Any()) { std::string d; for (const V4Flag& f : kV4Flags) if ((g_v4.*(f.m)) != f.def) d += std::string(d.empty() ? "" : ",") + f.name + (f.def ? "=off" : "=on");
-            if (!d.empty()) o += "[" + d + "]"; if (g_v4.env) { char hx[24]; std::snprintf(hx, sizeof hx, "#%08llx", static_cast<unsigned long long>(g_envPool.Hash() & 0xFFFFFFFFull)); o += "+env=" + g_envLabel + hx; } if (g_seats != "today") o += "+seats=" + g_seats; if (g_seatImmunitySeen) o += "+immunity=seen"; o += g_sightTag; } std::string off; for (const V3Flag& f : kV3Flags) if (!(g_v3.*(f.m))) off += std::string(off.empty() ? "" : ",") + f.name + "=off";
+            if (!d.empty()) o += "[" + d + "]"; if (g_v4.env) { char hx[24]; std::snprintf(hx, sizeof hx, "#%08llx", static_cast<unsigned long long>(g_envPool.Hash() & 0xFFFFFFFFull)); o += "+env=" + g_envLabel + hx; } if (g_seats != "today") o += "+seats=" + g_seats; if (g_seatImmunitySeen) o += "+immunity=seen"; o += g_sightTag; if (g_road != Road::Off) o += g_road == Road::Point ? "+road=point" : "+road=pinned"; else if (g_spotMeter) o += "+spotmeter"; if (g_spotsReplace) { o += "+replace="; bool first = true; for (const MV::SpotKindRow& r : MV::kSpotKinds) if (g_spotsReplace & MV::KindBit(r.kind)) { o += std::string(first ? "" : ",") + r.name; first = false; } } if (g_moveFault != &kMoveFaults[0]) o += std::string("+fault=") + g_moveFault->name; } std::string off; for (const V3Flag& f : kV3Flags) if (!(g_v3.*(f.m))) off += std::string(off.empty() ? "" : ",") + f.name + "=off";
         if (!off.empty()) o += "(" + off + ")";
         if (g_v3.chase && g_waiver != 2) o += g_waiver == 1 ? "+waiver=self" : "+waiver=none"; if (g_v3.delivery && g_deliveryOld) o += "+delivery=old";
         if (!g_mirror) o += "+mirror=off"; if (g_spellRules == 1) o += "+spell-rules=old"; else if (g_spellRules == 2) o += "+spell-rules=all"; if (g_books == 1) o += "+books=field"; else if (g_books == 2) o += "+books=heldout"; if (g_envHold == 1) o += "+places=train"; else if (g_envHold == 2) o += "+places=heldout"; if (g_v3.chase && g_engageOnSight) o += "+engage-on-sight"; if (g_v3.delivery && g_deliverSec[0] >= 0.0f) o += "+deliver-sec"; if (g_v3.delivery && g_deliverSec[0] < 0.0f && g_deliverUnfired != 1.0f) o += "+deliver-unfired"; if (g_v3.blockdir && g_blockArc != 180.0f) o += "+block-arc"; if (g_v3.sidestep && g_sideStep == 2) o += "+side-step=away"; if (g_casterPressure) o += "+caster-pressure";
@@ -778,6 +793,7 @@ template <class GetLog, class GetFights> static void SpellRegretReport(const std
 }
 
 int main(int argc, char** argv) {
+    std::atexit([] { PrintMoveCost(); });
     int at = -1; for (int i = 1; i < argc; ++i) if (!std::strcmp(argv[i], "--serve")) { at = i; break; }
     if (at < 0) return RealMain(argc, argv);
     for (int i = at + 1; i < argc; ++i) Sim::PreloadJson(argv[i]);
@@ -801,7 +817,7 @@ int main(int argc, char** argv) {
 static int RealMain(int argc, char** argv) {
     int disengageReport = 0, stealLab = 0;
     Loot::Opts lootOpts; std::string lootList;   // SIM V4 batch L
-    std::string envFile, envSet, envClass; bool envTest = false, envList = false, pathGate = false; int pathReport = 0, pathOracle = 0, soloWalk = 0;   // SIM V4
+    std::string envFile, envSet, envClass; bool envTest = false, spotTest = false, envList = false, pathGate = false; int pathReport = 0, pathOracle = 0, soloWalk = 0;   // SIM V4
     std::vector<std::string> curveSpecs;
     int potCalibN = 0; std::string potWorthPath;
     const char* listPath = nullptr; const char* cmp = nullptr; const char* outBase = nullptr; std::uint64_t seed = 1; int fights = 8, threads = 8; bool optPrefix = false; bool tauntVisible = true, engineCasts = true, estimates = true, scrollRoad = false, g10Sticky = false, legacy = false, mech = false, printClasses = false, oracle = false; std::string only, scenario; OracleCfg oc; int trace = -1; std::string jsonPath, label, sets, opt, rowsText, printRows, sneakProfile; bool noJson = false, listParams = false, listUses = false, optRows = false; bool fightsGiven = false; bool noClassRulings = false; int optFights = 0, optPasses = 2, rowCap = 5, rowEvals = 500, headlineOracle = 0, classOracle = -1, gapScen = 2, ratingN = -1; bool ratingOnly = false, gapDump = false, spellRegret = false, gapIausOnly = false; std::vector<std::string> altSets; int logiN = 0, logiK = 8; std::string logiPolicy = "baseline"; std::string logiUses; bool logiScore = false; int declineN = 0, damageN = 0;
@@ -820,6 +836,15 @@ static int RealMain(int argc, char** argv) {
                 for (const V4Flag& f : kV4Flags) if (nm == f.name) { g_v4.*(f.m) = val == "on"; known = true; }
                 if (!known) { std::fprintf(stderr, "unknown --v4 switch '%s'. Known:", nm.c_str()); for (const V4Flag& f : kV4Flags) std::fprintf(stderr, " %s", f.name); std::fprintf(stderr, "\n"); return 2; }
                 if (q == std::string::npos) break; p0 = q + 1; } }
+        // S2 (movement-plan.md): the movement pass in this world. --position-road off|point|pinned, --spots-replace <kind,...>, --move-fault <name>, --spot-test
+        else if (!std::strcmp(argv[i], "--position-road") && i + 1 < argc) { const std::string v = argv[++i]; if (v == "off") g_road = Road::Off; else if (v == "point") g_road = Road::Point; else if (v == "pinned") g_road = Road::Pinned; else { std::fprintf(stderr, "--position-road off|point|pinned\n"); return 2; } g_spotMeter = true; }
+        else if (!std::strcmp(argv[i], "--spots-replace") && i + 1 < argc) { const std::string v = argv[++i]; std::size_t p0 = 0;
+            while (p0 <= v.size()) { const std::size_t q = v.find(',', p0); const std::string tok = v.substr(p0, q == std::string::npos ? std::string::npos : q - p0); bool known = false;
+                for (const MV::SpotKindRow& r : MV::kSpotKinds) if (tok == r.name) { g_spotsReplace |= MV::KindBit(r.kind); known = true; }
+                if (!known) { std::fprintf(stderr, "--spots-replace: unknown kind '%s'. Known:", tok.c_str()); for (const MV::SpotKindRow& r : MV::kSpotKinds) std::fprintf(stderr, " %s", r.name); std::fprintf(stderr, "\n"); return 2; }
+                if (q == std::string::npos) break; p0 = q + 1; } }
+        else if (!std::strcmp(argv[i], "--move-fault") && i + 1 < argc) { g_moveFault = MoveFaultByName(argv[++i]); if (!g_moveFault) { std::fprintf(stderr, "--move-fault:"); for (const MoveFaultRow& r : kMoveFaults) std::fprintf(stderr, " %s", r.name); std::fprintf(stderr, "\n"); return 2; } }
+        else if (!std::strcmp(argv[i], "--spot-test")) spotTest = true;
         else if (!std::strcmp(argv[i], "--env") && i + 1 < argc) envFile = argv[++i];
         else if (!std::strcmp(argv[i], "--env-set") && i + 1 < argc) envSet = argv[++i];
         else if (!std::strcmp(argv[i], "--env-class") && i + 1 < argc) envClass = argv[++i];
@@ -1027,7 +1052,10 @@ static int RealMain(int argc, char** argv) {
     const bool lootRun = lootOpts.report || lootOpts.oracle || lootOpts.cost || lootOpts.test || !lootOpts.scenario.empty();
     if (lootRun && !g_v4.env) g_v4.Defaults();
     if (!lootList.empty()) { std::string err; if (!Loot::LoadLootList(lootList, &err)) { std::fprintf(stderr, "--loot-list: %s\n", err.c_str()); return 2; } }
-    if (g_v4.env || envTest || envList || pathReport || soloWalk) {
+    if (spotTest) { g_v3 = V3{}; g_v4.Defaults(); }
+    if ((g_road != Road::Off || g_spotsReplace || g_moveFault != &kMoveFaults[0] || g_spotMeter) && !(g_v4.env && g_v4.path)) { std::fprintf(stderr, "--position-road, --spots-replace and --move-fault need an environment: --world v4\n"); return 2; }
+    if ((g_spotsReplace || g_moveFault != &kMoveFaults[0]) && g_road == Road::Off) { std::fprintf(stderr, "--spots-replace and --move-fault need --position-road point|pinned\n"); return 2; }
+    if (g_v4.env || envTest || spotTest || envList || pathReport || soloWalk) {
         if (!LoadFixtures(g_envPool)) { std::fprintf(stderr, "cannot load the fixture environments from %s:", g_envDir.c_str()); for (const EnvSkip& k : g_envPool.skipped) std::fprintf(stderr, " %s (%s)", k.file.c_str(), k.why.c_str()); std::fprintf(stderr, "\n(python3 tools/iaus_sim/envs/make_fixtures.py writes them; SIM_ENV_DIR points elsewhere)\n"); return 2; }
         if (!envFile.empty() || !envSet.empty()) { g_envPool.draw.clear(); const std::size_t sk0 = g_envPool.skipped.size();
             if (!envFile.empty()) { if (!g_envPool.Add(envFile, true)) { std::fprintf(stderr, "--env %s: %s\n", envFile.c_str(), g_envPool.skipped.back().why.c_str()); return 2; } if (g_envPool.draw.empty()) g_envPool.draw.push_back(g_envPool.all.back().get()); g_envLabel = g_envPool.all.back()->name; }
@@ -1038,6 +1066,7 @@ static int RealMain(int argc, char** argv) {
                 std::printf("ENV %-44s %-28s %s tris %6zu comps %4u comp0 %5.1f%% doors %3zu entries %3zu spawns %3zu walls %6zu faces %5zu%s%s\n", e->name.c_str(), e->cls.c_str(), e->interior ? "int" : "ext", e->tris.size(), comps, 100.0 * double(e->tris0) / double(e->tris.size()), e->doors0.size(), e->entries.size(), e->spawns.size(), solid, face, e->defects ? " DEFECTS" : "", e->pool ? "" : " scenario-only"); }
             return 0; }
         if (envTest) return RunEnvTests(D, allClasses);
+        if (spotTest) return RunSpotTests(D, allClasses, seed, threads);
         if (soloWalk) return RunSoloWalk(D, allClasses, soloWalk);
     }
     {   // B711: a class name that matches nothing is an error, never a silently empty scope

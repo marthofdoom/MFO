@@ -47,9 +47,13 @@ namespace MFO::Iaus::Move {
         if (tri < 0 || static_cast<std::size_t>(tri) >= v.tris.size()) return;
         using N = std::pair<float, std::int32_t>;
         std::priority_queue<N, std::vector<N>, std::greater<N>> q;
-        std::vector<float> best(v.tris.size(), kInf);   // < 0 = closed
+        // One array a thread, only the triangles touched are cleaned again (a 16k mesh cost 63 KB a flood, 60 to 80 floods a window). -1 = closed.
+        thread_local std::vector<float> best; thread_local std::vector<std::int32_t> touched;
+        if (best.size() < v.tris.size()) best.resize(v.tris.size(), kInf);
+        for (const auto i : touched) best[static_cast<std::size_t>(i)] = kInf;
+        touched.clear();
         out.cut = false; out.bound = radius;
-        q.push({ 0.0f, tri }); best[static_cast<std::size_t>(tri)] = 0.0f;
+        q.push({ 0.0f, tri }); best[static_cast<std::size_t>(tri)] = 0.0f; touched.push_back(tri);
         while (!q.empty()) {
             const auto [d, at] = q.top(); q.pop();
             if (best[static_cast<std::size_t>(at)] < 0.0f) continue;
@@ -66,6 +70,7 @@ namespace MFO::Iaus::Move {
                 const float nd = d + Dist(here, e) + Dist(e, Env::Centroid(v, nb));
                 if (!(nd <= radius)) continue;
                 if (best[static_cast<std::size_t>(nb)] <= nd) continue;
+                if (best[static_cast<std::size_t>(nb)] == kInf) touched.push_back(nb);
                 best[static_cast<std::size_t>(nb)] = nd; q.push({ nd, nb });
             }
         }
@@ -136,8 +141,8 @@ namespace MFO::Iaus::Move {
         return n;
     }
 
-    bool GeomSees(const Env::View& v, const Env::Vec3& a, const Env::Vec3& b, const Tuning& t, Env::Scratch& s) {
-        return Env::CastRay(v, Eye(a, t), Eye(b, t), s, Env::kSightTuning, 48.0f).clear;
+    bool GeomSees(const Env::View& v, const Env::Vec3& a, const Env::Vec3& b, const Tuning& t, Env::Scratch& s, const Env::SightTuning& sight) {
+        return Env::CastRay(v, Eye(a, t), Eye(b, t), s, sight, 48.0f).clear;
     }
 
     // ── generators. Cheap: distances and facts already there. The geometry rays are in the checks ──────────────────────
@@ -145,7 +150,7 @@ namespace MFO::Iaus::Move {
         if (!g.hasTarget || g.targetIsAlly || !Ranged(g) || !InBand(g, c)) return false;
         r = c.walk; return true;
     }
-    bool CheckSight(const GenIn& g, const Cand& c, Env::Scratch& s) { return GeomSees(g.v, g.target, c.p, g.t, s); }
+    bool CheckSight(const GenIn& g, const Cand& c, Env::Scratch& s) { return GeomSees(g.v, g.target, c.p, g.t, s, g.pic.sight); }
 
     bool GenCover(const GenIn& g, const Cand& c, float& r) {
         if (!ThreatOf(g, 0)) return false;
@@ -154,7 +159,7 @@ namespace MFO::Iaus::Move {
     }
     bool CheckCover(const GenIn& g, const Cand& c, Env::Scratch& s) {
         for (std::size_t i = 0; i < g.m.threats.size(); ++i)
-            if (const Foe* f = ThreatOf(g, i); f && GeomSees(g.v, f->p, c.p, g.t, s)) return false;
+            if (const Foe* f = ThreatOf(g, i); f && GeomSees(g.v, f->p, c.p, g.t, s, g.pic.sight)) return false;
         return true;
     }
 

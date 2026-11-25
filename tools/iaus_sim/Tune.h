@@ -47,6 +47,10 @@ namespace Sim {
         // sim v4 batch C (the fix/spell-worth mirror): what an offense spell with no measurable damage is worth, as a share of his best measured one. Live
         // since the lab has an unmeasured population (Policy.h SpellMeasured). The game's name (iaus/Catalogue.cpp SetTuningScalar), so a found value ships.
         { "t.unmeasuredDamage", &Tuning::unmeasuredDamage },
+        // S2 (movement-plan.md): the movement pass's own rows. Flat while --position-road is off. The stage that searches them is S5's.
+        { "t.moveDecisionSec", &Tuning::moveDecisionSec }, { "t.spotPinKinds", &Tuning::spotPinKinds }, { "t.spotMomentum", &Tuning::spotMomentum }, { "t.spotPreempt", &Tuning::spotPreempt },
+        { "t.spotRadius", &Tuning::spotRadius }, { "t.spotSplitArea", &Tuning::spotSplitArea }, { "t.spotHighU", &Tuning::spotHighU }, { "t.spotExitU", &Tuning::spotExitU }, { "t.spotPeelU", &Tuning::spotPeelU },
+        { "t.spotArriveU", &Tuning::spotArriveU }, { "t.spotFactMoveU", &Tuning::spotFactMoveU }, { "t.spotFactMaxAgeSec", &Tuning::spotFactMaxAgeSec }, { "t.spotKeptAgeSec", &Tuning::spotKeptAgeSec }, { "t.spotUnknownExposure", &Tuning::spotUnknownExposure },
     };
 
     // tune 2.11.1: the worth-the-gold table (iaus/ConsumableWorth.h WorthTable, carried in Tuning::worth) and the loot table

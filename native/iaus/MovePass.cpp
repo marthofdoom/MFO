@@ -387,7 +387,7 @@ namespace MFO::Iaus::MovePass {
             int seen = 0;
             for (std::size_t k = 0; k < p->nAt; ++k)
                 for (const std::int32_t f : m.threats)
-                    if (f >= 0 && GeomSees(v, pic.foes[static_cast<std::size_t>(f)].p, p->at[k], t, s)) { ++seen; break; }
+                    if (f >= 0 && GeomSees(v, pic.foes[static_cast<std::size_t>(f)].p, p->at[k], t, s, pic.sight)) { ++seen; break; }
             if (p->nAt) out.exposedSec = static_cast<float>(seen) / static_cast<float>(p->nAt) * (p->length / (m.speed > 1.0f ? m.speed : 1.0f));
             w.pairs.push_back(out);
         }

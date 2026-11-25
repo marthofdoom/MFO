@@ -75,5 +75,5 @@ namespace MFO::Iaus::Move {
     [[nodiscard]] std::uint64_t DoorwayOf(const Env::View& a_v, const std::vector<std::uint8_t>& a_wallVert, std::int32_t a_tri, int a_edge, const Tuning& a_t);   // 0 = not a doorway
     [[nodiscard]] std::array<std::uint64_t, 2> PortalsAt(const Env::View& a_v, const std::vector<std::uint8_t>& a_wallVert, std::int32_t a_tri, const Env::Vec3& a_p, const Tuning& a_t);
     [[nodiscard]] std::uint8_t ExitsAt(const Env::View& a_v, std::int32_t a_tri, const Env::Vec3& a_p, const std::vector<Foe>& a_foes, const Env::Walker& a_who, const Tuning& a_t);
-    [[nodiscard]] bool GeomSees(const Env::View& a_v, const Env::Vec3& a_a, const Env::Vec3& a_b, const Tuning& a_t, Env::Scratch& a_s);
+    [[nodiscard]] bool GeomSees(const Env::View& a_v, const Env::Vec3& a_a, const Env::Vec3& a_b, const Tuning& a_t, Env::Scratch& a_s, const Env::SightTuning& a_sight = Env::kSightTuning);
 }

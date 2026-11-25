@@ -100,6 +100,7 @@ namespace Sim {
         return false;
     }
     enum class LegEnd { Blocked, Unreachable, Stuck };
+    inline void MoveLegEnd(Fight& F, Body& x, LegEnd how);   // S2 (MoveWorld.h): a leg toward a spot claim ended
     inline void EnvLegEnd(Fight& F, Body& x, LegEnd how) {
         Nav& n = x.nav; const bool subj = x.ctl == 0;
         // AN END BESIDE HIS LAST END OF THE SAME KIND IS A REPEAT (review F8: only a BLOCKED end was compared, so asking again and again for a route
@@ -123,6 +124,7 @@ namespace Sim {
         } else { n.exact = true; n.exactUntil = F.now + 3.0; if (subj) ++F.t.pathStuckLegs; }
         if (F.trace && x.ctl >= 0) std::fprintf(F.trace, "%7.2f  LEG %s: %s at (%.0f, %.0f, %.0f) toward (%.0f, %.0f, %.0f), corner %d of %d%s%s, hold until %.1f\n", F.now, x.c.name.c_str(), how == LegEnd::Blocked ? "BLOCKED" : how == LegEnd::Unreachable ? "UNREACHABLE" : "STUCK", x.c.x, x.c.y, x.c.z, n.goal.x, n.goal.y, n.goal.z, int(n.i), int(n.n), n.reach ? "" : " (no route to the goal)", n.away ? " (away)" : "", n.holdUntil);
         n.n = n.i = 0; n.legOpen = false; n.away = false;
+        if (F.move && x.ctl >= 0) MoveLegEnd(F, x, how);
     }
 
     // One step toward (qx, qy) on the TRUE mesh: the straight walk, one slide along what stopped it, the door, the bodies.
