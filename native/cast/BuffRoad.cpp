@@ -500,7 +500,12 @@ namespace MFO::Actuation {
 
     bool SummonHoldsCastChannel(RE::Actor* a_follower, RE::SpellItem* a_spell) {
         if (!a_follower || !a_spell || !IsSummonSpell(a_spell)) return false;
-        return Iaus::Prune::SummonHoldsCastChannel(ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false) == BuffRoad::Claim, Config::g_castSelf.load());
+        // No controller, no claim road: ChooseBuffRoad would erase the per-fight g_neverFired latch on this read-only ask.
+        if (!a_follower->GetActorRuntimeData().combatController) return false;
+        // The channel is held only while the claim would actually fire: a body already up / landing, the summon limit (Up::Blocked)
+        // and a never-fired hold-off are all BuffUpTransparent, where the claim road makes no cast and no hand is held.
+        return Iaus::Prune::SummonHoldsCastChannel(ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false) == BuffRoad::Claim, Config::g_castSelf.load()) &&
+               !BuffUpTransparent(a_follower, a_spell);
     }
 
     bool BuffServedAtAlly(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient) {
