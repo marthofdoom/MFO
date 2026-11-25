@@ -92,7 +92,7 @@ def main():
 
     def spell_row(s):   # the list.json spell schema (one C++ classifier reads both sources)
         return dict(edid=s['edid'], cost=s['cost'], castType=CASTTYPE[min(s['castType'], 3)], delivery=DELIVERY[min(s['delivery'], 4)], chargeTime=s['chargeTime'],
-                    castDuration=s['castDuration'], range=s['range'], autoCalc=not (s['flags'] & 1), taught=False, recovery=s.get('recovery', 0.0), shout=bool(s.get('shout')),
+                    castDuration=s['castDuration'], range=s['range'], autoCalc=not (s['flags'] & 1), taught=False, recovery=s.get('recovery', 0.0), shout=bool(s.get('shout')), placed=s['placed'],
                     effects=[dict(mag=e['mag'], area=e['area'], dur=e['dur'], hostile=e['hostile'], detrimental=e['detrimental'], skill=SCHOOL.get(e['school'], 'None'), resist=e['resist'],
                                   minSkill=e['minSkill'], archetype=e['archetype'], av=e['av'], delivery=0, baseCost=e['baseCost'], conds=e['conds'], kw=e['kw'],
                                   **({'summon': e['summon']} if 'summon' in e else {}), **({'hazard': hazard_of(e)} if hazard_of(e) else {})) for e in s['effects']])
@@ -357,6 +357,10 @@ def main():
             e = s['effects'][int(i)]; nfx += 1
             if 'summon' in r: e['summon'] = r['summon']
             if r.get('hazard') and hazard_of(r): e['hazard'] = hazard_of(r)
+    pb = W.get('spellPlaced')
+    if not pb: sys.exit('%s.world.json holds no spellPlaced: it was extracted before placed-spells L1, run extract_world.py again' % a.name)
+    for s in pool + out['scrolls']: s['placed'] = pb[s['key']]   # a taught spell and a scroll: by the record's key (every one has an EFID, or extract.py left it out)
+    out['placedSchema'] = 2   # 2 = hostImpact / hostPayload (review F4)
     ss_ix = {}; sspecs = []; memo = {}
 
     def summon_specs(ref):

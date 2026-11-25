@@ -1876,7 +1876,10 @@ namespace MFO::Board {
                                                   static_cast<int>(sp->CalculateMagickaCost(a) + 0.5f),
                                                   Progression::SpellEffectsText(sp) };
                         t.school = SpellSchoolRank(sp, &t.effectKey);
-                        t.iausWeighed = MFO::Iaus::SpellBook::WouldWeigh(sp, teachGate);
+                        auto drop = MFO::Iaus::Prune::Drop::Keep;
+                        t.iausWeighed = MFO::Iaus::SpellBook::WouldWeigh(sp, teachGate, nullptr, &drop);
+                        t.iausSelfBlast = drop == MFO::Iaus::Prune::Drop::SelfBlast &&
+                                          (!teachGate.resolved || teachGate.spellsOnClass || teachGate.spellsFromMastered);   // a class that casts no spell is not told about one
                         r.teachableSpells.push_back(std::move(t));
                     }
                     std::stable_sort(r.teachableSpells.begin(), r.teachableSpells.end(),

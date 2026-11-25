@@ -216,7 +216,7 @@ A candidate is (action, form, target). Gating by class uses the EQUIPPED class w
 | Scroll use | new `act.use_scroll` (card S3) | per carried scroll x valid target by its nature | mage line and mage hybrids (ruling Q22/23), Dragonborn |
 | Exploit | new `act.exploit` (card I3) | in the full mode it is not a separate candidate: it is the weakness consideration on offense and posture candidates. In gambit mode it is a row that runs the Exploit scorer | every class that can cast offense (spells), plus the silver posture for melee |
 
-Never generated: anything whose road is unanimated (`CastRoadUnsupported`), runes and other Target Location spells
+Never generated: anything whose road is unanimated (`CastRoadUnsupported`), runes and other Target Location spells (a SUMMON is kept since placed-spells M1; Self fire-and-forget hostile area spells and walls are out too, `Prune::IsPlacement`)
 (no NPC projectile, memory animations-required), constant-effect spells, non-hostile actors as foes, the player or a
 party member as the target of a hostile spell.
 

@@ -460,6 +460,10 @@ namespace MFO::Actuation {
         // own-OOC follower in a party fight; ABI < 19; an ambiguous row; bCastSelf off; Harbinger absent). It stays
         // direct (the substrate, slice S3, is what gives the no-controller follower a controller) and the field
         // log names it (cast/Unanimated.cpp). Combat table only; the out-of-combat service is a no-op here.
+        // anim-residue plan A1: a summon whose only missing gate is his own controller (a party fight, own combat off) is HELD, not
+        // conjured unanimated (cast/PartyGap.cpp). Transparent, asked again every lap. Combat table only (the reader is false off it).
+        if (HoldOwnControllerOnlyGap(a_follower, a_spell, nullptr, "summon-oneshot"))
+            return { Result::NoOp, "summon held: party fight, no combat controller (animated road only)", true };
         NoteUnanimatedRoadWhy(a_follower, "summon-oneshot", a_spell, nullptr);
         // SUBSTRATE S3: decided HERE on the worker (ChooseBuffRoad is worker-serial), only for the out-of-combat
         // table (g_firingRule == kNoRule); the main thread files the pair. false = today's road, unchanged.

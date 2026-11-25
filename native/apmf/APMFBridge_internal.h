@@ -102,6 +102,10 @@ namespace MFO::APMFBridge {
             // every weapon, shield and torch too. Part of the identity like denyOnly. Only the launcher-user
             // floor (Owned::archerFloor) is ever full.
             bool             fullFloor = false;
+            // FIRE ONCE (ABI v47, kCastFlag_FireOnce, anim-residue plan A2): this claim was filed with the bit. Part of the
+            // identity like denyOnly: the flags are fixed at RequestCast and Repoint cannot add or clear the bit, so a change
+            // is a release and a new claim, never an in-place update. False for every claim that predates the adoption.
+            bool             fireOnce = false;
             std::chrono::steady_clock::time_point refreshed{};
             // WHEN THIS HANDLE WAS REQUESTED -- the claim's own AGE clock, set
             // ONCE where `handle` is assigned below and never moved again while
@@ -364,6 +368,8 @@ namespace MFO::APMFBridge {
         // the same commit as the constant). The request builder (Bridge.cpp) and CorpseTargetSupported
         // (CastClaims.cpp) share this one number. The literal is that fact, not APMF_API::kABIVersion.
         inline constexpr std::uint32_t kCorpseTargetAbi = 42;
+        // ABI v47: kCastFlag_FireOnce + kCastSeat_FireOnce (cast/SeatRows.h kMinAbiFireOnce is the same fact, static_assert-ed in CastClaims.cpp).
+        inline constexpr std::uint32_t kFireOnceAbi = 47;
 
         // The shared claim helpers (defined in apmf/Bridge.cpp; see their doc comments
         // there). Caller holds g_mx for all of them.
@@ -374,7 +380,7 @@ namespace MFO::APMFBridge {
         void EnsureCastClaimLocked(const APMF_API::APMF_API_v5* api, RE::FormID follower,
                                    CastClaim& c, RE::FormID wantSpell, RE::FormID wantTarget,
                                    std::int32_t wantHand, bool wantConc, std::uint32_t wantStopPct,
-                                   bool wantDenyOnly = false, bool wantFullFloor = false);
+                                   bool wantDenyOnly = false, bool wantFullFloor = false, bool wantFireOnce = false);
 
         // Release one handle (thread-safe; no-ops a stale handle). Caller holds g_mx.
         // RE::FormID IS std::uint32_t (a plain alias, not a distinct type), so this

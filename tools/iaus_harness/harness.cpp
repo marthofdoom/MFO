@@ -15,6 +15,7 @@
 #include "iaus/Disengage.h"  // card G3: the pure questions the disengage gate asks
 #include "iaus/Reposition.h" // batch I: spell range, back-off, hidden step
 #include "iaus/ClassCurves.h" // per-class curve rows (ruling Q-class-curves)
+#include "cast/PartyGap.h"   // anim-residue A1: the party-fight hold rule
 #include "cast/SeatRows.h"   // ABI v46 adoption: the seated-row rule, the need of a target, the zero-effect reading rules
 #include "iaus/LootNeed.h"    // IAUS looting: category + consumable scores (ClickUp 1dfcuabd18f)
 
@@ -1921,13 +1922,76 @@ namespace {
             Check(Prune::StaticDrop(in) == Prune::Drop::Keep, "B865: a bolt with an impact hazard is kept");
             in.targetLocation = true;   // a rune: delivery TargetLocation, not read from the impact hazard
             Check(Prune::StaticDrop(in) == Prune::Drop::Placement, "B865: a rune is unchanged");
-            Check(Prune::IsSelfBlastPlacement(true, false, true, true), "B865 F1: a Self FF Offense spell with an impact hazard (Fire Storm) is still dropped (interim)");
-            Check(!Prune::IsSelfBlastPlacement(true, false, true, false), "B865 F1: a Self blast with no impact hazard is not covered by the interim drop");
-            Check(!Prune::IsSelfBlastPlacement(true, true, true, true), "B865 F1: a Self concentration spell is not covered");
-            Check(!Prune::IsSelfBlastPlacement(true, false, false, true), "B865 F1: a non-Offense Self spell is not dropped");
-            Check(!Prune::IsSelfBlastPlacement(false, false, true, true), "B865 F1: an aimed bolt with an impact hazard is kept");
-            in.targetLocation = Prune::IsSelfBlastPlacement(true, false, true, true);
-            Check(Prune::StaticDrop(in) == Prune::Drop::Placement, "B865 F1: the Self blast is dropped as Placement");
+            // the interim self-blast block (marth 11-24, D2; review F4: hostile by the engine, per effect). One effect = { hostile flag, EFIT area, impact hazard, payload }.
+            struct Fx { bool h, area, impact, payload; };
+            const auto blast = [](bool self, bool conc, Prune::Nature n, std::initializer_list<Fx> fx, bool hostileHazard) {
+                bool hot = false;
+                for (const Fx& e : fx) hot |= Prune::HostileAreaEffect(e.h, e.area, e.impact, e.payload);
+                return Prune::IsSelfBlastPlacement(self, conc, n == Prune::Nature::Offense || n == Prune::Nature::Control, hot, hostileHazard);
+            };
+            using N = Prune::Nature;
+            const Fx hurtArea{ true, true, false, false }, plainArea{ false, true, false, false }, hurtNoArea{ true, false, false, false }, plain{ false, false, false, false };
+            // blocked: the record says hostile
+            Check(blast(true, false, N::Control, { { true, true, true, true }, hurtArea }, false), "D2: Fire Storm is blocked");
+            Check(blast(true, false, N::Control, { hurtArea, hurtArea }, false), "D2: Frost Nova is blocked");
+            Check(blast(true, false, N::Control, { plain, hurtArea }, true), "D2: Blizzard is blocked");
+            Check(blast(true, false, N::Buff, { plain, plain, plain }, true), "D2: MAG_Blizzard (its own effects unflagged, the hazard's spell is hostile) is blocked");
+            Check(blast(true, false, N::Control, { hurtArea, hurtArea, plainArea }, false), "D2: Mass Paralysis / Hysteria / Mayhem (hostile flagged) are blocked");
+            Check(blast(true, false, N::Offense, { hurtArea, hurtArea, plain }, false), "D2: REQ_Illusion5_Calm (hostile flagged) is blocked");
+            Check(blast(true, false, N::Control, { hurtArea, hurtArea, hurtArea }, false), "D2: Bane of the Undead / Turn ritual (hostile area, undead-only conditions are not read) is blocked");
+            Check(blast(true, false, N::Offense, { plain, plain, hurtArea }, false), "D2: MAG_CircleofProtection (a hostile flagged area slow, conditions are not read) is blocked");
+            Check(blast(true, false, N::Offense, { { true, false, true, false } }, false), "D2: a hostile effect with an impact hazard and no EFIT area is blocked (B865 F1)");
+            Check(blast(true, false, N::Offense, { { true, false, false, true } }, false), "D2: a hostile effect with a payload explosion is blocked");
+            // the circles (review F9): their own effect is a benign Spawn Hazard, the hazard's SPELL is hostile by record (absorb or damage), so the one rule blocks them
+            Check(blast(true, false, N::Buff, { plain }, true), "D2: Circle of Strength / Glory / the Moons, Talons of Nirn, Sanctuary, Consecrated Ground: blocked by their hazard's hostile spell");
+            Check(!blast(true, false, N::Buff, { plain }, false), "D2: a circle whose hazard's spell is not hostile is a candidate");
+            // candidates: not hostile by the engine
+            Check(!blast(true, false, N::Control, { plainArea, plainArea }, false), "D2: Harmony (unflagged mass calm) is a candidate");
+            Check(!blast(true, false, N::Control, { plainArea, plainArea, { false, false, true, false } }, false), "D2: MAG_Harmony (an impact hazard on an unflagged effect) is a candidate");
+            Check(!blast(true, false, N::Offense, { plainArea, plain }, false), "D2: Vanish / Hallowed Weapon / Dispel Magic (detrimental, not hostile, area) are candidates");
+            Check(!blast(true, false, N::Offense, { plainArea, hurtNoArea }, false), "D2: LoreRim Dispel Magic (the hostile effect has no area) is a candidate");
+            Check(!blast(true, false, N::Offense, { hurtNoArea }, false), "D2: a self hostile spell with no area at all is not covered");
+            Check(!blast(true, true, N::Offense, { hurtArea }, true), "D2: a Self concentration spell is not covered");
+            Check(!blast(true, false, N::Buff, { hurtArea }, false), "D2: a self cloak (nature Buff) is kept whatever its flags");
+            Check(!blast(true, false, N::Ward, { hurtArea }, false) && !blast(true, false, N::Heal, { plainArea }, false), "D2: a ward and an area heal are kept");
+            Check(!blast(false, false, N::Offense, { hurtArea }, true), "D2: an aimed blast (Fireball) is kept");
+            // review F1: the road of a picked summon (IAUS pick, claim, degrade, bCastSelf)
+            using G = Prune::SummonGo;
+            Check(Prune::SummonRoadFor(true, true, false, true) == G::Claim && Prune::SummonRoadFor(false, true, false, true) == G::Claim, "summon road: a served claim is the claim for both");
+            Check(Prune::SummonRoadFor(true, false, false, true) == G::Defer, "summon road: an IAUS summon with no combat controller is deferred, never the one-shot");
+            Check(Prune::SummonRoadFor(true, true, false, false) == G::Defer, "summon road: an IAUS summon with self casts off is deferred");
+            Check(Prune::SummonRoadFor(true, false, true, true) == G::OneShot, "summon road: Harbinger absent keeps the documented direct degrade");
+            Check(Prune::SummonRoadFor(false, false, false, true) == G::OneShot && Prune::SummonRoadFor(false, true, false, false) == G::OneShot, "summon road: a gambit rule is unchanged (no claim = the one-shot)");
+            in.selfBlast = in.targetLocation = true;
+            Check(Prune::StaticDrop(in) == Prune::Drop::SelfBlast, "D2: the block names its own reason");
+            in.targetLocation = false;
+            Check(Prune::StaticDrop(in) == Prune::Drop::Keep, "D2: the reason bit never decides alone (a summon wins in IsPlacement)");
+            // natures: what must stay a candidate is never Offense / Control
+            Prune::NatureIn nat; nat.kind = Prune::Kind::Offense; nat.selfCloak = true;
+            Check(Prune::ClassifyNature(nat) == Prune::Nature::Buff, "D2: a hostile self cloak's nature is Buff (kept)");
+            nat = {}; nat.kind = Prune::Kind::Offense; nat.ward = true;
+            Check(Prune::ClassifyNature(nat) == Prune::Nature::Ward, "D2: a ward's nature is Ward (kept)");
+            nat = {}; nat.kind = Prune::Kind::Offense; nat.control = true;
+            Check(Prune::ClassifyNature(nat) == Prune::Nature::Control, "D2: a blast with a fear / paralysis rider (Fire Storm) is Control, which the block covers");
+        }
+        {   // placed-spells L1: the one placement rule, today's answers
+            using P = Prune::PlacementIn;
+            Check(!Prune::IsPlacement(P{}), "placed L1: nothing set = not a placement (an aimed bolt)");
+            { P p; p.targetLocationDelivery = true; Check(Prune::IsPlacement(p), "placed L1: target location delivery is a placement"); }
+            { P p; p.rune = p.targetLocationDelivery = true; Check(Prune::IsPlacement(p), "placed L1: a rune is a placement"); }
+            { P p; p.wall = true; Check(Prune::IsPlacement(p), "placed L1: a wall is a placement"); }
+            { P p; p.tlBurst = p.targetLocationDelivery = true; Check(Prune::IsPlacement(p), "placed L1: a location burst is a placement"); }
+            { P p; p.selfBlast = true; Check(Prune::IsPlacement(p), "placed L1: a self blast is a placement (interim)"); }
+            { P p; p.summon = true; Check(!Prune::IsPlacement(p), "placed L1: a Self summon is not a placement"); }
+            { P p; p.summon = p.targetLocationDelivery = true; Check(!Prune::IsPlacement(p), "placed M1: Conjure Familiar (target location summon) is kept"); }
+            { P p; p.summon = p.targetLocationDelivery = p.rune = p.wall = p.tlBurst = p.selfBlast = true; Check(!Prune::IsPlacement(p), "placed M1: summon wins over every placed kind"); }
+            {
+                Prune::StaticIn in; in.nature = Prune::Nature::Summon;
+                P p; p.summon = p.targetLocationDelivery = true; in.targetLocation = Prune::IsPlacement(p);
+                Check(Prune::StaticDrop(in) == Prune::Drop::Keep, "placed M1: a target location summon is an IAUS candidate");
+                in.roadUnsupported = true;
+                Check(Prune::StaticDrop(in) == Prune::Drop::Unanimated, "placed M1: the animation rule still goes first");
+            }
         }
         // ---- item 4: the block family ----
         ClassGate knight; knight.resolved = true; knight.treeOn = true; knight.block = true;
@@ -3051,6 +3115,46 @@ static void SeatRowRules() {
     Check(!h.Held(1, 2, 3) && h.Size(1) == 0, "zero-effect: the hold ends with the fight (the follower's pairs)");
 }
 
+// ABI v47 FIRE ONCE (cast/SeatRows.h FireOnceServed) and the A1 party-fight hold (cast/PartyGap.h Holds): the pure rules.
+static void FireOnceAndPartyGapRules() {
+    using namespace MFO::SeatRows;
+    // EngineRow ordinals: NoRow0 Unknown1 Offensive2 Restore3 Stagger4 Disarm5 TargetEffect6 Paralyze7 Script8 Ward9 Summon10 Cloak11
+    // Light12 Invisibility13 BoundItem14 Armor15 Reanimate16 (static_assert-ed against the enum in cast/BuffRoad.cpp).
+    const std::uint32_t kScript = 1u << 8, kRestore = 1u << 3, kOffensive = 1u << 2, kUnknown = 1u << 1, kNoRow = 1u << 0;
+    const std::uint32_t kReanimate = 1u << 16, kDisarm = 1u << 5;
+    const std::uint32_t covScriptRestore = (1u << 9) | (1u << 0) | kFireOnceBit;   // Script + Restore seats, FireOnce
+    Check(FireOnceServed(47, covScriptRestore, kScript | kRestore), "fire-once: Mystic Wind (Script + Restore) is served with both seat bits and the flag bit");
+    Check(!FireOnceServed(46, covScriptRestore, kScript | kRestore), "fire-once: below ABI 47 nothing is served, whatever the coverage says (an older Harbinger ignores the bit)");
+    Check(!FireOnceServed(47, covScriptRestore & ~kFireOnceBit, kScript | kRestore), "fire-once: without kCastSeat_FireOnce nothing is served");
+    Check(!FireOnceServed(47, (1u << 9) | kFireOnceBit, kScript | kRestore), "fire-once: a candidate row WITHOUT its own seat bit (Restore) is not served");
+    Check(!FireOnceServed(47, (1u << 0) | kFireOnceBit, kScript | kRestore), "fire-once: the other candidate (Script) missing is not served either");
+    Check(FireOnceServed(47, (1u << 1) | (1u << 0) | kFireOnceBit, kRestore | kOffensive), "fire-once: Restore + Offensive each on their own bit");
+    Check(!FireOnceServed(47, covScriptRestore, kUnknown | kScript), "fire-once: an Unknown row has no seat and is never served");
+    Check(FireOnceServed(47, covScriptRestore, kNoRow | kScript), "fire-once: a rowless effect is served as Script");
+    Check(!FireOnceServed(47, (1u << 11) | kFireOnceBit, kDisarm), "fire-once: a v46 hostile row needs TypeEquip too");
+    Check(FireOnceServed(47, (1u << 11) | kTypeEquipBit | kFireOnceBit, kDisarm), "fire-once: a v46 hostile row with its bit and TypeEquip is served");
+    Check(!FireOnceServed(47, (1u << 14) | (1u << 9) | kFireOnceBit, kReanimate | kScript), "fire-once: a Reanimate candidate needs a corpse claim (not promised by the chooser)");
+    Check(FireOnceServed(47, (1u << 14) | (1u << 9) | kFireOnceBit, kReanimate | kScript, /*a_corpseClaim=*/true), "fire-once: a Reanimate candidate with a corpse claim is served");
+    Check(!FireOnceServed(47, ~0u, 1u << 17), "fire-once: a row bit past the table is not served");
+    Check(FireOnceServed(47, kFireOnceBit, 0), "fire-once: no row to ask about = the support gate alone (the bridge's FireOnceSupported)");
+
+    using MFO::PartyGap::Holds;
+    Check(Holds(true, false, true, true),   "party gap: a buff on the combat table, no own controller, controller the only missing gate: HELD");
+    Check(!Holds(true, false, false, true), "party gap: a heal (not Buff-kind) is never held, it keeps the instant road (D1)");
+    Check(!Holds(true, true, true, true),   "party gap: with his own controller the claim road serves it, nothing is held");
+    Check(!Holds(false, false, true, true), "party gap: off the combat table (out of combat) nothing is held, the substrate road owns it");
+    Check(!Holds(true, false, true, false), "party gap: a shape no claim road serves (another gate missing) keeps the road it declares");
+    using MFO::PartyGap::OnlyGate;
+    // F1: concentration shapes ChooseBuffRoad answers DirectNoSeat (buff concentration at an ally; non-Self concentration at self;
+    // ambiguous-row concentration at self) are held in the gap when the concentration claim's gates are open
+    Check(Holds(true, false, true, OnlyGate(false, true, true)),  "party gap: a concentration buff at an ally, claim gates open, no controller: HELD");
+    Check(Holds(true, false, true, OnlyGate(false, true, true)),  "party gap: non-Self concentration at self, claim gates open, no controller: HELD");
+    Check(Holds(true, false, true, OnlyGate(false, true, true)),  "party gap: ambiguous-row concentration at self, claim gates open, no controller: HELD");
+    Check(!Holds(true, false, true, OnlyGate(false, true, false)), "party gap: a concentration cast with a claim gate closed (Harbinger absent) keeps its road");
+    Check(!Holds(true, false, true, OnlyGate(false, false, true)), "party gap: a non-concentration cast is not helped by the concentration gates");
+    Check(!Holds(true, true, true, OnlyGate(false, true, true)),   "party gap: concentration with his own controller: unchanged, not held");
+}
+
 int main() {
     std::printf("IAUS core harness (card I2). Curves and weights = DefaultTuning() (native/iaus/Catalogue.cpp).\n");
     MageLowMagickaFireWeak();
@@ -3082,6 +3186,7 @@ int main() {
     ConsumablesWorth();
     LootNeedScores();
     SeatRowRules();
+    FireOnceAndPartyGapRules();
     g_failed += MoveRows(MOVE_GOLDEN, false);
     std::printf("\n%d check(s) failed\n", g_failed);
     return g_failed;

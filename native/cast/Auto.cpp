@@ -1031,6 +1031,12 @@ namespace MFO::Actuation {
 
             // THE DIRECT FAN IS THE UNANIMATED RESIDUE (substrate S1): every cast below is a CastSpellImmediate with no
             // hand animation. Combat table only (the helper is a no-op off it); one line per (follower, spell).
+            // anim-residue plan A1: a non-heal beneficial fan whose only missing gate is his own controller (a party fight, own combat
+            // off) is HELD, not fanned unanimated (cast/PartyGap.cpp). The player is the probe recipient, as in the claim series above.
+            // Transparent, asked again every lap. Heals and hostile fans are never held here (the reader answers false for them); an AUTO
+            // concentration fan has no claim even with a controller (until A4), so it is not "only the controller" and is not held.
+            if (!hostile && !concentration && HoldOwnControllerOnlyGap(a_follower, spell, RE::PlayerCharacter::GetSingleton(), "auto-fan"))
+                return { Result::NoOp, "auto buff held: party fight, no combat controller (animated road only)", true };
             if (g_firingRule != kNoRule) {
                 // the reasons that ask the road choosers use the Why form: gate + rate limit first (review SEV-4)
                 if (hostile && spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf)

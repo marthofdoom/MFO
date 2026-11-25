@@ -22,7 +22,7 @@ import esp_inspect as ei
 from extract import find_plugins, Blob, f32, u32, i32
 
 FLAT = {b'GMST', b'KYWD', b'FACT', b'RACE', b'CLAS', b'CSTY', b'MOVT', b'WEAP', b'ARMO', b'AMMO', b'OTFT', b'LVLI',
-        b'LVLN', b'NPC_', b'SPEL', b'SHOU', b'MGEF', b'ALCH', b'PERK', b'ECZN', b'LCTN', b'ENCH', b'HAZD', b'IPDS', b'IPCT'}
+        b'LVLN', b'NPC_', b'SPEL', b'SHOU', b'MGEF', b'ALCH', b'PERK', b'ECZN', b'LCTN', b'ENCH', b'HAZD', b'IPDS', b'IPCT', b'SCRL', b'PROJ', b'EXPL'}
 u16 = lambda b, o: struct.unpack_from('<H', b, o)[0]
 i16 = lambda b, o: struct.unpack_from('<h', b, o)[0]
 PLAYER_FACTION = ('skyrim.esm', 0xDB1)
@@ -145,7 +145,8 @@ def main():
         if d is None or len(d) < 88: continue
         mgef[k] = dict(fl=u32(d, 0), baseCost=f32(d, 4), school=i32(d, 12), resist=i32(d, 16), minSkill=u32(d, 40),
                        arch=u32(d, 64), av=i32(d, 68), castType=u32(d, 80), delivery=u32(d, 84), av2=i32(d, 88) if len(d) >= 92 else -1,
-                       kw=[x for x in kwlist(key, subs) if x], edid=edid(subs), assoc=key(u32(d, 8)), impacts=key(u32(d, 100)) if len(d) >= 104 and u32(d, 100) else None)
+                       kw=[x for x in kwlist(key, subs) if x], edid=edid(subs), assoc=key(u32(d, 8)), impacts=key(u32(d, 100)) if len(d) >= 104 and u32(d, 100) else None,
+                       proj=key(u32(d, 72)) if u32(d, 72) else None, expl=key(u32(d, 76)) if u32(d, 76) else None)
 
     # WHAT AN EFFECT SPAWNS (sim bundle A). One reader, for a foe's spell and for a taught spell alike (spawned() below).
     #   summon: archetype 18, MGEF DATA +8 (associated form) = the NPC. hazard: native's two roads in native's order (cast/Archetype.cpp): archetype 40,
@@ -165,6 +166,54 @@ def main():
             hd = sub(by['HAZD'][hk][2], 'DATA') or b''
             if k not in impact_hazard: impact_hazard[k] = hk
             if len(hd) >= 24 and u32(hd, 20) & 16: impact_hazard[k] = hk; break
+
+    # WHAT NATIVE'S BOOK READS PER SPELL (placed-spells-plan.md L1), computed as native computes it (the sim feeds Prune::IsPlacement and BlastUnits with it):
+    #   proj: any effect projectile (Archetype.cpp hasProjectile). impact / drops: HasImpactHazard, ANY IPCT of the effect's IPDS with a NAM2 hazard (a hazard with
+    #   no spell counts: hazard_row below does not export those) / any of them with HAZD flag 16. hazHostile: archetype 40 whose hazard's spell has a hostile effect.
+    #   hostImpact / hostPayload: an impact hazard / a payload explosion on an effect whose OWN hostile flag is set (Prune::HostileAreaEffect).
+    #   expl / payload: SpellBook.cpp noteExplosion, the largest radius of the effects' and their projectiles' explosions, all / those with damage > 0 or an enchantment.
+    # PROJ DATA: explosion @36. EXPL DATA: damage f32 @28, radius f32 @32; EITM = the enchantment (fork BGSProjectile.h / BGSExplosion.h).
+    impact_bits = {}   # IPDS key -> (any hazard, any that drops to the ground)
+    for k, (key, fl, subs) in by.get('IPDS', {}).items():
+        any_ = drops = False
+        for d in subsall(subs, 'PNAM'):
+            ik = key(u32(d, 4)) if len(d) >= 8 and u32(d, 4) else None
+            if ik not in by.get('IPCT', {}): continue
+            k2, f2, s2 = by['IPCT'][ik]; n2 = sub(s2, 'NAM2')
+            hk = k2(u32(n2, 0)) if n2 and len(n2) >= 4 and u32(n2, 0) else None
+            if hk not in by.get('HAZD', {}): continue
+            any_ = True; hd = sub(by['HAZD'][hk][2], 'DATA') or b''
+            drops |= len(hd) >= 24 and bool(u32(hd, 20) & 16)
+        impact_bits[k] = (any_, drops)
+
+    def explosion(k):   # -> (radius, carries a payload)
+        if k not in by.get('EXPL', {}): return 0.0, False
+        subs = by['EXPL'][k][2]; d = sub(subs, 'DATA') or b''
+        if len(d) < 36 or not f32(d, 32) > 0: return 0.0, False
+        ench = sub(subs, 'EITM')
+        return f32(d, 32), f32(d, 28) > 0 or bool(ench and len(ench) >= 4 and u32(ench, 0))
+
+    def placed_row(key, subs):
+        r = dict(proj=False, impact=False, drops=False, hazHostile=False, hostImpact=False, hostPayload=False, expl=0.0, payload=0.0)
+        for t, d in subs:
+            m = mgef.get(key(u32(d, 0))) if t == 'EFID' else None
+            if not m: continue
+            ex = [explosion(m['expl'])]
+            if m['proj'] in by.get('PROJ', {}):
+                r['proj'] = True; pk, pf, ps = by['PROJ'][m['proj']]; pd = sub(ps, 'DATA') or b''
+                if len(pd) >= 40 and u32(pd, 36): ex.append(explosion(pk(u32(pd, 36))))
+            for rad, pay in ex:
+                r['expl'] = max(r['expl'], rad)
+                if pay: r['payload'] = max(r['payload'], rad)
+                r['hostPayload'] |= pay and bool(m['fl'] & 1)
+            i, dr = impact_bits.get(m['impacts'], (False, False)); r['impact'] |= i; r['drops'] |= dr; r['hostImpact'] |= i and bool(m['fl'] & 1)
+            if m['arch'] == 40 and m['assoc'] in by.get('HAZD', {}):
+                hk, hf, hs = by['HAZD'][m['assoc']]; hd = sub(hs, 'DATA') or b''
+                sk = hk(u32(hd, 24)) if len(hd) >= 28 and u32(hd, 24) else None
+                if sk in by.get('SPEL', {}):
+                    k2, f2, s2 = by['SPEL'][sk]
+                    r['hazHostile'] |= any(bool(m2 and m2['fl'] & 1) for m2 in (mgef.get(k2(u32(d2, 0))) for t2, d2 in s2 if t2 == 'EFID'))
+        return r
 
     def hazard_row(hk, via):
         key, fl, subs = by['HAZD'][hk]; d = sub(subs, 'DATA')
@@ -222,7 +271,7 @@ def main():
         key, fl, subs = by['SPEL'][k]; d = sub(subs, 'SPIT')
         if d is None or len(d) < 36: return None
         return dict(edid=edid(subs), cost=u32(d, 0), flags=u32(d, 4), type=u32(d, 8), chargeTime=f32(d, 12), castType=u32(d, 16),
-                    delivery=u32(d, 20), castDuration=f32(d, 24), range=f32(d, 28), effects=effects(key, subs, deep))
+                    delivery=u32(d, 20), castDuration=f32(d, 24), range=f32(d, 28), placed=placed_row(key, subs), effects=effects(key, subs, deep))
 
     def spel_ref(k): return idx('spel', k, b_spel) if (k in by.get('SPEL', {}) or k in by.get('SHOU', {})) else -1
 
@@ -577,6 +626,7 @@ def main():
             road['summon'] += any('summon' in r for r in rowx.values())
             for v in {r['hazard']['via'] for r in rowx.values() if 'hazard' in r}: road[v] += 1
             road['hostileHazard'] += any(r['hazard']['spell'] and any(e['hostile'] for e in r['hazard']['spell']['effects']) for r in rowx.values() if 'hazard' in r)
+    spell_placed = {'%s:%x' % k: placed_row(key, subs) for sg in ('SPEL', 'SCRL') for k, (key, fl, subs) in by.get(sg, {}).items() if any(t == 'EFID' for t, d in subs)}
     nsum = sum(1 for k, (key, fl, subs) in by.get('SPEL', {}).items() if any(m and m['arch'] == 18 for m in (mgef.get(key(u32(d, 0))) for t, d in subs if t == 'EFID')))
     print('spells that spawn something (castable SPEL): %r; SPEL records with a Summon effect: %d' % (road, nsum))
 
@@ -611,7 +661,7 @@ def main():
     out = dict(list=name, profile=a.profile, plugins=len(order), pluginsMissing=missing, gmst=dict(sorted(gmst.items())),
                races=rows['race'], classes=rows['clas'], cstyles=rows['csty'], weapons=rows['weap'], armors=rows['armo'], ammo=rows['ammo'],
                lvli=rows['lvli'], lvln=rows['lvln'], npcs=rows['npc'], spells=rows['spel'], perks=rows['perk'], potions=potions,
-               encounters=encounters, selfcheck=selfcheck, named=named, spellFx=spell_fx)
+               encounters=encounters, selfcheck=selfcheck, named=named, spellFx=spell_fx, spellPlaced=spell_placed)
     path = a.out or os.path.expanduser('~/.cache/mfo-list-balance/%s.world.json' % name)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w') as f: json.dump(out, f, separators=(',', ':'))

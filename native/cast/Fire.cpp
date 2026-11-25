@@ -9,6 +9,7 @@
 #include "apmf/APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
 #include "APMF_API.h"          // kCombatMove_Block / kCombatMove_PowerAttack: the "served on this game" question (review F3)
 #include "Concealment.h"       // card G3: act.disengage starts the hide run
+#include "iaus/Prune.h"        // SummonRoadFor: an IAUS summon is never cast unanimated
 #include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
 #include "MainThread.h"          // INVARIANTS #83: the power attack's graph event is sent on the main thread
 #include "logistics/PotionFx.h"   // act.drink_buff_potion: Logistics::DrinkPotionForm
@@ -375,8 +376,31 @@ namespace MFO::Actuation {
                 // Harbinger's summon seats and a combat controller the summon is a self claim (target 0), cast
                 // by the follower's own AI through CastOn's self fork (the hand lock, the never-fired bound).
                 // Every other answer is the direct one-shot below, ChooseBuffRoad naming why on a [buff] line.
-                if (Config::g_castSelf.load() && ChooseBuffRoad(a_follower, sp) == BuffRoad::Claim)
+                // AN IAUS PICK NEVER TAKES THE ONE-SHOT (review F1, Prune::SummonRoadFor): no claim road this lap (no combat controller
+                // yet, Harbinger too old for the summon seats, bCastSelf off) = transparent, asked again next lap. Gambit rules unchanged.
+                const bool iausPick = a_choice.source == Eval::Source::Iaus;
+                const bool selfCasts = Config::g_castSelf.load();
+                const char* why = nullptr;
+                const BuffRoad road = (iausPick || selfCasts) ? ChooseBuffRoad(a_follower, sp, /*a_log=*/!iausPick, nullptr, &why)
+                                                              : BuffRoad::NotBuff;
+                switch (Iaus::Prune::SummonRoadFor(iausPick, road == BuffRoad::Claim, road == BuffRoad::DirectDegrade, selfCasts)) {
+                case Iaus::Prune::SummonGo::Claim:
                     return CastOn(a_follower, a_choice.actionParam, a_follower);
+                case Iaus::Prune::SummonGo::Defer: {
+                    static std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> s_deferLog;   // worker-serial
+                    const auto now = std::chrono::steady_clock::now();
+                    auto& at = s_deferLog[(static_cast<std::uint64_t>(a_follower->GetFormID()) << 32) | sp->GetFormID()];
+                    if (at == std::chrono::steady_clock::time_point{} || now - at >= std::chrono::seconds(15)) {
+                        at = now;
+                        spdlog::info("[buff] {:08X} summon {:08X} DEFERRED -- {}: the IAUS pick waits for the animated claim road, never "
+                                     "the unanimated one-shot", a_follower->GetFormID(), sp->GetFormID(),
+                                     !selfCasts ? "bCastSelf is off" : why ? why : "no claim road for this summon");
+                    }
+                    return { Result::NoOp, "summon deferred: no animated claim road this lap", true };
+                }
+                case Iaus::Prune::SummonGo::OneShot:
+                    break;
+                }
                 return CastSummonOnce(a_follower, sp, a_choice.rank, "combat", op);
             }
             if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_choice.actionParam);

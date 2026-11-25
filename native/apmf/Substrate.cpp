@@ -191,7 +191,7 @@ namespace MFO::APMFBridge {
         return g_pairs.find(a_follower) != g_pairs.end();
     }
 
-    bool OpenSubstrateCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target, const char* a_site) {
+    bool OpenSubstrateCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target, const char* a_site, bool a_fireOnce) {
         const auto* api = SubApi();
         if (!api || a_follower == 0 || a_follower == 0x14 || a_spell == 0) return false;   // Harbinger refuses the player
         if (!api->IsSubstrateAvailable || !api->IsSubstrateAvailable()) return false;      // the caller asked first
@@ -222,6 +222,8 @@ namespace MFO::APMFBridge {
         req.target = a_target;
         req.flags  = APMF_API::kCastFlag_LeftHand;
         if (ownLos) req.flags |= APMF_API::kCastFlag_OwnLineOfSight;
+        // ABI v47 FIRE ONCE (the caller decided and gated on FireOnceSupported; never on an APMF that would ignore the bit).
+        if (a_fireOnce && api->abiVersion >= 47) req.flags |= APMF_API::kCastFlag_FireOnce;
         req.ttlMs  = APMF_API::kCastMaxTtlMs;   // 15 s: Harbinger times the substrate window from tree start, so the
                                                 //  6 s heal TTL could lapse before the cast; the clamp is the ceiling
         const APMF_API::Handle cast = api->RequestCast(a_follower, kOwnBasis, &req);
