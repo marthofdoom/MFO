@@ -378,7 +378,7 @@ namespace MFO::Iaus {
         float spotEyeU = 110.0f;                 // the eye over the floor, geometry rays only
         float spotHighU = 96.0f;                 // high ground stands this far over the target
         float spotPortalU = 180.0f;              // a walk edge between two walls narrower than this is a doorway: one body
-        float spotPortalStandU = 60.0f;          // a point this near to it stands in it
+        float spotPortalStandU = 100.0f;         // a point this near to it stands in it. A gap one square (128) deep is ONE doorway, both its edges (at 60 two bodies stood in it)
         float spotExitU = 500.0f;                // a route out must lead this far
         float spotPeelU = 250.0f;                // a peel spot lies this near to the middle between attacker and ally
         float spotArriveU = 90.0f;               // inside this of a committed spot he has arrived

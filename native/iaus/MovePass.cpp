@@ -78,6 +78,8 @@ namespace MFO::Iaus::MovePass {
                 if (spot) {
                     f.sees = Sees(pic, key, a.target);
                     // the answer that marked him may be older than a fact lives (the foe ran on): the spot he is freed FROM is not "unknown" again
+                    // he stands on it (inside the claim's radius) and HIS OWN ray says no: the point may see, he does not
+                    if ((m.seen & kMarkArrived) && m.commit.on && m.commit.key == key && a.sight == Sight::Occluded) f.sees = Iaus::Tri::No;
                     if (f.sees == Iaus::Tri::Unknown && (m.seen & kMarkSightLost) && m.commit.on && m.commit.key == key && m.commit.act.target == a.target) f.sees = Iaus::Tri::No;
                 }
                 else f.sees = a.sight == Sight::Visible ? Iaus::Tri::Yes : a.sight == Sight::Occluded ? Iaus::Tri::No : Iaus::Tri::Unknown;   // the action facet's own ray

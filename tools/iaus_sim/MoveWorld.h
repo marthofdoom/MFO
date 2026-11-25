@@ -61,13 +61,13 @@ namespace Sim {
         }
         for (const Area& a : F.areas) { const Body* o = F.Find(a.src); if (a.hostile && o && !o->Party()) P.areas.push_back({ { a.x, a.y, a.z }, a.r }); }
         for (const Hazard& h : F.hazards) if (!h.party && !h.pcOnly) P.areas.push_back({ { h.x, h.y, h.z }, h.r });   // 16.3: a hazard is a spot input, as designed
-        P.sight = g_sightT; if (g_moveFault->terrainBlind) P.sight.terrain = false;
+        P.sight = g_sightT; if (g_moveFault->terrainBlind) P.sight.terrain = false; if (g_moveFault->blind) P.sight.walls = false;
     }
 
     inline void MoveOpen(Fight& F) {
         MoveState& S = *F.move.s; const auto t0 = std::chrono::steady_clock::now();
         MoveFill(F); tl_moveFight = &F;
-        Tuning t = *ActiveTuning(); if (g_moveFault->noExits) t.spotExitU = 1.0f;
+        Tuning t = *ActiveTuning(); if (g_moveFault->noExits) t.spotExitU = 0.0f;
         const EQ::View v = EnvViewOf(F, true);
         MP::Freeze(S.pic, v, t);
         if (g_moveFault->reachBlind || g_moveFault->noPortals) {
@@ -88,7 +88,7 @@ namespace Sim {
         const std::size_t due = std::min(S.asks.size(), static_cast<std::size_t>(std::ceil(share * static_cast<double>(S.asks.size()))));
         if (g_moveFault->noRays) { S.asked = due; return; }
         const auto t0 = std::chrono::steady_clock::now(); std::vector<MV::RayAnswer> out; const EnvTuning& T = g_envT; const EQ::View v = EnvViewOf(F);
-        EQ::SightTuning st = g_sightT; if (g_moveFault->terrainBlind) st.terrain = false;
+        EQ::SightTuning st = g_sightT; if (g_moveFault->terrainBlind) st.terrain = false; if (g_moveFault->blind) st.walls = false;
         for (; S.asked < due; ++S.asked) { const MV::RayAsk& a = S.asks[S.asked]; const Body* o = F.Find(a.viewer); if (!o || !Fight::Up(*o)) continue;
             const EQ::Vec3 eye{ o->c.x, o->c.y, o->c.z + T.eyeFrac * T.bodyH }; bool sees = !g_v4.los;
             for (const float h : { T.feetU, T.torsoFrac * T.bodyH, T.eyeFrac * T.bodyH }) { if (sees) break; const EQ::Vec3 to{ a.p.x, a.p.y, a.p.z + h };
@@ -103,11 +103,13 @@ namespace Sim {
         MoveState& S = *F.move.s; const auto t0 = std::chrono::steady_clock::now(); tl_moveFight = &F;
         std::vector<MV::Assignment> as; MP::Phase3(S.pic, &MoveProfile, *ActiveTuning(), as); MP::Adopt(S.pic, as);
         g_moveNs += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
+        S.last = as;
         const MV::MoveCounts& k = S.pic.counts; Tally& t = F.t;
         t.moveUnfinished += k.unfinished; t.movePathShort += k.pathsSkipped; t.moveAskShort += k.asksShort; t.moveSpotShort += k.spotsDropped; t.moveTripleShort += k.triplesDropped; t.movePaths += k.paths;
         for (const MV::Assignment& a : as) {
             Body* x = F.Find(a.who); if (!x || x->ctl < 0) continue; const int ci = x->ctl; const bool subj = ci == 0; MoveClaim& q = S.claim[static_cast<std::size_t>(ci)];
             const MV::Member* m = MoveMember(F, a.who); if (!m) continue;
+            if (!m->commit.on && g_moveFault->stayHolds && m->nTop && !MoveBodyTaken(F, *x)) { if (!q.on) { q.on = q.arrived = true; q.p = { x->c.x, x->c.y, x->c.z }; q.tri = x->nav.tri; q.key = MV::KeyOfStay(a.who); } continue; }
             if (!m->commit.on) { MoveRelease(F, ci, "the pass says: stay"); continue; }
             if (MoveBodyTaken(F, *x)) { MoveRelease(F, ci, "another mover has him"); continue; }
             if (q.on && q.key == m->commit.key) { q.act = m->commit.act; q.kinds = m->commit.kinds; continue; }
@@ -118,6 +120,9 @@ namespace Sim {
             x->nav.n = x->nav.i = 0;   // a new claim is a new path
             if (g_moveT.dropShare > 0.0f) q.dropDue = static_cast<double>(Fight::Mix64(F.avSeed ^ Fight::Mix64(q.key ^ (static_cast<std::uint64_t>(a.who) << 40)) ^ static_cast<std::uint64_t>(S.pic.window)) >> 11) * (1.0 / 9007199254740992.0) < static_cast<double>(g_moveT.dropShare);
             if (F.trace) std::fprintf(F.trace, "%7.2f  SPOT %s: %s at (%.0f, %.0f, %.0f) for %s -> %u, %.0f from him, score %.3f\n", F.now, x->c.name.c_str(), MoveKindNames(q.kinds).c_str(), q.p.x, q.p.y, q.p.z, std::string(Name(q.act.family)).c_str(), q.act.target, std::hypot(q.p.x - x->c.x, q.p.y - x->c.y), a.score);
+            if (F.trace && std::getenv("SIM_WHY")) { const Body* tb = F.Find(q.act.target); const auto it = S.pic.facts.find({ q.key, q.act.target }); std::fprintf(F.trace, "           target at (%.0f, %.0f, %.0f), its look at the place: %s, geometry %d, asked %zu short %u\n", tb ? tb->c.x : 0, tb ? tb->c.y : 0, tb ? tb->c.z : 0, it == S.pic.facts.end() ? "unanswered" : it->second.sees == Tri::Yes ? "yes" : "no", tb ? MV::GeomSees(EnvViewOf(F, true), { tb->c.x, tb->c.y, tb->c.z }, q.p, *ActiveTuning(), tl_envScratch, S.pic.sight) : -1, S.asks.size(), S.pic.counts.asksShort);
+                const auto po = MV::PortalsAt(EnvViewOf(F, true), S.pic.wallVert, q.tri, q.p, *ActiveTuning()); std::fprintf(F.trace, "           doorways %llx %llx\n", static_cast<unsigned long long>(po[0]), static_cast<unsigned long long>(po[1]));
+                for (const MV::Foe& f : S.pic.foes) std::fprintf(F.trace, "           foe %u at (%.0f, %.0f, %.0f) on %u\n", f.id, f.p.x, f.p.y, f.p.z, f.target); }
         }
         // whom the pass does not decide for any more (down, or another mover has him) holds no claim
         for (std::size_t ci = 0; ci < F.ctl.size(); ++ci) { const Body& x = F.b[static_cast<std::size_t>(F.ctl[ci].body)]; if (S.claim[ci].on && MoveBodyTaken(F, x)) MoveRelease(F, static_cast<int>(ci), "he is not free"); }

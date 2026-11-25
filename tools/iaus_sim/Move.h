@@ -43,18 +43,20 @@ namespace Sim {
 
     // THE FAULT VARIANTS: one mechanism of the pass broken from outside (the pure code has no hook), so a scenario's rule is shown to test it.
     struct MoveFaultRow {
-        const char* name; std::uint32_t kinds /* never offered */; bool terrainBlind /* the pass's rays do not see the ground */; bool reachBlind /* who cannot be walked to is not known */;
-        bool noPortals /* no place stands in a doorway */; bool noExits /* a dead end counts as a way on */; bool noRays /* no ray is ever answered */;
+        const char* name; std::uint32_t kinds = 0 /* never offered */; bool terrainBlind = false /* the pass's rays do not see the ground */; bool blind = false /* ... nor the walls */;
+        bool reachBlind = false /* who cannot be walked to is not known */; bool noPortals = false /* no place stands in a doorway */; bool noExits = false /* a dead end counts as a way on */;
+        bool noRays = false /* no ray is ever answered */; bool stayHolds = false /* "stay" is carried out as a claim on his own place */;
     };
     inline constexpr MoveFaultRow kMoveFaults[] = {
-        { "none",        0, false, false, false, false, false },
-        { "no-firing",   MV::KindBit(MFO::Iaus::SpotKind::Firing) | MV::KindBit(MFO::Iaus::SpotKind::HighGround), false, false, false, false, false },
-        { "no-heal",     MV::KindBit(MFO::Iaus::SpotKind::HealReach), false, false, false, false, false },
-        { "terrain",     0, true, false, false, false, false },
-        { "reach",       0, false, true, false, false, false },
-        { "portals",     0, false, false, true, false, false },
-        { "exits",       0, false, false, false, true, false },
-        { "rays",        0, false, false, false, false, true },
+        { .name = "none" },
+        { .name = "no-heal", .kinds = MV::KindBit(MFO::Iaus::SpotKind::HealReach) },
+        { .name = "terrain", .terrainBlind = true },
+        { .name = "blind", .terrainBlind = true, .blind = true },
+        { .name = "reach", .reachBlind = true },
+        { .name = "portals", .noPortals = true },
+        { .name = "exits", .noExits = true },
+        { .name = "rays", .noRays = true },
+        { .name = "stay-holds", .stayHolds = true },
     };
     inline const MoveFaultRow* g_moveFault = &kMoveFaults[0];
     [[nodiscard]] inline const MoveFaultRow* MoveFaultByName(std::string_view n) { for (const MoveFaultRow& f : kMoveFaults) if (n == f.name) return &f; return nullptr; }
@@ -70,7 +72,7 @@ namespace Sim {
     struct MoveState {
         MV::PartyPicture pic; std::vector<MoveClaim> claim;
         std::vector<MV::RayAsk> asks; std::size_t asked = 0; double winStart = 0.0, winEnd = 0.0; bool open = false;
-        double meterAt = 0.0;
+        std::vector<MV::Assignment> last;   // what the last window assigned (diagnostics, the scenario tests)
     };
     // A fight is a plain value: a copy copies the state too. Null while the road is off.
     struct MoveBox {

@@ -12,6 +12,7 @@
 #include "iaus_sim/PotionWorth.h"
 #include "iaus_sim/Logistics.h"
 #include "iaus_sim/EnvTest.h"     // SIM V4: --env-test
+#include "iaus_sim/SpotTest.h"    // S2: --spot-test
 #include "iaus_sim/LootCli.h"     // SIM V4 batch L: looting in the fight world (--loot-*)
 #include "iaus/Iaus_internal.h"   // detail::SetFor: which considerations a family reads (--list-uses, for the per-class curve search)
 
@@ -249,7 +250,6 @@ namespace {
         return bad == 0 && inv == 0 ? 0 : 1;
     }
 
-    int RunSpotTests(const Data&, const std::vector<SimClass>&, std::uint64_t, int) { return 0; }
     void PrintMoveCost() {   // host time: in no metric, no compare
         if (g_road == Road::Off || !g_moveFights) return;
         std::fprintf(stderr, "MOVECOST %lld fights  %.2f ms a fight  %.3f ms a window (worst %.2f)  %.1f windows and %.0f rays a fight\n", g_moveFights.load(), 1e-6 * double(g_moveNs) / double(g_moveFights), 1e-6 * double(g_moveNs) / double(std::max<long long>(1, g_moveWindows)), 1e-6 * double(g_moveWorstNs), double(g_moveWindows) / double(g_moveFights), double(g_moveRays) / double(g_moveFights)); }
