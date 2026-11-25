@@ -252,6 +252,11 @@ namespace MFO::Actuation {
         // "ally selector or not" once, at the single write site.
         inline float g_firingAllyThreshold = -1.0f;
 
+        // THE FIRING CHOICE IS AN IAUS PICK (placed-spells M4). Carried the way g_firingRule is, for the same reason (every reader is reached only from Fire()): only an IAUS
+        // pick of a Self, fire-and-forget OFFENSE spell (a self blast: Frost Nova, Fire Storm, Harmony) takes the animated claim road of cast/BuffRoad.cpp, and an IAUS pick
+        // that has no claim road this lap is held, never cast unanimated. A GAMBIT rule casting the same spell keeps its roads (CastSelfDirect's stream). Reset by Fire()'s scope.
+        inline bool g_firingIaus = false;
+
         struct CastLock {
             RE::FormID spell  = 0;
             RE::FormID target = 0;
@@ -621,6 +626,11 @@ namespace MFO::Actuation {
         std::optional<Outcome> BuffRefreshGate(RE::Actor* a_follower, RE::SpellItem* a_spell,
                                                RE::Actor* a_recipient = nullptr, RE::Actor* a_corpse = nullptr);
         bool BuffPlacementSpell(RE::SpellItem* a_spell);
+        // PLACED SPELLS M4 (cast/BuffRoad.cpp). SelfBlastClaimSpell: the SHAPE of a spell an IAUS pick sends down the buff claim road although it is Offense-kind: Self delivery,
+        // fire-and-forget, ClassifySpell Offense (a hostile flag, or a control archetype: Frost Nova, Fire Storm, Harmony). Record data only. ChooseBuffRoad treats it as a
+        // buff only while g_firingIaus is set, so a gambit rule's road is unchanged. NoteSelfBlastDeferred: the one rate-limited line when an IAUS pick of one has no claim road this lap.
+        bool SelfBlastClaimSpell(RE::SpellItem* a_spell);
+        void NoteSelfBlastDeferred(RE::Actor* a_follower, RE::SpellItem* a_spell, const char* a_why);
         // CARD G7. BuffCorpseTarget: the FormID a Reanimate claim names for a_corpse: the corpse when a_spell has a
         // Reanimate effect, a_corpse is a dead actor other than the caster and Harbinger serves corpse targets
         // (ABI >= 42); else 0 (the pre-G7 target-0 claim). The ONE answer CastOn's dry run, BuffClaim and the

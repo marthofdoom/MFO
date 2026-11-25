@@ -218,6 +218,7 @@ namespace MFO::Iaus::SpellBook {
             const char* explosionSrc = "none";
             float units = 0.0f;                   // Prune::BlastUnits: the radius IAUS uses, 0 = no area
             bool  hostileArea = false;            // an effect that is hostile by its own flag AND has an area of its own (Prune::HostileAreaEffect)
+            float hostileUnits = 0.0f;            // M4: the radius of THOSE effects' own areas (EFIT feet -> units, and the explosion that carries the damage), 0 = none
         };
         Blast BlastOf(RE::SpellItem* a_sp, const Actuation::SpellArchetype& a_arch) {
             Blast b;
@@ -233,7 +234,14 @@ namespace MFO::Iaus::SpellBook {
                 if (!base) continue;
                 bool payload = note(base->data.explosion, "effect");
                 if (const auto* proj = base->data.projectileBase) payload |= note(proj->data.explosionType, "projectile");
-                b.hostileArea |= Prune::HostileAreaEffect(base->IsHostile(), eff->effectItem.area > 0, false, payload);   // the impact hazard: SpellArchetype::hostileImpact
+                const bool hostileEffect = Prune::HostileAreaEffect(base->IsHostile(), eff->effectItem.area > 0, false, payload);   // the impact hazard: SpellArchetype::hostileImpact
+                b.hostileArea |= hostileEffect;
+                if (hostileEffect) {   // M4: the radius of the HOSTILE effect alone (a benign effect's larger area is not where the harm lands). EFIT area is in FEET.
+                    float r = Prune::AreaUnits(static_cast<float>(eff->effectItem.area));
+                    for (const auto* ex : { base->data.explosion, base->data.projectileBase ? base->data.projectileBase->data.explosionType : nullptr })
+                        if (ex && std::isfinite(ex->data.radius) && ex->data.radius > r && (eff->effectItem.area > 0 || ex->data.damage > 0.0f || ex->formEnchanting != nullptr)) r = ex->data.radius;
+                    if (std::isfinite(r) && r > b.hostileUnits) b.hostileUnits = r;
+                }
             }
             // With an EFIT area any explosion may enlarge it (the larger radius is the safe one for the never-splash
             // rule); without one only a payload explosion counts (MFO-B661).
@@ -288,15 +296,14 @@ namespace MFO::Iaus::SpellBook {
             // The animation rule is about MFO's spell roads; a scroll is used through its own road (card S3).
             // A summon the claim road can never serve (review F1) is out for IAUS alone: its only road is the unanimated one-shot.
             st.roadUnsupported = a_source == Source::Spell &&
-                                 (Actuation::CastRoadUnsupported(a_sp) || (in.summon && Actuation::SummonClaimUnservedWhy(a_sp, a_arch)));
+                                 (Actuation::CastRoadUnsupported(a_sp) || (in.summon && Actuation::SummonClaimUnservedWhy(a_sp, a_arch)) ||
+                                  Actuation::BlastClaimUnservedWhy(a_sp, a_arch));   // M4 F4: a self blast no Harbinger row can serve is never castable: not offered, not taught
             Prune::PlacementIn pl;
             pl.targetLocationDelivery = delivery == RE::MagicSystem::Delivery::kTargetLocation;
             pl.rune      = a_arch.shape == Actuation::SpellShape::Rune;
             pl.wall      = a_arch.shape == Actuation::SpellShape::Wall;
             pl.tlBurst   = a_arch.shape == Actuation::SpellShape::TLBurst;
-            pl.selfBlast = Prune::IsSelfBlastPlacement(selfDelivery, a_sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration,
-                                                       out.nature == Prune::Nature::Offense || out.nature == Prune::Nature::Control,
-                                                       BlastOf(a_sp, a_arch).hostileArea || a_arch.hostileImpact, a_arch.hazardHostile);   // interim, see Prune.h
+            pl.selfBlast = Prune::IsSelfHazardBlock(selfDelivery, a_sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration, a_arch.hazardHostile);   // M4: only the hazard arm stays out, see Prune.h
             pl.summon    = in.summon;
             st.targetLocation = Prune::IsPlacement(pl);
             st.selfBlast = pl.selfBlast;
@@ -357,6 +364,14 @@ namespace MFO::Iaus::SpellBook {
             e.meleeBuff = arch.row == Actuation::EngineRow::Armor || arch.row == Actuation::EngineRow::Cloak ||
                           arch.shape == Actuation::SpellShape::Cloak;
             e.areaUnits = blast.units;
+            // M4 (placed-spells-plan 3.3, review F2): a SELF blast's GUARD reads the widest area (areaUnits), its foe gate and foes-in-area the HOSTILE effect's own radius
+            // (blastFoeUnits): Prune::SelfBlastRadii, the one rule. An impact hazard on the hostile effect widens both and lives on (leavesHazard, F7).
+            if (e.selfDelivery && blast.hostileArea && blast.hostileUnits > 0.0f) {
+                const Prune::BlastRadii r = Prune::SelfBlastRadii(blast.units, blast.hostileUnits, arch.hostileImpact ? arch.impactHazardUnits : 0.0f);
+                e.areaUnits = r.guard;
+                e.blastFoeUnits = r.foe;
+            }
+            e.leavesHazard = e.selfDelivery && arch.hostileImpact;
             // M3 (placed-spells-plan 3.2): a WALL's area is the footprint of the hazard it drops where the stream lands (the larger of that and any blast), so the
             // ONE area guard and the foes-in-area count read it like any other area. Its EFIT area is 0 and its hazard is no explosion, so before this a wall had none.
             e.wall = arch.shape == Actuation::SpellShape::Wall;

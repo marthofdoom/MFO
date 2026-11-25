@@ -621,12 +621,16 @@ namespace MFO::Iaus {
 
         // S11b (iaus/SpellWorth.h): what ONE cast of e on a_target is worth in the reader's unit. known = false whenever Tuning::spellWorth.live is 0 (SHIPPED), so every
         // call below keeps today's number bit for bit; a cast the reader does not know keeps today's number at any `live`.
+        // THE CENSUS OF ONE ENTRY (its centre, radii and pads): every offense / control area asks this one.
+        AreaHits EntryCensus(const Snapshot& s, const SpellEntry& e, const Combatant& a_target, const std::vector<const Combatant*>& a_foes) {
+            return Estimate::AreaCensus(s, a_foes, e.selfDelivery ? s.self : a_target, e.areaUnits, AreaAllyPad(e), AreaBystanderMargin(e), e.FoeUnits());
+        }
+
         Estimate::Worth WorthOf(const Ctx& x, const SpellEntry& e, const Combatant& a_target, const std::vector<const Combatant*>& a_foes) {
             if (!(x.t.spellWorth.live > 0.0f)) return {};
             float foes = -1.0f, friends = -1.0f;
             if (e.nature == Prune::Nature::Offense && e.areaUnits > 0.0f) {   // the same area test the candidate's foesInArea / splashSafe make
-                const Combatant& centre = e.selfDelivery ? x.s.self : a_target;
-                const AreaHits hits = Estimate::AreaCensus(x.s, a_foes, centre, e.areaUnits, e.selfDelivery ? 0.0f : Estimate::kFireBodyPad);
+                const AreaHits hits = EntryCensus(x.s, e, a_target, a_foes);
                 foes = static_cast<float>(hits.foes); friends = static_cast<float>(hits.allies + hits.bystanders);
             }
             const Estimate::SpellIn in = Estimate::MakeSpellIn(e, a_target, x.s, x.t.spellWorth, foes, friends);
@@ -819,12 +823,20 @@ namespace MFO::Iaus {
                 if (o.twoHanded ? anyBusy : bothBusy) continue;
                 if (o.cost > 0.0f && (!poolOk || !Prune::Affordable(o.cost, pool))) continue;
                 if (o.selfDelivery && !(o.areaUnits > 0.0f)) continue;
-                const float oReach = (std::max)(0.0f, Finite(o.touch ? s.meleeReach : (o.selfDelivery ? o.areaUnits : o.reach), 0.0f));
+                const float oReach = (std::max)(0.0f, Finite(o.touch ? s.meleeReach : (o.selfDelivery ? o.FoeUnits() : o.reach), 0.0f));
+                // M4 F6: a SELF blast is an option under the candidate loop's own tests (the foe inside, no 1.15 x; the census open), else it would be the yardstick
+                // of every other spell without being a candidate itself.
+                const bool selfArea = o.selfDelivery && o.areaUnits > 0.0f;
+                if (selfArea) {
+                    const AreaHits hits = EntryCensus(s, o, s.self, a_foes);
+                    if (hits.allies > 0 || !hits.BystandersSafe()) continue;
+                }
                 for (std::size_t ti = 0; ti < x.top.size(); ++ti) {
                     const Combatant& foe = *x.top[ti];
                     if (o.undeadOnly && !foe.undead) continue;
                     if (Note(s.willWork, o.form, foe.id) == Tri::No) continue;   // F3 (and the level cap, F2): a pair WillWork refused is no option on that foe
                     if (oReach > 0.0f && Finite(foe.dist, 0.0f) > oReach * kRangeVeto) continue;
+                    if (selfArea && !(Finite(foe.dist, 1.0e9f) <= oReach)) continue;
                     float raw = Estimate::SpellOn(o, foe);
                     float rate = EffectRate(x, o, raw);
                     if (const Estimate::Worth w = WorthOf(x, o, foe, a_foes); w.known) {   // S11b: both yardsticks in the candidate's units
@@ -885,12 +897,15 @@ namespace MFO::Iaus {
                     if (!scroll && CloseRefused(x, e)) { ++x.out.droppedTarget; x.out.closeRefused = true; break; }   // marth 2026-11-13: not until he survives closing
                     // Reach: Touch = a swing's reach; a Self-delivered blast reaches its own area; else the aimed
                     // reach (0 = the record gives none: range is then not applicable).
-                    const float reach = e.touch ? s.meleeReach : (e.selfDelivery ? e.areaUnits : e.reach);
+                    const float reach = e.touch ? s.meleeReach : (e.selfDelivery ? e.FoeUnits() : e.reach);
                     if (CastBarred(x, e)) { ++x.out.droppedTarget; break; }   // (the guard / holdQuiet gates were met above; this is the blast-area one)
                     for (std::size_t ti = 0; ti < x.top.size(); ++ti) {
                         const Combatant* foe = x.top[ti];
                         if (foe->noApproach) continue;   // 11-17: a foe kept past the chase cap is a threat read, never a cast target (spell reach 0 would not veto it)
                         if (e.undeadOnly && !foe->undead) { ++x.out.droppedTarget; continue; }   // its own target rule (FoeBarred's)
+                        // M4 (placed-spells-plan 3.3): a SELF blast is centred on HIM, so the foe it is for must stand inside its radius (the range curve's 1.15 x slack is for a
+                        // spell that is aimed: this one lands nowhere else). A foe past it is no target (not a candidate); the same unit as the census (units, centre to centre).
+                        if (e.selfDelivery && e.areaUnits > 0.0f && !(Finite(foe->dist, 1.0e9f) <= e.FoeUnits())) { ++x.out.droppedTarget; continue; }
                         // marth 2026-11-13 ("all effect spell detection"): a spell whose lingering effects would all merely replace ones live on
                         // THIS foe (same base MGEF, or a keyword dispel: SpellBook's FoeFx mirror) is invalid until they run out.
                         if (FxAllReplaced(e.lingerFx, foe->liveFx)) { ++x.out.droppedTarget; continue; }
@@ -939,12 +954,10 @@ namespace MFO::Iaus {
                             c.f.bestDamage = bestOn[ti];
                         }
                         if (e.areaUnits > 0.0f) {
-                            const Combatant& centre = e.selfDelivery ? s.self : *foe;
-                            // marth: never splash the party (his own blast does not hit him) and, M2, never a bystander: ONE reader (iaus/AreaCensus.h).
-                            // 11-17b: a blast at the TARGET reaches a body past its area (Estimate::kFireBodyPad, the ch.25 cast guard's area + 64); his own does not
+                            // marth: never splash the party (the caster himself is not in the census) and, M2, never a bystander: ONE reader (iaus/AreaCensus.h).
+                            // 11-17b: a blast at the TARGET reaches a body past its area (Estimate::kFireBodyPad, the ch.25 cast guard's area + 64); his own blast a body and a movement margin past it (AreaAllyPad, M4 F1)
                             // M3 review F2: a wall's hazard lives 30 s, so its bystander margin is a walking distance (kAreaGuard.wallMargin), not the cast moment's
-                            const AreaHits hits = Estimate::AreaCensus(s, a_foes, centre, e.areaUnits, e.selfDelivery ? 0.0f : Estimate::kFireBodyPad,
-                                                                       e.wall ? kAreaGuard.wallMargin : kAreaGuard.safetyMargin);
+                            const AreaHits hits = EntryCensus(s, e, *foe, a_foes);
                             c.f.hasArea = true;
                             c.f.foesInArea = static_cast<float>(hits.foes);
                             c.f.splashSafe = hits.allies == 0;

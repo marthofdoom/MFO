@@ -146,6 +146,13 @@ namespace MFO::Actuation {
             ChooseBuffRoad(a_follower, a_spell) == BuffRoad::Claim)
             return BuffSelfClaim(a_follower, a_spell);
 
+        // PLACED SPELLS M4 BACKSTOP: an IAUS pick of a self blast is held in Fire() when it has no claim road; this is the net under that, so it can never reach the
+        // unanimated stream below (the gambit road of the same spell is unchanged: g_firingIaus is false there). Declined = the transparent no-cast.
+        if (g_firingIaus && SelfBlastClaimSpell(a_spell)) {
+            NoteSelfBlastDeferred(a_follower, a_spell, "no claim road reached the self fork");
+            return SelfCast::Declined;
+        }
+
         // TASK 1 (feat/cast-gambit-concentration): a non-heal (Offense/Buff)
         // CONCENTRATION self-cast never reached the engine-seat path above --
         // ComposedCast::Try is HEAL-ONLY by design (ComposedCast.h; the

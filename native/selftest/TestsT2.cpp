@@ -430,9 +430,9 @@ namespace MFO::SelfTest {
                         }
                     }
                     r.text = std::format("{} castable spell record(s) scanned, {} are script-only, {} of those WOULD be weighed{}", total, scriptOnly, wrong, wrong ? names : std::string());
-                    r.text += std::format("; placed: {} summon(s), {} dropped as placement; {} self area shape(s), {} kept; {} blocked as a self blast{}", summons, summonsPlaced,
+                    r.text += std::format("; placed: {} summon(s), {} dropped as placement; {} self area shape(s), {} kept; {} blocked as a self hazard{}", summons, summonsPlaced,
                                           blastShapes, blastsKept, blocked, placedNames);
-                    r.fail = wrong > 0 || summonsPlaced > 0 || blastsKept > 0;
+                    r.fail = wrong > 0 || summonsPlaced > 0;   // M4: a self area shape is KEPT now (the census guards it); blastsKept is a count, not a defect
                     auto* hs = heal ? RE::TESForm::LookupByID<RE::SpellItem>(heal) : nullptr;
                     const char* hwhy = nullptr;
                     const bool  hw = hs && Iaus::SpellBook::WouldWeigh(hs, Iaus::ClassGate{}, &hwhy);

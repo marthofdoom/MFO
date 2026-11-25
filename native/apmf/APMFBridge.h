@@ -1843,7 +1843,13 @@ namespace MFO::APMFBridge {
     // bits), re-requests a handle Harbinger no longer knows, and RELEASES when no guard
     // applies. A refusal is logged as an error once and that guard is not asked again
     // this session: no MFO hook stands in. No-op below ABI 21.
-    void ServiceCastGuard(RE::FormID a_follower, bool a_lineOfFire, bool a_channelBound);
+    // a_selfBlast (MFO-B872 11): an IAUS self-blast claim of his stands (Actuation::SelfBlastGuardStands), so the same claim also
+    // asks kCastGuard_SelfBlastParty (+ Summons with bAreaSummonsBlock): Harbinger holds the blast while the party is in it, at the
+    // start and at the landing. With bFriendlyFireHold only, and only after a CanServe dry run accepted the bits (once per session,
+    // ABI >= 35; else today's behaviour, logged). A refusal strikes those bits alone.
+    void ServiceCastGuard(RE::FormID a_follower, bool a_lineOfFire, bool a_channelBound, bool a_selfBlast);
+    // Worker. The same bits the moment an IAUS blast claim is filed / ended (the lap service carries every other end).
+    void SetSelfBlastGuard(RE::FormID a_follower, bool a_on);
     // Worker. Drop the follower's guard (CasterConsent::Clear: combat end, dismissal).
     void ReleaseCastGuard(RE::FormID a_follower);
 

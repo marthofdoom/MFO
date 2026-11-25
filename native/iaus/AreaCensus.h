@@ -23,6 +23,10 @@ namespace MFO::Iaus {
         // at most maxAgeTicks x 133 ms old and normally one tick plus a frame (~0.15 to 0.3 s); a running NPC covers ~370 units/s, so 128 units is
         // about a third of a second of running.
         float         safetyMargin = 128.0f;
+        // PLACEHOLDER (M4 F1). How far past a SELF BLAST's radius (and a body, kFireBodyPad) a PARTY member or the player closes it. Nothing protects the party at the
+        // release (Harbinger's line of fire skips Self delivery, its bystander hold excludes the party), and a charge is never cut, so it covers the walk between the
+        // last open lap and the blast: about one second of running (~370 units/s). Never under safetyMargin (static_assert below).
+        float         selfBlastAllyMargin = 384.0f;
         std::uint32_t refreshTicks = 1;   // unpaused worker ticks (133 ms) between two builds while somebody wants the table
         std::uint32_t maxAgeTicks = 3;    // older than this = NotReady = the gate is closed (never read as "nobody there")
         // PLACEHOLDER, no reader until package M6 (runes): a rune stands for its life, not the cast moment, so out of combat in a settlement it scores 0.
@@ -41,6 +45,15 @@ namespace MFO::Iaus {
         float         wallFloorUnits = 64.0f;
     };
     inline constexpr AreaGuardTuning kAreaGuard{};
+    static_assert(kAreaGuard.selfBlastAllyMargin >= kAreaGuard.safetyMargin);
+
+    // THE PADS OF ONE ENTRY'S AREA (the one place): how far past the radius a party member, and a bystander, still counts.
+    // A hostile self blast: body + movement margin. A self area that harms nobody (Harmony): 0. An area at the target: a body (the ch.25 cast guard's area + 64).
+    [[nodiscard]] inline float AreaAllyPad(const SpellEntry& a_e) {
+        if (!a_e.selfDelivery) return Estimate::kFireBodyPad;
+        return a_e.nature == Prune::Nature::Offense || a_e.hostileArea ? Estimate::kFireBodyPad + kAreaGuard.selfBlastAllyMargin : 0.0f;
+    }
+    [[nodiscard]] inline float AreaBystanderMargin(const SpellEntry& a_e) { return a_e.wall || a_e.leavesHazard ? kAreaGuard.wallMargin : kAreaGuard.safetyMargin; }
 
     // Does this listed actor count as a bystander for this snapshot? A party summon and the player's horse only when the MCM option says so
     // (Config::g_areaSummonsBlock, default OFF: Harbinger's ruling "Bystanders only", marth 2026-11-02). The ONE place that option is enforced.
@@ -60,6 +73,14 @@ namespace MFO::Iaus {
         [[nodiscard]] bool BystandersSafe() const { return !blind && bystanders == 0; }
     };
 
+    // Is there a cast candidate of this spell whose area the census left OPEN (Cons::SplashSafe's own reading: Catalogue.cpp)? A standing blast claim is kept only then.
+    [[nodiscard]] inline bool AreaOpenFor(const std::vector<Candidate>& a_actions, std::uint32_t a_form) {
+        for (const Candidate& c : a_actions)
+            if (c.form == a_form && (c.family == Family::CastOffense || c.family == Family::CastControl) && c.f.areaGuardOk &&
+                (c.family == Family::CastControl || c.f.splashSafe)) return true;
+        return false;
+    }
+
     namespace Estimate {
 
         // An unreadable foe or ally position is "far" (Generate.cpp Between's rule, unchanged). An unreadable BYSTANDER position, centre or radius is a hit:
@@ -70,13 +91,14 @@ namespace MFO::Iaus {
         }
 
         // (center, radius, caster): the caster is a_s.self. a_bystanderMargin: how far past the radius a bystander still counts (a wall passes kAreaGuard.wallMargin). a_foes = the foes the decision counts (Generate's kept list, the numbers AreaValue always read).
-        // a_allyPad = how far past the radius an ally still counts (0 for his own blast, kFireBodyPad for a blast at a target).
+        // a_allyPad = how far past the radius an ally still counts (AreaAllyPad). a_foeRadius: the foes are counted inside this instead (< 0 = a_radius; SpellEntry::FoeUnits).
         template <class FoeList>   // any range of const Combatant*
         [[nodiscard]] AreaHits AreaCensus(const Snapshot& a_s, const FoeList& a_foes, float a_cx, float a_cy, float a_cz, float a_radius, float a_allyPad,
-                                              float a_bystanderMargin = kAreaGuard.safetyMargin) {
+                                              float a_bystanderMargin = kAreaGuard.safetyMargin, float a_foeRadius = -1.0f) {
             AreaHits h;
+            if (!(a_foeRadius >= 0.0f)) a_foeRadius = a_radius;
             const auto dist = [&](float x, float y, float z) { const float d = AreaDist(x, y, z, a_cx, a_cy, a_cz); return std::isfinite(d) ? d : 1.0e9f; };
-            for (const Combatant* f : a_foes) if (dist(f->x, f->y, f->z) <= a_radius) ++h.foes;
+            for (const Combatant* f : a_foes) if (dist(f->x, f->y, f->z) <= a_foeRadius) ++h.foes;
             for (const Combatant& a : a_s.allies) if (dist(a.x, a.y, a.z) <= a_radius + a_allyPad) ++h.allies;
             h.blind = a_s.areaPicture == AreaPicture::NotReady;
             if (a_s.areaPicture != AreaPicture::Ready) return h;   // NotApplicable: a host with no bystanders (the simulator, the harness)
@@ -91,8 +113,8 @@ namespace MFO::Iaus {
         }
         template <class FoeList>
         [[nodiscard]] AreaHits AreaCensus(const Snapshot& a_s, const FoeList& a_foes, const Combatant& a_centre, float a_radius, float a_allyPad,
-                                              float a_bystanderMargin = kAreaGuard.safetyMargin) {
-            return AreaCensus(a_s, a_foes, a_centre.x, a_centre.y, a_centre.z, a_radius, a_allyPad, a_bystanderMargin);
+                                              float a_bystanderMargin = kAreaGuard.safetyMargin, float a_foeRadius = -1.0f) {
+            return AreaCensus(a_s, a_foes, a_centre.x, a_centre.y, a_centre.z, a_radius, a_allyPad, a_bystanderMargin, a_foeRadius);
         }
 
         // THE LINE (M3, a wall's stream): bystanders along the segment from a_from to a_to, where they project BETWEEN the two ends (one behind the caster or

@@ -62,7 +62,7 @@ def verdict(s):
     elif kind == 'buff' and not (conc and not self_) and shape not in ('summon', 'reanimate') and LIGHT in ar and s['delivery'] in ('Aimed', 'TargetLocation'): d = 'unanimated road only'
     elif SUMMON in ar and (kind != 'buff' or not rows_ok(fx, self_)): d = 'unanimated road only'
     elif placed: d = 'target location'
-    elif blast: d = 'hostile area around himself: blocked for now (no animated road, no bystander check)'
+    elif blast: d = 'hostile area around himself that no census reads yet (a spawned hazard in the game, any self blast in the lab): not offered'
     elif n == 0: d = 'nature unknown'
     elif not any(0 <= a <= 46 and a not in (1, 43) for a in ar): d = "its effects are script-only or unknown archetypes: IAUS cannot weight what it does"
     else: d = 'keep'

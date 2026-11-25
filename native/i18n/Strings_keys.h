@@ -101,7 +101,7 @@ MFO_STR(Cl_TeachBtn,        "Teach spells", 0)   // batch I item 7: opens the Te
 MFO_STR(Cl_TeachTitle,      "Teach spells", 0)
 MFO_STR(Cl_TeachNote,       "Spell tomes in your pack that {1} does not know and that his combat AI would use as {2}. Teaching destroys the tome. A spell the AI could not weigh for his class is not listed.", 2)   // {1}=follower, {2}=class
 MFO_STR(Cl_TeachNone,       "No tome in your pack teaches {1} a spell his combat AI would use.", 1)   // {1}=follower
-MFO_STR(Cl_TeachBlocked,    "{1}: his combat AI does not use it for now. It is a hostile spell that strikes everyone around him, and his AI has no safe, animated way to cast it yet. A gambit rule can still use it.", 1)   // {1}=the spell; greyed row
+MFO_STR(Cl_TeachBlocked,    "{1}: his combat AI does not use it for now. It is a hostile spell that leaves a lingering hazard round him, and his AI cannot weigh that safely yet. A gambit rule can still use it.", 1)   // {1}=the spell; greyed row
 MFO_STR(Cl_TeachClose,      "Close", 0)
 MFO_STR(Cl_TipReadOnly,     "The class save is read-only this session (it came from a newer version of the mod), so classes cannot be changed.", 0)
 MFO_STR(Cl_TipClassPick,    "Turned off while a class is equipped: the class sets his stance (see the Classes tab).", 0)
