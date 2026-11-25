@@ -140,7 +140,7 @@ namespace MFO::SelfTest {
             float t = 0, heldT = 0, insideT = 0, excludedT = 0, arriveAt = -1, startD = 0, drift = 0, moveT = 0;
             float maxD = 0, worstBack = 0, worstOver = 0, roleLostT = 0, leashT = 0, notCarriedT = 0, phaseT[9]{};
             std::vector<float> dist;               // per sample after the arrival
-            int   excursions = 0, inAttack = 0, late = 0, attacks = 0, shots = 0;
+            int   excursions = 0, inAttack = 0, late = 0, attacks = 0, shots = 0, attacks0 = 0, shots0 = 0;   // the 0s: at the arrival
             bool  out = false, have = false, everLive = false, dropped = false;
             float outT = 0, outMax = 0;
             RE::NiPoint3 prev{};
@@ -269,7 +269,7 @@ namespace MFO::SelfTest {
             if (s.dist.empty() && s.arriveAt < 0 && s.startD == 0.0f) s.startD = d;
             const bool down = busy || (st.passed & 1u) != 0;   // kMovePass_EssentialDown
             if (s.arriveAt < 0) {
-                if (d <= leg.radius && (ph == 3 || d <= 24.0f)) s.arriveAt = s.t;
+                if (d <= leg.radius && (ph == 3 || d <= 24.0f)) { s.arriveAt = s.t; s.attacks0 = s.attacks; s.shots0 = s.shots; }
                 else if (s.t - s.excludedT > std::max(r.pathLen, s.startD) / kT.arriveSpeed + kT.arrivePlus) return end("never arrived in time");
                 if (down) s.excludedT += dt;
                 if (s.arriveAt < 0) return;
@@ -327,7 +327,10 @@ namespace MFO::SelfTest {
                 r.phase = Phase::Start;
                 return;
             }
-            const float rate  = s.t > 1.0f ? 60.0f * static_cast<float>(r.bow ? s.shots : s.attacks) / s.t : 0.0f;
+            const bool  order = leg.kind != Kind::Free;   // under an order only the held time counts
+            const float over  = order ? s.heldT : s.t;
+            const int   hits  = (r.bow ? s.shots : s.attacks) - (order ? (r.bow ? s.shots0 : s.attacks0) : 0);
+            const float rate  = over > 1.0f ? 60.0f * static_cast<float>(hits) / over : 0.0f;
             const float drift = s.moveT > 1.0f ? s.drift / s.moveT : 0.0f;
             std::string fail, extra;
             const auto  no = [&](std::string x) { fail += (fail.empty() ? "" : "; ") + std::move(x); };
@@ -368,6 +371,7 @@ namespace MFO::SelfTest {
                         if (s.relPhase != 0) no("an order still stands on him");
                     }
                 }
+                if (!leg.judge && !s.dropped && !fail.empty()) { r.summary += (r.summary.empty() ? "(" : "; (") + fail + ") "; fail.clear(); }
                 extra = StatLine(s, s.t) + std::format(" | {:.1f} {}/min ({:.1f} free), drift {:.0f} u/s", rate, r.bow ? "shots" : "attacks", r.baseAtk, drift);
                 if (leg.kind == Kind::Release)
                     extra += std::format(" | released with the foe at {:.0f}u: moved {:.2f}s, attacked {:.2f}s, phase now {}", s.relFoeD, s.relMoved, s.relAtk,

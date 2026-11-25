@@ -152,6 +152,11 @@ Log: `[selftest] ...MFO_SelfTest.ini: reset generation 0 -> 1: cleared N result(
 
 **Code retest (no INI edit).** `kRetestIds` in `native/selftest/Runner.cpp` (`ApplyCodeRetest`) lists tests whose stored result a fix has made stale. On the first load whose save lacks the marker result `_retest.<tag>` the listed ids are cleared once and the marker is stored (a bookkeeping result with a leading underscore, never counted). To retest a test after a later fix, add its id and bump the tag. Log: `[selftest] code retest _retest.1124c: cleared N stale result(s)`.
 
+**Strict movement order (`strict.*`, `selftest/TestsStrict.cpp`, needs Harbinger ABI 48 `feat/hm1-pa` or later).** Any follower, any place. The player only has to stand near him out of combat; the test lends the weapon, arrows, a temp class and health, and spawns the foe.
+`strict.stand_bow` (R 64, R 32: inside >= 97%, max <= R + 15, shots/min >= 0.7 of his free fight in the same test), `strict.stand_melee` (R 64, R 32, foe in contact: inside >= 95% OR every excursion walked back in its distance / 60 u/s + 1 s, attacks/min >= 0.8), `strict.keep` (30 s alone, no second order),
+`strict.release` (moves or attacks within 1 s of the release, foe some way off), `strict.free` (free fight before and after; `SetMoveOrder(Free)` is asked and its answer printed, 6 = not served before P-C). Every row: EngineDropped ends the leg as FAIL, arrival within path / 60 u/s + 3 s. One line per leg: `[strict] RESULT`.
+Not judged here, read in Harbinger's log (`[move]`, `[moveprobe]`): path restarts, the leaf histogram, the area geometry after the release.
+
 **Row order.** `r.rows` is the table order: the first row listed for a table is its top row (it used to be reversed). `g0b.*` legs score a spot inside R and inside R + 25 u (both are printed; the verdict is STRICT, inside R only, the R + 25 u number never counts toward PASS).
 
 ## 8. Adding a test
