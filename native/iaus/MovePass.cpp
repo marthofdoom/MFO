@@ -112,9 +112,14 @@ namespace MFO::Iaus::MovePass {
                 for (const LightAt& l : pic.light) if (l.key == key && l.level >= 0.0f) f.light = l.level;
                 if (f.light < 0.0f) f.light = Light::At(pic.lightField, at, pic.t, t).level;
                 if (pair && pair->path.nVia) {   // the walk as the engine would take it: the claim names a place, not a way
-                    int known = 0, lit = 0;
-                    for (std::size_t i = 0; i < pair->path.nVia; ++i) if (const auto r = Light::At(pic.lightField, pair->path.via[i], pic.t, t); r.Known()) { ++known; lit += r.level >= t.lightLitLevel; }
-                    if (known) f.pathLitSec = f.pathSec * static_cast<float>(lit) / static_cast<float>(pair->path.nVia);
+                    float known = 0.0f, lit = 0.0f;   // half of every piece is lit as its one end is, half as its other. What nobody knows is in neither sum
+                    Env::Vec3 from = m.p; Light::Read a = Light::At(pic.lightField, from, pic.t, t);
+                    for (std::size_t i = 0; i < pair->path.nVia; ++i) {
+                        const Light::Read b = Light::At(pic.lightField, pair->path.via[i], pic.t, t); const float half = 0.5f * Dist(from, pair->path.via[i]);
+                        for (const Light::Read* r : { static_cast<const Light::Read*>(&a), &b }) if (r->Known()) { known += half; if (r->level >= t.lightLitLevel) lit += half; }
+                        from = pair->path.via[i]; a = b;
+                    }
+                    if (known > 0.0f) f.pathLitSec = f.pathSec * lit / known;
                 }
                 if (f.light >= 0.0f && m.sneakSkill >= 0.0f) {   // the engine's own formula, crouched and still there, per foe that may see the place
                     float worst = -1.0f;

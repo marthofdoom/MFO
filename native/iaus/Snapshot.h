@@ -299,7 +299,7 @@ struct SpellEntry {
         bool  beingHealed = false;          // a heal by ANOTHER party member is in flight on it (a party claim: no second heal)
         // S4 (iaus/Light.h). Every default is "not read": nothing in the DLL fills these yet (G6).
         bool  sneaking = false, hideRun = false, invisible = false;   // he wants the dark NOW (the player too)
-        bool  sneakClass = false;           // a stealth character: no light is ever cast on him
+        bool  sneakClass = false;           // his CLASS is one that sneaks (crouched or not): no light is ever cast on him, and ours on him is ended
         float darkAgoSec = kInf;            // seconds since he last wanted the dark
         float light = -1.0f;                // the light level where he stands, < 0 = unknown (never dark)
         Tri   inPlayerView = Tri::Unknown;  // the player sees him

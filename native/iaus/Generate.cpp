@@ -214,15 +214,15 @@ namespace MFO::Iaus {
             }
         }
 
-        // ── S4: end a light of ours on somebody who wants the dark NOW (iaus/Light.h). His own caster's decision or the wearer's, free and instant. Never one the
+        // ── S4: end a light of ours on a stealth class, or on anybody who wants the dark now (iaus/Light.h WantsLightEnded). His own caster's decision or the wearer's, free and instant. Never one the
         // player cast himself, never an item's. Nothing is generated while the road does not exist (the G6 call).
         void Decasts(Ctx& x) {
             const Snapshot& s = x.s;
             if (!s.decastRoad) return;
             const auto at = [&](const Combatant& r, bool self) {
-                if (!Light::WantsNow(r)) return;
+                if (!Light::WantsLightEnded(r)) return;
                 for (const LiveLight& l : r.lights) {
-                    if (!Light::MayEnd(l, s.playerId) || (!self && l.caster != s.self.id)) continue;
+                    if (!Light::MayEnd(l, s.playerId) || !Light::InParty(s, l.caster) || (!self && l.caster != s.self.id)) continue;
                     Candidate c = x.Make(Family::Decast, nullptr);
                     c.form = l.spell;
                     c.target = r.id;

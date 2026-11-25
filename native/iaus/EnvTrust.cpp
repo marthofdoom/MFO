@@ -2,6 +2,7 @@
 #include "iaus/EnvTrust.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 
@@ -39,14 +40,17 @@ namespace MFO::Iaus::Trust {
     }
 
     Level Of(const Table& t, Region region) {
+        std::vector<const Mark*> heads;   // the first mark of each lived event: an event is as long as its head says, never a chain
         std::array<int, kSigns> n{}; int kinds = 0; Level out = Level::Trusted;
         for (std::size_t i = 0; i < t.marks.size(); ++i) {
             const Mark& m = t.marks[i];
             if (m.region != region || m.sign >= Sign::kCount) continue;
             const SignRow& row = RowOf(m.sign); int& c = n[static_cast<std::size_t>(m.sign)];
-            if (row.lived && std::any_of(t.marks.begin(), t.marks.begin() + static_cast<std::ptrdiff_t>(i), [&](const Mark& o) {   // the same event as an older one of this region
-                    return o.region == region && o.sign < Sign::kCount && RowOf(o.sign).lived
-                        && ((m.leg != 0 && o.leg == m.leg && o.who == m.who) || std::fabs(m.t - o.t) < static_cast<double>(t.rules.eventSec)); })) continue;
+            if (row.lived) {
+                if (std::any_of(heads.begin(), heads.end(), [&](const Mark* o) {   // the same event as an older one of this region
+                        return (m.leg != 0 && o->leg == m.leg && o->who == m.who) || std::fabs(m.t - o->t) < static_cast<double>(t.rules.eventSec); })) continue;
+                heads.push_back(&m);
+            }
             if (c++ == 0) ++kinds;
             out = (std::max)(out, row.alone);
             if ((row.lived && c >= t.rules.repeat) || kinds >= 2) out = Level::Distrusted;

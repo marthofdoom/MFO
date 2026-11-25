@@ -56,12 +56,19 @@ namespace MFO::Iaus::Light {
     // Right now: he sneaks (the player too), he is on a hide or a hidden step run, or he is invisible.
     [[nodiscard]] inline bool WantsNow(const Combatant& a_c) { return a_c.sneaking || a_c.hideRun || a_c.invisible; }
     // For a CAST at him: a stealth character always (marth: "simply never cast on stealth characters"), anybody else who wants it now or did a moment ago. The hold is the
-    // one hysteresis the cast and the decast share: a thief who stands up for a second is not lit, one who crouches is decast at once.
+    // one hysteresis between the cast and the decast: who stands up for a second is not lit, who crouches is decast at once.
     [[nodiscard]] inline bool WantsDark(const Combatant& a_c, const Tuning& a_t) { return WantsNow(a_c) || a_c.sneakClass || a_c.darkAgoSec < a_t.lightDarkHoldSec; }
+    // Whose light of OURS is ended (marth 11-24): a stealth class wants the dark whether he crouches or not, anybody else (the player too) while he wants it now.
+    [[nodiscard]] inline bool WantsLightEnded(const Combatant& a_c) { return WantsNow(a_c) || a_c.sneakClass; }
     // Whom a light goes to: 0 the player, 1 a member in his view, 2 not known whether he is, 3 out of it.
     [[nodiscard]] inline float RecipientRank(const Combatant& a_c) { return a_c.isPlayer ? 0.0f : a_c.inPlayerView == Tri::Yes ? 1.0f : a_c.inPlayerView == Tri::Unknown ? 2.0f : 3.0f; }
-    // A light of OURS that may be ended: cast by this party, never the player's own and never an item's (LiveLight::fromItem).
+    // A light cast's TIER (Decide.cpp: a lower one is always first): 0 the player whose light is known, 1 a member whose light is known, 2 and 3 the same where nobody
+    // knows how lit he stands. Inside a tier the score says (view and need). Facts::lightRank 0 = the player (RecipientRank).
+    inline constexpr int kCastTiers = 4;
+    [[nodiscard]] inline int CastTier(const Facts& a_f) { return (a_f.recipientLight >= 0.0f ? 0 : 2) + (a_f.lightRank == 0.0f ? 0 : 1); }
+    // A light of OURS that may be ended: cast by this party (the caller asks InParty), never the player's own and never an item's (LiveLight::fromItem).
     [[nodiscard]] inline bool MayEnd(const LiveLight& a_l, std::uint32_t a_playerId) { return a_l.spell != 0 && a_l.caster != 0 && a_l.caster != a_playerId && !a_l.fromItem; }
+    [[nodiscard]] inline bool InParty(const Snapshot& a_s, std::uint32_t a_id) { return a_id != 0 && (a_id == a_s.self.id || std::any_of(a_s.allies.begin(), a_s.allies.end(), [&](const Combatant& a) { return a.id == a_id; })); }
 
     // ── the engine's detection formula ──
     // Moved whole from tools/iaus_sim/Detect.h (source and grades: there, and Docs/research/2026-11/calculate-detection-re.md). The sim includes this one.

@@ -3975,7 +3975,13 @@ HEAL FINDING (8): real in game. Generate.cpp:969 drops any heal whose recipient 
 - OPEN: R5 (before G2, field calibration), the clipped corner.
 - SEV-4 (author, S4): the straight-line half of `SpotPoint::lit` reads three points of a straight way. Round a corner it reads a way he does not take. Only the rank of candidates, the score reads the real walk.
 - SEV-4 (author, S4): `Light::At` is a linear scan of up to 256 samples. It runs per candidate point for members who want the dark only (19.4 has the cost). An index is due before a party of five stealth members is in the game (G6).
-- SEV-5 (author, S4): the light cap reads a ward SPELL and every heal, not a scroll of ward.
+
+### MOVE-S4: review findings on 8ae6f6c6 (Opus). F1 (SEV-2), F2, F3, F4 (SEV-3), F5, F7, F8, F10 and the scroll of ward of F11 FIXED in the round (iaus-sim-v4.md 19.6). F12 no action
+- F6 SEV-4 SpellEntry::lightRadius filled, never read: a light on an unsneaking player/member next to a hidden one lights him (lit-ally-stealth passes only because they stand 3-4 cells apart). Plan is per recipient; needs marth's word before G6. **RULED (marth 2026-11-24): ignore the radius, only the hidden one himself is never lit. No code.**
+- F9 SEV-4 decast-road-off off arm is 3..9 of 48 over 19 seeds (never 0, but weak): make the off arm strong (one other party member, player lit). Adequate evidence, not a strong row. OPEN.
+- F11 SEV-5 scroll of ward not under the cap (FIXED); Candidates.cpp:457/:547 still read e.allyRoad only (right today, must become AllyRoadTo in G6 or a live proxy stream at an allyRoadOn recipient is not seen). MovePass.cpp:131 comment "a last bit of libm does not reach the rank" is not strictly true (a score at an integer edge). OPEN.
+- F12 SEV-5 capped light can fall under actFloor and still be ranked (Decide :168) - harmless. NO ACTION.
+- OPEN (author): "a class that sneaks" is `kSneakAlways` (Thief, Master Thief, Nightingale, Listener). Nightblade has no such flag, so a Nightblade is dark only while he sneaks, hides or is invisible.
 
 ### MOVE-S3: review findings on 6996d274 (Opus, nothing above SEV-3). R1 and R2 are fixed at the start of S4; R5 before G2
 

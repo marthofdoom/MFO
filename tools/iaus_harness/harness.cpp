@@ -2407,16 +2407,71 @@ namespace {
             float light = -1.0f, under = 1.0e9f; int heals = 0, wards = 0; for (const Scored& x : d.ranked) { const Candidate& c = g.actions[x.idx]; if (c.f.lightBuff) light = (std::max)(light, x.score); if (c.family == Family::CastHeal) { ++heals; under = (std::min)(under, x.score); } if (c.family == Family::CastWard) { ++wards; under = (std::min)(under, x.score); } }
             Check(heals > 0 && wards > 0 && light >= 0.0f && light < under, "a light ranks under every heal and every ward on the board, whatever the weights");
         }
+        // S4 review F1, F2, F3: whom and under what is no score. Over every rapport rank, many seeds and the commitment window
+        const auto sweep = [&](const Generated& g, const Mind& m, const Tuning& tu, const auto& bad) {   // the picks a_bad says must not happen
+            int n = 0; for (int rank = 0; rank <= 5; ++rank) for (int seed = 0; seed < 2000; ++seed) { TickIn in; in.now = 10.0; in.rapportRank = static_cast<std::uint8_t>(rank); in.seed = static_cast<std::uint64_t>(seed) * 7919u + 3u; in.commitWindowSec = 2.0f;
+                const Decision d = Decide(m, g.actions, Profile{}, tu, in); n += d.order.empty() || bad(g.actions[d.order[0].idx]); }
+            return n; };
+        const auto isLight = [](const Candidate& c) { return c.f.lightBuff; };
+        const auto running = [](const Generated& g, std::uint32_t who) { Mind m; for (const auto& c : g.actions) if (c.f.lightBuff && c.target == who) { m.hasRunning = true; m.running = KeyOf(c); m.firedAt = 9.5; } return m; };
+        Tuning allDark = t; allDark.actionWeight[static_cast<std::size_t>(Family::CastBuff)] = 3.0f;
+        const auto healWard = [&](bool heal, bool ward, float hurt = 0.6f) { Snapshot s = room(); s.foes.resize(1); s.foes[0].caster = true; s.foes[0].targetId = s.self.id; s.allies[1].hp = hurt * s.allies[1].hpMax;
+            if (heal) s.book.entries.push_back(Spell("Heal Other", 0x12FD2, Prune::Nature::Heal, 10, 2000));
+            if (ward) s.book.entries.push_back(Spell("Lesser Ward", 0x13018, Prune::Nature::Ward, 10, 0));
+            return s; };
+        for (int k = 1; k < 4; ++k) for (const float hurt : { 0.6f, 1.0f }) {   // 1: only his own heal, a near tie of the light
+            const Generated g = Generate(healWard(k & 1, k & 2, hurt), mage, t);
+            const Mind run = running(g, kPc);
+            Tuning a = t, b = allDark; if (k & 2) a.actFloor = b.actFloor = 0.0f;   // this room's ward is under the shipped floor
+            TickIn in; in.now = 10.0; int have = 0; for (const Scored& x : Decide(Mind{}, g.actions, Profile{}, a, in).ranked) have |= g.actions[x.idx].family == Family::CastHeal ? 1 : g.actions[x.idx].family == Family::CastWard ? 2 : 0;
+            Check(have == k && run.hasRunning && sweep(g, Mind{}, a, isLight) == 0 && sweep(g, Mind{}, b, isLight) == 0 && sweep(g, run, a, isLight) == 0 && sweep(g, run, b, isLight) == 0, "F1: no rank, seed or running light picks a light while a heal or a ward is ranked");
+        }
+        { Snapshot s = healWard(false, false); const Generated g = Generate(s, mage, t); Check(sweep(g, Mind{}, allDark, [](const Candidate& c) { return !c.f.lightBuff; }) == 0, "... and with neither the same light is picked"); }
+        const auto firstLight = [&](const Snapshot& s, const Tuning& tu, const Mind& m, std::uint32_t who) { const Generated g = Generate(s, mage, tu); return sweep(g, m, tu, [&](const Candidate& c) { return !c.f.lightBuff || c.target != who; }); };
+        {
+            Tuning far = allDark; far.actFloor = 0.6f;   // the player alone would be under the floor
+            for (const float lv : { 10.0f, 40.0f, 50.0f, 60.0f, 68.0f }) { Snapshot s = room(); s.allies[0].light = lv; const Generated g = Generate(s, mage, allDark);
+                Check(firstLight(s, allDark, Mind{}, kPc) == 0 && firstLight(s, far, Mind{}, kPc) == 0 && firstLight(s, allDark, running(g, kLydia), kPc) == 0, "F2: a player who needs light comes before darker members, at any rank, seed, with one of theirs running"); }
+            Snapshot s = room(); s.allies[0].light = 50.0f; s.allies[1].inPlayerView = Tri::No; Check(firstLight(s, allDark, Mind{}, kPc) == 0, "... before the mage himself");
+            s = room(); s.allies[0].light = 90.0f; Check(sweep(Generate(s, mage, allDark), Mind{}, allDark, [](const Candidate& c) { return !c.f.lightBuff || c.target == kPc; }) == 0, "... one who stands in the light leaves it to the members");
+            s = healWard(true, false); s.allies[0].light = 60.0f; TickIn in; in.now = 10.0; in.rapportRank = 5; const Generated g = Generate(s, mage, allDark); const Decision d = Decide(Mind{}, g.actions, Profile{}, allDark, in);
+            std::vector<std::uint32_t> who; for (const Scored& x : d.ranked) if (g.actions[x.idx].f.lightBuff) who.push_back(g.actions[x.idx].target);
+            Check(who.size() == 3 && who[0] == kPc, "... under the cap too, where every light has one score");
+            s = room(); s.self.inPlayerView = Tri::Unknown; s.foes.clear(); const Generated h = Generate(s, mage, allDark); const Decision e = Decide(Mind{}, h.actions, Profile{}, allDark, in); who.clear(); for (const Scored& x : e.ranked) if (h.actions[x.idx].f.lightBuff) who.push_back(h.actions[x.idx].target);
+            Check(who.size() == 3 && who[0] == kPc && who[1] == kLydia, "... then a member he sees, then one nobody has looked for");
+        }
+        {
+            Snapshot s = room(); s.allies[0].light = 65.0f; s.self.light = 45.0f; s.allies[1].light = -1.0f;
+            Check(firstLight(s, allDark, Mind{}, kPc) == 0 && firstLight(s, allDark, running(Generate(s, mage, allDark), kLydia), kPc) == 0, "F3: unknown light never comes before known light");
+            const Generated g = Generate(s, mage, t); TickIn in; in.now = 10.0; float top = 0.0f; for (const Scored& x : Decide(Mind{}, g.actions, Profile{}, t, in).ranked) if (g.actions[x.idx].f.lightBuff) top = (std::max)(top, x.score);
+            Check(top > 0.0f && top <= (std::max)(at(s, kPc).score, at(s, kSelf).score), "... and lends it no score");
+            s.allies[0].light = -1.0f; Check(firstLight(s, allDark, Mind{}, kSelf) == 0, "... nor the player's before a member's");
+            s = room(); s.self.light = s.allies[0].light = s.allies[1].light = -1.0f; Check(firstLight(s, allDark, Mind{}, kPc) == 0, "... where nobody's is known the player is first");
+        }
+        {   // review F8: the two exact scores the cap stands on
+            Generated g = Generate(healWard(false, true), mage, t); Tuning lo = t; lo.actFloor = 0.0f; lo.maxTries = 1; for (auto& sh : lo.sharp) sh.k = 1;
+            const Candidate* atk = nullptr; for (const auto& c : g.actions) if (c.family == Family::Attack) { atk = &c; break; }
+            std::vector<Candidate> b; if (atk) b.push_back(*atk); for (const auto& c : g.actions) if (c.family == Family::CastWard) b.push_back(c); for (const auto& c : g.actions) if (c.f.lightBuff) b.push_back(c);
+            lo.actionWeight[static_cast<std::size_t>(Family::Attack)] = 8.0f; lo.actionWeight[static_cast<std::size_t>(Family::CastWard)] = 0.2f;
+            TickIn in; in.now = 10.0; in.rapportRank = 5; Decision d = Decide(Mind{}, b, Profile{}, lo, in); int wards = 0; float w = 0.0f, l = 0.0f; for (const Scored& x : d.ranked) { const Candidate& c = b[x.idx]; if (c.family == Family::CastWard) { ++wards; w = x.score; } if (c.f.lightBuff) l = (std::max)(l, x.score); }
+            Check(atk && wards == 1 && l > 0.0f && l < w, "F8: a ward far under the best is still scored while a light is on the board");
+            std::stable_sort(b.begin(), b.end(), [](const Candidate& x, const Candidate& y) { return x.f.lightBuff > y.f.lightBuff; });
+            lo.actionWeight[static_cast<std::size_t>(Family::Attack)] = 0.3f; lo.actionWeight[static_cast<std::size_t>(Family::CastBuff)] = 3.0f;
+            std::erase_if(b, [](const Candidate& c) { return c.family == Family::CastWard; }); bool scored = false; for (const Scored& x : Decide(Mind{}, b, Profile{}, lo, in).ranked) scored |= b[x.idx].family == Family::Attack;
+            Check(scored, "F8: a light prunes nobody: the attack behind three better lights is still scored");
+        }
         {   // the decast
             const auto dec = [&](const Snapshot& s, std::uint32_t who) { int n = 0; for (const auto& c : Generate(s, mage, t).actions) n += c.family == Family::Decast && c.target == who && c.form == 0x43324; return n; };
             Snapshot s = room(); s.decastRoad = true; s.allies[1].sneaking = true; s.allies[1].lights = { { 0x43324, s.self.id, false } };
             Check(dec(s, kLydia) == 1, "a light of his own on a member who crouched: a Decast candidate");
             { Snapshot q = s; q.decastRoad = false; Check(dec(q, kLydia) == 0, "... none without the road"); }
-            { Snapshot q = s; q.allies[1].sneaking = false; q.allies[1].sneakClass = true; q.allies[1].darkAgoSec = 0.1f; Check(dec(q, kLydia) == 0, "... none while she stands, a stealth class or not"); }
+            { Snapshot q = s; q.allies[1].sneaking = false; q.allies[1].sneakClass = true; q.allies[1].darkAgoSec = 0.1f; Check(dec(q, kLydia) == 1, "... a stealth class who stands: ended too"); q.allies[1].sneakClass = false; Check(dec(q, kLydia) == 0, "... anybody else who stands keeps it, whatever she did a moment ago"); q.allies[1].hideRun = true; Check(dec(q, kLydia) == 1, "... and loses it on a hidden run"); }
+            { Snapshot q = s; q.allies[1].sneaking = false; q.allies[0].lights = { { 0x43324, s.self.id, false } }; Check(dec(q, kPc) == 0, "the player lit by us keeps it while he stands"); q.allies[0].sneaking = true; Check(dec(q, kPc) == 1 && at(q, kPc).score == 0.0f, "... sneaking he loses it and gets no other"); q.allies[0].lights[0].caster = kPc; Check(dec(q, kPc) == 0, "... his own stays"); }
             { Snapshot q = s; q.allies[1].lights[0].caster = kPc; Check(dec(q, kLydia) == 0, "... never the player's own light"); }
             { Snapshot q = s; q.allies[1].lights[0].fromItem = true; Check(dec(q, kLydia) == 0, "... never an item's"); }
+            { Snapshot q = s; q.allies[1].sneaking = false; q.self.sneaking = true; q.self.lights = { { 0x43324, 0x999, false } }; Check(dec(q, q.self.id) == 0, "F5: ... never a stranger's, worn by himself or not"); }
             { Snapshot q = s; q.allies[1].lights[0].caster = 0x999; Check(dec(q, kLydia) == 0, "... another member's is that member's decision, or the wearer's"); }
-            { Snapshot q = s; q.allies[1].lights.clear(); q.self.sneaking = true; q.self.lights = { { 0x43324, 0x999, false } }; Check(dec(q, q.self.id) == 1, "the wearer ends one on himself"); q.self.lights[0].caster = kPc; Check(dec(q, q.self.id) == 0, "... not the player's"); }
+            { Snapshot q = s; q.allies[1].lights.clear(); q.self.sneaking = true; q.self.lights = { { 0x43324, kLydia, false } }; Check(dec(q, q.self.id) == 1, "the wearer ends one on himself"); q.self.lights[0].caster = kPc; Check(dec(q, q.self.id) == 0, "... not the player's"); }
             for (const auto& c : Generate(s, mage, t).actions) if (c.family == Family::Decast) Check(ScoreOne(c, Mind{}, Profile{}, t, 1, 0.0f, nullptr) > 1.0f, "it outranks a blow");
         }
         {   // the hold row in the light

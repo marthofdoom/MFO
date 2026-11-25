@@ -571,6 +571,8 @@ namespace {
             TR::Table g; TR::Note(g, Sign::LengthFar, 1, at, ahead, 0.0, 0, 0, 5); TR::Note(g, Sign::NoGround, 1, at, ahead, 8.0, 0, 0, 5); const auto oneLeg = TR::Of(g, here);
             TR::Note(g, Sign::NoGround, 1, at, ahead, 12.0, 0, 0, 6);
             Row(g.marks.size() == 3 && oneLeg == Level::Doubted && TR::Of(g, here) == Level::Distrusted, "one leg that was far and then stuck is one event, the next leg's is the second");
+            TR::Table ch; for (int i = 0; i < 6; ++i) TR::Note(ch, Sign::NoGround, static_cast<FormID>(1 + i % 2), at, ahead, 1.2 * i);
+            Row(ch.marks.size() == 6 && TR::Of(ch, here) == Level::Distrusted, "two bodies that take turns under an event's length are more than one event (a mark is measured from the event's first)");
             TR::Table st; TR::Note(st, Sign::DanglingLink, 1, at, ahead, 0.0); TR::Note(st, Sign::OneWayLinks, 1, at, ahead, 0.0);
             Row(TR::Of(st, here) == Level::Distrusted, "... static signs are not lived: two kinds read at one moment are two");
             bool lived = true, stat = true;
@@ -732,6 +734,13 @@ namespace {
             PartyPicture k = fight(true, 90.0f, 90.0f); Env::Scratch s; std::vector<RayAsk> q; std::vector<Assignment> as; MP::Freeze(k, m.Get(), pin); while (!MP::Phase1(k, m.Get(), s, &NoClass, pin, q, 1.0e9f)) {} PartyPicture j = k;
             for (const auto& sp : k.pool) k.light.push_back({ sp.key, 1.0f });
             MP::Phase3(k, &NoClass, pin, as); const float with = as[0].score; MP::Phase3(j, &NoClass, pin, as); Row(with > as[0].score, "a sampler's answer at the spot wins over the field");
+        }
+        {   // spot_detected (S4 review F8): stays only, the sight of the place not answered
+            const auto stay = [&](float foeSkill, float sneak, float level) { PartyPicture p = fight(true, level, level); p.party[0].kinds = KindBit(SpotKind::Stay); p.party[0].sneakSkill = sneak; p.foes[0].skill = foeSkill; const auto r = Window(m, p, pin, 1.0e9f, false); return Of(r, 0x81)->score; };
+            Row(stay(100.0f, 5.0f, 90.0f) < stay(0.0f, 100.0f, 90.0f) && stay(0.0f, 100.0f, 90.0f) > 0.0f, "a place somebody may see and would detect him at scores lower, though its sight is not answered");
+            Row(stay(100.0f, 5.0f, 90.0f) < stay(100.0f, 5.0f, 5.0f), "... and in the light lower than in the dark");
+            Row(stay(-1.0f, 5.0f, 90.0f) == stay(-1.0f, 100.0f, 90.0f) && stay(100.0f, -1.0f, 90.0f) == stay(0.0f, -1.0f, 90.0f), "... a foe or a sneak skill nobody read is not applicable");
+            Row(stay(100.0f, 5.0f, -1.0f) == stay(0.0f, 100.0f, -1.0f), "... nor is it where the light is unknown");
         }
         {   // the facts through the score
             const Profile p; SpotFacts f; f.pathSec = 1.0f; const float u = ScoreSpot(f, Family::Step, p, t);

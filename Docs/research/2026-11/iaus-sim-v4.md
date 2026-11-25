@@ -1642,7 +1642,7 @@ The first four also hold: the place is used again within one decay of the repair
 
 ## 19. Light and darkness, and the S3 review's findings (movement-plan.md S4, branch `feat/move-s4`, 2026-11-24)
 
-Road off, `--world v2`, `v3` and `v4` baselines are byte identical with main at 1 and 8 threads, with the light switch on (the v4 default). `--v4 light=off` prints the same numbers: no library place or older fixture has a light layer, and no built-in class knows a light spell. The DLL fills no light fact, so nothing changes there (19.3).
+Road off, `--v4 light=off` is main, byte for byte, for every class and world. With the light switch ON (the v4 default) v2, v3 and v4 are main too for every class that does not sneak. **The STEALTH baseline moves**, road off as well: `--classes thief,nightingale,nightblade --seed 77 --fights 4` differs from main in thief balanced (51 lines) and nightingale strong2 (7). The cause is isolated: `self_light` on the hidden hold row (a lit place is a worse one to hold, intended), and with that one weight at 0 (`--set w.3.<self_light index>=0`) the run is main byte for byte. A tune compares stealth classes with a baseline made after this change. No built-in class knows a light spell. The DLL fills no light fact, so nothing changes there (19.3).
 
 ### 19.1 The S3 findings
 
@@ -1665,11 +1665,11 @@ Road off, `--world v2`, `v3` and `v4` baselines are byte identical with main at 
 
 Samples (an actor's own level, a sampler's answer) keep one a 128-unit cell for 20 s. A place is as lit as the nearest sample within 256 units on its storey, or unknown. Unknown is not applicable everywhere.
 
-A light buff: a gate refuses whoever sneaks (the player too), runs to hide, is invisible, wanted the dark in the last 6 s or is a stealth class. The need reads the recipient's level (over 69 none), the rank takes the player before members in his view, unseen-unknown after them, out of view never. Decide keeps it under every heal and ward. `SpellEntry::allyRoadOn` is the list of served recipients, `allyRoad` stays for the old filler.
+A light buff: a gate refuses whoever sneaks (the player too), runs to hide, is invisible, wanted the dark in the last 6 s or is a stealth class. The need reads the recipient's level (over 69 none), the rank takes the player before members in his view, unseen-unknown after them, out of view never. Decide keeps it under every heal and ward, and no light is picked, rolled or held by its window while one is ranked (19.6). `SpellEntry::allyRoadOn` is the list of served recipients, `allyRoad` stays for the old filler.
 
-Decast: behind `Snapshot::decastRoad`, for a light of ours on somebody who wants the dark NOW, by its caster or its wearer.
+Decast: behind `Snapshot::decastRoad`, for a light this PARTY cast on a member of a stealth class (crouched or not), or on anybody who wants the dark now (the player who sneaks too), by its caster or its wearer (`Light::WantsLightEnded`). Never the player's own, an item's or a stranger's.
 
-Spots, for a member who wants the dark: the level at the place, the engine's own formula per foe (crouched and still there, with the sight answer of that foe), the seconds of the walk over lit ground. The generators rank a place known to be lit, or with a lit straight way, as farther (`t.lightGenU`): they keep three places and test sixty-four, and lit ones crowded the dark ones out.
+Spots, for a member who wants the dark: the level at the place, the engine's own formula per foe (crouched and still there, with the sight answer of that foe), the seconds of the walk over lit ground (by length, half of a piece as its one end is and half as its other, over the part whose light is known). The generators rank a place known to be lit, or with a lit straight way, as farther (`t.lightGenU`): they keep three places and test sixty-four, and lit ones crowded the dark ones out.
 
 ### 19.4 The scenarios (48 fights an arm)
 
@@ -1681,6 +1681,9 @@ Spots, for a member who wants the dark: the level at the place, the engine's own
 | sneaking-player | never lit, somebody else in all | `no-veto` lit |
 | light-on-player | the first light on the player in all | `no-need` about half |
 | decast-on-sneak | ended within half a second in all, not lit again | `no-decast` 0 |
+| light-on-player-dim (a lamp by the player: level 44, the mage 7) | the first light on the player in 48 | `no-need` 37 |
+| decast-stealth-class (stands, lit) | ended within half a second in all, not lit again | `no-decast` 0 |
+| decast-on-player (lit, then sneaks) | ended within half a second in all, not lit again | `no-decast` 0 |
 | decast-road-off | no new light on him | `no-veto` some |
 
 In the cast rows the mage knows one spell, the light: the rows are about WHOM. "Never above a heal or a ward" is a harness row with weights that would put it above.
@@ -1692,8 +1695,15 @@ CPU (user seconds, 1 thread, main then this branch): evoker, knight, archer, mag
 1. `spotLightConf` is no consideration: scoring confidence would put a place of known darkness under one nobody knows. It is the gate `t.lightMinConf`.
 2. `Cons::SpotPathLight` and the generators' rank are additions. Without them the torch step and the hide could not be held.
 3. The route search has no light price. The claim names a place and the engine takes its own way there, so a place is judged by that way. "Never crosses while a dark route exists" is held by choosing another place, not another way to the same one.
-4. A stealth CLASS is never lit, crouched or not (marth: "simply never cast on stealth characters"). The decast asks what he wants now.
+4. A stealth CLASS is never lit, crouched or not (marth: "simply never cast on stealth characters"). The decast follows the class too (marth 11-24), for anybody else it asks what he wants now.
 5. The hidden step's own point pick (`Concealment`) reads no light: G6. `self_light` is in the hold row only. Lowering the step's score too would cancel it.
 6. The library has no light references (the extractor exports none): one level per place, as before.
 7. `lit-ally-stealth` uses a thief: the lab's Nightblade holds no stance.
 8. A pool sampler is modelled as existing (`--light-sampler off` takes it away). Both placement scenarios run on the actors' own levels alone.
+
+### 19.6 The S4 review round
+
+- **F1, F2, F3: a light's tier is no score.** `Light::CastTier`: the player whose light is known, members whose light is known, the player and then members whose light nobody knows. `Decide` (1) holds an unknown one at the least wanted known one, (2) lifts the player's best light to the best member's, so a player who needs it less is first and the light still goes out, (3) caps every light under every ranked heal, ward and scroll of one, (4) puts the lights of the board in tier order, (5) takes a light out of the rapport pool and out of the commitment window while a heal or ward is ranked or a lower tier is on the board. It stays the order's fall-back when the others' roads decline. Lights are never pruned. Rows: every rank, 2000 seeds, the window, with and without weights that would break it.
+- **F5** `Light::InParty`. **F7** a mark is compared with the first mark of an event only. **F10** the lit walk by length over what is known.
+- **F6** ruled (marth 11-24): the radius is ignored.
+- **What G6 must fill natively:** `Combatant::sneakClass` for every ally (the class of THAT member, `ClassGate::sneakClass`, crouched or not), the player's `sneaking` and everybody's `lights` with the true caster (an ability or an enchantment as `fromItem`), and the call that ends a spell of ours on the player as well as on a member. `Candidates.cpp` `allyRoad` reads become `AllyRoadTo`.
