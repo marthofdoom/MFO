@@ -5,7 +5,7 @@
 // the same fights are played with ONE mechanism of the pass broken (kMoveFaults) and the rule must NOT hold: a rule that passes broken tests nothing.
 // The bodies a rule does not judge are statues (run speed 0, a deep health pool), so what moves and what it reaches is the followers' own doing.
 // SCRIPTED rows replace his own ranking by a fixed one after each lap: the rule is then about the PLACE, for an action he does not pick by himself in
-// that fight (marked in the row; a heal past its reach is no candidate of Generate.cpp at all, movement-plan-s2 note).
+// that fight (marked in the row; a heal past its reach is no candidate of Generate.cpp at all, iaus-sim-v4.md 17.6).
 #include "iaus_sim/Oracle.h"
 #include "iaus_sim/Scenarios.h"
 

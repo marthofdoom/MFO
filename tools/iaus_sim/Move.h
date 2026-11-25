@@ -4,7 +4,7 @@
 // the fight, answers its rays with one window of latency and carries out what it assigned. Off (the default) nothing here runs: MoveBox is null.
 //
 // TO ADD OR CHANGE
-//   a number of the mover's model ........ MoveTuning (one table, PLACEHOLDERS until the field exerciser G0b reports: calib_point.py prints the rows)
+//   a number of the mover's model ........ MoveTuning (one table, PLACEHOLDERS until the field exerciser G0b reports)
 //   a fault variant of a scenario ........ kMoveFaults (one table), applied only in MoveWorld.h
 #include "iaus/MoveDump.h"
 #include "iaus/Generate.h"
@@ -27,7 +27,7 @@ namespace Sim {
     inline bool g_spotMeter = false;              // count cover / exposure (one look per threat each 0.5 s). Any --position-road sets it, `off` too, so both sides can be read
     inline std::uint32_t g_spotsReplace = 0;      // --spots-replace <kind,...>: the families these kinds carry file no drive of their own, the spot claim does
 
-    // THE MOVER'S MODEL. Every row a PLACEHOLDER (plan S2, replaced through calib_point.py once G0b has run).
+    // THE MOVER'S MODEL. Every row a PLACEHOLDER (plan S2, replaced once G0b's field data exists).
     struct MoveTuning {
         float radiusU = 90.0f;        // the claim's radius R (param.fval). Equal to t.spotArriveU, so "inside R" and "arrived" are one thing
         float pinRadiusU = 40.0f;     // ... on the pinned road

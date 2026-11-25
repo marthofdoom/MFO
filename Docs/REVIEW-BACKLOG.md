@@ -3926,3 +3926,10 @@ Author: Harbinger serves a fire-once Reanimate spell only with kCastFlag_CorpseT
 - F5 SEV-5 OffenseCastFired matches (hand, spell) not target. Not reachable wrongly today: the gate runs only inside handPlan.inFlight (same rule, spell, target). Add c.target to the test if a second caller appears.
 - F6 SEV-5 a spent claim that lapses (6 s TTL, unrenewable) is re-filed by EnsureCastClaimLocked's aged-out branch and its Fired reason is lost. Reachable only when the gate does not run for > 6 s with the replay running (ChooseBuffRoad != Claim, i.e. controller gone, under an in-flight lap). The duration up-read still bounds it.
 - F7 SEV-5 Substrate.cpp: fireOnce is decided again at filing (main for summons). A bApmfCast flip between the worker's choice and the filing files the pair without the bit. Bounded by Harbinger's close on the fire.
+
+## feat/move-s2 (author notes, Opus 5.5, 2026-11-24; no review yet)
+- Closed from feat/move-s1 round 2: R3 (the flood's allocation). R1 stays (does not bite in the lab: phase 1 runs in one go, pins off). R2 stays (the sim always sends t).
+- SEV-3 (design gap, native) `Generate.cpp` drops a heal past its reach / occluded, so `heal_reach` never moves a healer to a patient he cannot reach (iaus-sim-v4.md 17.6 item 1).
+- SEV-4 (design gap, native) `spotAction` momentum read-back of 8.1 is not in `Decide` (17.6 item 2).
+- SEV-5 `ExitsAt` (the pooled spot's exits) still counts open directions; only the retreat kind has `CheckExit`.
+- SEV-5 `CheckExit` floods up to 64 times in one Generate unit when nothing passes. Harness "dearest unit" 1.3 ms of the 3 ms slice, host.
