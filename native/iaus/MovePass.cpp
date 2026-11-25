@@ -210,6 +210,43 @@ namespace MFO::Iaus::MovePass {
             out = &(pic.paths[k] = f);
         }
 
+        // His walk, or last window's when he has not moved at all (a flood reads the mesh, the doors, the point and WalkerBits).
+        PartyPicture::Still& StillOf(PartyPicture& pic, FormID who, const Env::Vec3& p, std::int32_t tri, const Env::Walker& w) {
+            PartyPicture::Still* s = nullptr;
+            for (auto& e : pic.still) if (e.who == who) { s = &e; break; }
+            if (!s) { pic.still.push_back({}); s = &pic.still.back(); s->who = who; }
+            if (s->tri != tri || s->p.x != p.x || s->p.y != p.y || s->p.z != p.z || s->bits != WalkerBits(w)) { *s = {}; s->who = who; s->p = p; s->tri = tri; s->bits = WalkerBits(w); }
+            return *s;
+        }
+        std::shared_ptr<const Work::Flood> WalkOf(PartyPicture& pic, const Env::View& v, FormID who, const Env::Vec3& p, std::int32_t tri, const Env::Walker& w, float radius) {
+            PartyPicture::Still& s = StillOf(pic, who, p, tri, w);
+            if (!s.flood || s.radius != radius) { auto f = std::make_shared<Work::Flood>(); f->who = who; Flood(v, p, tri, w, radius, B.gatherTris, *f, pic.mesh.get()); s.flood = f; s.radius = radius; }
+            return s.flood;
+        }
+        std::uint8_t OwnExits(PartyPicture& pic, const Env::View& v, const Member& m, const Tuning& t) {
+            PartyPicture::Still& s = StillOf(pic, m.id, m.p, m.tri, m.who);
+            if (s.exitU != t.spotExitU) { s.open = OpenOctants(v, m.tri, m.p, m.who, t, pic.mesh.get()); s.exitU = t.spotExitU; }
+            return ExitsOf(s.open, m.p, pic.foes, t);
+        }
+        // A spot's ways out: the mesh's half is worked out once per spot (only for the exact point of its key, and the plain walker's bits).
+        std::uint8_t SpotExits(PartyPicture& pic, const Env::View& v, SpotKey key, std::int32_t tri, const Env::Vec3& p, const Env::Walker& w, const Tuning& t) {
+            const auto plain = [&] {
+                if (key != KeyOfPoint(tri, static_cast<int>(key & 3)) || tri < 0 || static_cast<std::size_t>(tri) >= pic.mesh->cen.size() || WalkerBits(w) != WalkerBits(Env::Walker{})) return false;
+                const Env::Vec3 c = pic.mesh->cen[static_cast<std::size_t>(tri)]; Env::Vec3 q = c;
+                if (key & 3) { const Env::Vec3& k = v.verts[v.tris[static_cast<std::size_t>(tri)].v[(key & 3) - 1]]; q = { 0.5f * (c.x + k.x), 0.5f * (c.y + k.y), 0.5f * (c.z + k.z) }; }
+                return q.x == p.x && q.y == p.y && q.z == p.z; };
+            if (!plain()) return ExitsOf(OpenOctants(v, tri, p, w, t, pic.mesh.get()), p, pic.foes, t);
+            const auto slot = static_cast<std::size_t>(key);
+            if (!pic.exitMemo || pic.exitMemo->exitU != t.spotExitU || pic.exitMemo->open.size() != v.tris.size() * 4) {
+                pic.exitMemo = std::make_shared<ExitMemo>(); pic.exitMemo->exitU = t.spotExitU; pic.exitMemo->open.assign(v.tris.size() * 4, 0xFFFF); }
+            if (pic.exitMemo->open[slot] == 0xFFFF) {
+                const std::uint8_t o = OpenOctants(v, tri, p, w, t, pic.mesh.get());
+                if (pic.exitMemo.use_count() > 1) pic.exitMemo = std::make_shared<ExitMemo>(*pic.exitMemo);   // a copy of the picture reads it: never written under it
+                pic.exitMemo->open[slot] = o;
+            }
+            return ExitsOf(static_cast<std::uint8_t>(pic.exitMemo->open[slot]), p, pic.foes, t);
+        }
+
         // One flood (a member's with the reach of his foes, then the foes'). False = none left.
         bool UnitFlood(PartyPicture& pic, const Env::View& v, Env::Scratch& s, const Tuning& t) {
             Work& w = pic.work;
@@ -217,9 +254,8 @@ namespace MFO::Iaus::MovePass {
             if (i < pic.party.size()) {
                 const Member& m = pic.party[i];
                 if (!Scores(m)) return true;
-                w.memberFlood[i].who = m.id;
-                Flood(v, m.p, m.tri, m.who, t.spotRadius, B.gatherTris, w.memberFlood[i]);
-                if (w.memberFlood[i].cut) ++pic.counts.floodsShort;
+                w.memberFlood[i] = { m.id, WalkOf(pic, v, m.id, m.p, m.tri, m.who, t.spotRadius) };
+                if (w.memberFlood[i].f->cut) ++pic.counts.floodsShort;
                 for (std::size_t k = 0; k < m.nTop; ++k) {
                     const Foe* f = ById(pic.foes, m.top[k].target);
                     if (!f || f->tri < 0 || w.reach.count({ m.id, f->id })) continue;   // a foe off the mesh: unknown, never "unreachable"
@@ -232,8 +268,8 @@ namespace MFO::Iaus::MovePass {
             const std::size_t j = i - pic.party.size();
             if (j >= w.foeFlood.size()) return false;
             if (const Foe* f = ById(pic.foes, w.foeFlood[j].who)) {
-                Flood(v, f->p, f->tri, Env::Walker{}, t.spotRadius, B.gatherTris, w.foeFlood[j]);
-                if (w.foeFlood[j].cut) ++pic.counts.floodsShort;
+                w.foeFlood[j].f = WalkOf(pic, v, f->id, f->p, f->tri, Env::Walker{}, t.spotRadius);
+                if (w.foeFlood[j].f->cut) ++pic.counts.floodsShort;
             }
             return true;
         }
@@ -241,7 +277,7 @@ namespace MFO::Iaus::MovePass {
         GenIn MakeGen(const PartyPicture& pic, const Env::View& v, const Tuning& t, std::uint32_t mi, std::uint32_t ai) {
             const Member& m = pic.party[mi];
             const RankedAction& a = m.top[ai];
-            GenIn g{ pic, v, t, m, a, pic.work.memberFlood[mi], {} };
+            GenIn g{ pic, v, t, m, a, pic.work.memberFlood[mi].Get(), {} };
             std::int32_t tt = -1;
             g.hasTarget = a.target != 0 && a.target != m.id && ActorAt(pic, a.target, g.target, tt);
             g.foe = g.hasTarget ? ById(pic.foes, a.target) : nullptr;
@@ -249,10 +285,10 @@ namespace MFO::Iaus::MovePass {
             if (const auto it = pic.work.reach.find({ m.id, a.target }); it != pic.work.reach.end()) g.targetUnreachable = it->second == Iaus::Tri::No;
             return g;
         }
-        float WalkTo(const Env::View& v, const Member& m, const Work::Flood& fl, const Env::Vec3& p, std::int32_t tri) {   // < 0: beyond his gather
+        float WalkTo(const PartyPicture& pic, const Member& m, const Work::Flood& fl, const Env::Vec3& p, std::int32_t tri) {   // < 0: beyond his gather
             if (tri == m.tri) return Dist(m.p, p);
             const float d = fl.At(tri);
-            return d < 0.0f ? -1.0f : d + Dist(Env::Centroid(v, tri), p);
+            return d < 0.0f ? -1.0f : d + Dist(pic.mesh->cen[static_cast<std::size_t>(tri)], p);
         }
 
         void UnitGenerate(PartyPicture& pic, const Env::View& v, Env::Scratch& s, const Tuning& t) {
@@ -262,17 +298,20 @@ namespace MFO::Iaus::MovePass {
             const SpotKindRow& row = kSpotKinds[u.kind];
             const GenIn g = MakeGen(pic, v, t, u.member, u.action);
             struct R { std::int32_t q; Cand c; };
-            std::vector<R> found; std::vector<Cand> pts;
-            for (const auto& [tri, d] : g.own.d) {
-                pts.clear(); Points(v, tri, t, pts);
-                const Env::Vec3 c = Env::Centroid(v, tri);
-                for (Cand& k : pts) {
-                    k.walk = tri == m.tri ? Dist(m.p, k.p) : d + Dist(c, k.p);
-                    float r = 0.0f;
-                    if (row.gen(g, k, r) && std::isfinite(r)) found.push_back({ QDist(r), k });
+            if (w.points.size() < pic.party.size()) w.points.resize(pic.party.size());
+            std::vector<Cand>& pts = w.points[u.member];
+            if (pts.empty())
+                for (const auto& [tri, d] : g.own.d) {
+                    const std::size_t from = pts.size();
+                    Points(v, tri, t, pts, pic.mesh.get());
+                    const Env::Vec3 c = pic.mesh->cen[static_cast<std::size_t>(tri)];
+                    for (std::size_t i = from; i < pts.size(); ++i) pts[i].walk = tri == m.tri ? Dist(m.p, pts[i].p) : d + Dist(c, pts[i].p);
                 }
-            }
-            std::sort(found.begin(), found.end(), [](const R& x, const R& y) { return x.q != y.q ? x.q < y.q : x.c.key < y.c.key; });
+            thread_local std::vector<R> found; found.clear();
+            for (const Cand& k : pts) { float r = 0.0f; if (row.gen(g, k, r) && std::isfinite(r)) found.push_back({ QDist(r), k }); }
+            // only the first geomPerGen are ever looked at, and the order is total (a key is one point)
+            const auto upTo = found.begin() + static_cast<std::ptrdiff_t>((std::min)(found.size(), static_cast<std::size_t>((std::max)(B.geomPerGen, B.perGen))));
+            std::partial_sort(found.begin(), upTo, found.end(), [](const R& x, const R& y) { return x.q != y.q ? x.q < y.q : x.c.key < y.c.key; });
             int kept = 0, tested = 0;
             for (const R& x : found) {
                 if (kept >= B.perGen) break;
@@ -298,7 +337,7 @@ namespace MFO::Iaus::MovePass {
         void UnitPlace(PartyPicture& pic, const Env::View& v, const Tuning& t) {
             Spot& s = pic.work.hits[pic.work.cursor++].s;
             s.portals = PortalsAt(v, pic.wallVert, s.tri, s.p, t);
-            s.exits = ExitsAt(v, s.tri, s.p, pic.foes, Env::Walker{}, t);
+            s.exits = SpotExits(pic, v, s.key, s.tri, s.p, Env::Walker{}, t);
             if (s.exits == 0) s.kinds &= ~KindBit(SpotKind::RetreatExit);   // a dead end is not offered
         }
         void UnitSelect(PartyPicture& pic) {
@@ -324,7 +363,7 @@ namespace MFO::Iaus::MovePass {
                 const Member& m = pic.party[i];
                 if (!Scores(m)) continue;
                 const bool own = m.commit.on && m.commit.key == sp.key;
-                Cand c{ sp.key, sp.p, sp.tri, WalkTo(v, m, w.memberFlood[i], sp.p, sp.tri) };
+                Cand c{ sp.key, sp.p, sp.tri, WalkTo(pic, m, w.memberFlood[i].Get(), sp.p, sp.tri) };
                 if (c.walk < 0.0f) { if (!own) continue; c.walk = Dist(m.p, sp.p); }   // beyond his own gather: another member's spot
                 const std::uint32_t allowed = KindsOf(pic, m, t);
                 for (std::uint8_t ai = 0; ai < m.nTop; ++ai) {
@@ -350,7 +389,7 @@ namespace MFO::Iaus::MovePass {
             }
         }
 
-        void UnitQueue(PartyPicture& pic, const Env::View& v) {
+        void UnitQueue(PartyPicture& pic) {
             Work& w = pic.work;
             // who may walk where, each member's nearest first, one round at a time
             struct U { std::int32_t round; Work::PathUnit u; };
@@ -365,7 +404,7 @@ namespace MFO::Iaus::MovePass {
                     std::uint32_t any = 0;
                     for (std::uint8_t ai = 0; ai < m.nTop; ++ai) any |= w.Offered(static_cast<std::int32_t>(k), i, ai);
                     if (!any) continue;
-                    mine.push_back({ i, static_cast<std::int32_t>(k), 0, own ? -1 : QDist(WalkTo(v, m, w.memberFlood[i], sp.p, sp.tri)) });
+                    mine.push_back({ i, static_cast<std::int32_t>(k), 0, own ? -1 : QDist(WalkTo(pic, m, w.memberFlood[i].Get(), sp.p, sp.tri)) });
                 }
                 std::sort(mine.begin(), mine.end(), [](const auto& a, const auto& b) { return a.near != b.near ? a.near < b.near : a.spot < b.spot; });
                 for (std::size_t k = 0; k < mine.size(); ++k) us.push_back({ static_cast<std::int32_t>(k), mine[k] });
@@ -393,6 +432,9 @@ namespace MFO::Iaus::MovePass {
             if (p->nAt) out.exposedSec = static_cast<float>(seen) / static_cast<float>(p->nAt) * (p->length / (m.speed > 1.0f ? m.speed : 1.0f));
             w.pairs.push_back(out);
         }
+
+        // What phase 1 alone needed. A picture is copied whole (the lab's rollouts), and phase 3 reads the pool, the offers, the pairs and reach.
+        void Spent(Work& w) { w.memberFlood.clear(); w.foeFlood.clear(); w.points.clear(); w.hits.clear(); w.gen.clear(); w.pathUnits.clear(); }
 
         void UnitAsks(PartyPicture& pic, const ClassProfiles& profiles, const Tuning& t) {
             Work& w = pic.work;
@@ -471,6 +513,8 @@ namespace MFO::Iaus::MovePass {
         std::erase_if(pic.foes, [](const Foe& f) { return !Finite(f.p); });
         const bool moved = pic.envStamp != v.stamp || pic.wallVert.size() != v.verts.size();
         if (moved) { pic.envStamp = v.stamp; pic.facts.clear(); pic.paths.clear(); pic.carried.clear(); pic.late.clear(); WallVerts(v, pic.wallVert); }
+        if (moved || !pic.mesh || pic.mesh->cen.size() != v.tris.size()) { pic.mesh = FactsOf(v); pic.exitMemo.reset(); pic.exitFlood.reset(); pic.still.clear(); }
+        std::erase_if(pic.still, [&](const auto& s) { return !ById(pic.party, s.who) && !ById(pic.foes, s.who); });
         for (Foe& f : pic.foes) f.tri = Locate(v, f.p);
         for (Member& m : pic.party) {
             m.tri = Locate(v, m.p);
@@ -502,7 +546,7 @@ namespace MFO::Iaus::MovePass {
             std::sort(near.begin(), near.end());
             for (std::size_t i = 0; i < (std::min)(near.size(), m.threats.size()); ++i) m.threats[i] = near[i].second;
             m.portals = PortalsAt(v, pic.wallVert, m.tri, m.p, t);
-            m.exits = m.threats[0] >= 0 ? ExitsAt(v, m.tri, m.p, pic.foes, m.who, t) : std::uint8_t{ 0 };
+            m.exits = m.threats[0] >= 0 ? OwnExits(pic, v, m, t) : std::uint8_t{ 0 };
             Commit& c = m.commit;
             if (c.on) {
                 if (moved && (c.tri < 0 || static_cast<std::size_t>(c.tri) >= v.tris.size() || Locate(v, c.p) != c.tri)) { c.on = false; m.seen |= kMarkPathBlocked; }   // the mesh under it is another one
@@ -516,7 +560,7 @@ namespace MFO::Iaus::MovePass {
             m.fixed = m.decides && c.on && m.seen == 0;
             if (m.decides && c.on) {
                 bool in = false; for (Spot& s : pic.pool) if (s.key == c.key) { s.kinds |= c.kinds; in = true; }
-                if (!in) { Spot s; s.key = c.key; s.p = c.p; s.tri = c.tri; s.kinds = c.kinds; s.portals = PortalsAt(v, pic.wallVert, c.tri, c.p, t); s.exits = ExitsAt(v, c.tri, c.p, pic.foes, m.who, t); pic.pool.push_back(s); }
+                if (!in) { Spot s; s.key = c.key; s.p = c.p; s.tri = c.tri; s.kinds = c.kinds; s.portals = PortalsAt(v, pic.wallVert, c.tri, c.p, t); s.exits = SpotExits(pic, v, c.key, c.tri, c.p, m.who, t); pic.pool.push_back(s); }
             }
         }
         std::sort(pic.pool.begin(), pic.pool.end(), [](const Spot& a, const Spot& b) { return a.key < b.key; });
@@ -525,6 +569,16 @@ namespace MFO::Iaus::MovePass {
         Work& w = pic.work;
         w.stage = Work::Stage::Flood;
         w.memberFlood.resize(pic.party.size());
+        bool foesWalk = false;   // a foe's own walk is read by kite and by retreat's way on, and both need somebody on him
+        for (std::uint32_t i = 0; i < pic.party.size(); ++i) {
+            const Member& m = pic.party[i];
+            if (!Scores(m)) continue;
+            const std::uint32_t allowed = KindsOf(pic, m, t);
+            for (std::uint32_t a = 0; a < m.nTop; ++a)
+                for (std::uint32_t k = 1; k < kSpotKindCount; ++k)
+                    if ((allowed & (1u << k)) && kSpotKinds[k].gen && Pairs(static_cast<SpotKind>(k), m.top[a])) { w.gen.push_back({ i, a, k }); foesWalk = foesWalk || (m.threats[0] >= 0 && (k == static_cast<std::uint32_t>(SpotKind::Kite) || k == static_cast<std::uint32_t>(SpotKind::RetreatExit))); }
+        }
+            if (!foesWalk) return;
         std::vector<std::pair<std::int32_t, FormID>> fl;
         for (const Foe& f : pic.foes) {
             if (f.tri < 0 || f.target == 0) continue;
@@ -533,14 +587,6 @@ namespace MFO::Iaus::MovePass {
         }
         std::sort(fl.begin(), fl.end());
         for (std::size_t i = 0; i < (std::min)(fl.size(), static_cast<std::size_t>(B.foeFloods)); ++i) w.foeFlood.push_back({ fl[i].second, {} });
-        for (std::uint32_t i = 0; i < pic.party.size(); ++i) {
-            const Member& m = pic.party[i];
-            if (!Scores(m)) continue;
-            const std::uint32_t allowed = KindsOf(pic, m, t);
-            for (std::uint32_t a = 0; a < m.nTop; ++a)
-                for (std::uint32_t k = 1; k < kSpotKindCount; ++k)
-                    if ((allowed & (1u << k)) && kSpotKinds[k].gen && Pairs(static_cast<SpotKind>(k), m.top[a])) w.gen.push_back({ i, a, k });
-        }
     }
 
     bool Phase1(PartyPicture& pic, const Env::View& v, Env::Scratch& s, const ClassProfiles& profiles, const Tuning& t, std::vector<RayAsk>& asks, float sliceMs) {
@@ -560,9 +606,9 @@ namespace MFO::Iaus::MovePass {
             case Stage::Place:    if (w.cursor < w.hits.size()) UnitPlace(pic, v, t); else w.stage = Stage::Select; break;
             case Stage::Select:   UnitSelect(pic); w.stage = Stage::Offer; w.cursor = 0; break;
             case Stage::Offer:    if (w.cursor < pic.pool.size()) UnitOffer(pic, v, s, t); else w.stage = Stage::Queue; break;
-            case Stage::Queue:    UnitQueue(pic, v); w.stage = Stage::Paths; w.cursor = 0; break;
+            case Stage::Queue:    UnitQueue(pic); w.stage = Stage::Paths; w.cursor = 0; break;
             case Stage::Paths:    if (w.cursor < w.pathUnits.size()) UnitPath(pic, v, s, t); else { w.stage = Stage::Asks; w.cursor = 0; } break;
-            case Stage::Asks:     UnitAsks(pic, profiles, t); asks = w.asked; w.stage = Stage::Done; return true;
+            case Stage::Asks:     UnitAsks(pic, profiles, t); asks = w.asked; w.stage = Stage::Done; Spent(w); return true;
             case Stage::Done:     return true;
             }
         } while (more());

@@ -42,45 +42,64 @@ namespace MFO::Iaus::Move {
     }
 
     // Dijkstra over triangle centres, nearest first, ties by triangle. An estimate of the walk: FindPath is the authority for a spot that is paired.
-    void Flood(const Env::View& v, const Env::Vec3& from, std::int32_t tri, const Env::Walker& who, float radius, int maxTris, Work::Flood& out) {
+    void Flood(const Env::View& v, const Env::Vec3& from, std::int32_t tri, const Env::Walker& who, float radius, int maxTris, Work::Flood& out, const MeshFacts* mesh) {
         out.d.clear();
         if (tri < 0 || static_cast<std::size_t>(tri) >= v.tris.size()) return;
         using N = std::pair<float, std::int32_t>;
-        std::priority_queue<N, std::vector<N>, std::greater<N>> q;
+        thread_local std::vector<N> heap; heap.clear();   // std::priority_queue's own operations, on kept memory
+        const auto push = [&](N n) { heap.push_back(n); std::push_heap(heap.begin(), heap.end(), std::greater<N>{}); };
         // One array a thread, only the triangles touched are cleaned again (a 16k mesh cost 63 KB a flood, 60 to 80 floods a window). -1 = closed.
         thread_local std::vector<float> best; thread_local std::vector<std::int32_t> touched;
         if (best.size() < v.tris.size()) best.resize(v.tris.size(), kInf);
         for (const auto i : touched) best[static_cast<std::size_t>(i)] = kInf;
         touched.clear();
         out.cut = false; out.bound = radius;
-        q.push({ 0.0f, tri }); best[static_cast<std::size_t>(tri)] = 0.0f; touched.push_back(tri);
-        while (!q.empty()) {
-            const auto [d, at] = q.top(); q.pop();
+        push({ 0.0f, tri }); best[static_cast<std::size_t>(tri)] = 0.0f; touched.push_back(tri);
+        while (!heap.empty()) {
+            std::pop_heap(heap.begin(), heap.end(), std::greater<N>{});
+            const auto [d, at] = heap.back(); heap.pop_back();
             if (best[static_cast<std::size_t>(at)] < 0.0f) continue;
             if (static_cast<int>(out.d.size()) >= maxTris) { out.cut = true; out.bound = d; break; }
             best[static_cast<std::size_t>(at)] = -1.0f;
             out.d.push_back({ at, d });
             const Env::Tri& T = v.tris[static_cast<std::size_t>(at)];
-            const Env::Vec3 here = at == tri ? from : Env::Centroid(v, at);
+            const bool known = mesh && at != tri;   // from a triangle's middle the two lengths are the mesh's own
+            const Env::Vec3 here = at == tri ? from : known ? Env::Vec3{} : Env::Centroid(v, at);
             for (int k = 0; k < 3; ++k) {
                 const std::int32_t nb = T.nb[k];
                 if (nb < 0 || static_cast<std::size_t>(nb) >= v.tris.size() || !Walks(v, T.kind[k]) || best[static_cast<std::size_t>(nb)] < 0.0f) continue;
                 if (!OpenTo(v, v.tris[static_cast<std::size_t>(nb)], who)) continue;
-                const Env::Vec3 e = Mid(v.verts[T.v[k]], v.verts[T.v[(k + 1) % 3]]);
-                const float nd = d + Dist(here, e) + Dist(e, Env::Centroid(v, nb));
+                float in, on;
+                if (known) { in = mesh->in[static_cast<std::size_t>(at)][static_cast<std::size_t>(k)]; on = mesh->out[static_cast<std::size_t>(at)][static_cast<std::size_t>(k)]; }
+                else { const Env::Vec3 e = Mid(v.verts[T.v[k]], v.verts[T.v[(k + 1) % 3]]); in = Dist(here, e); on = Dist(e, Env::Centroid(v, nb)); }
+                const float nd = d + in + on;
                 if (!(nd <= radius)) continue;
                 if (best[static_cast<std::size_t>(nb)] <= nd) continue;
                 if (best[static_cast<std::size_t>(nb)] == kInf) touched.push_back(nb);
-                best[static_cast<std::size_t>(nb)] = nd; q.push({ nd, nb });
+                best[static_cast<std::size_t>(nb)] = nd; push({ nd, nb });
             }
         }
         std::sort(out.d.begin(), out.d.end());
     }
 
-    void Points(const Env::View& v, std::int32_t tri, const Tuning& t, std::vector<Cand>& out) {
+    std::shared_ptr<const MeshFacts> FactsOf(const Env::View& v) {
+        auto m = std::make_shared<MeshFacts>();
+        m->cen.resize(v.tris.size()); m->in.resize(v.tris.size()); m->out.resize(v.tris.size());
+        for (std::size_t i = 0; i < v.tris.size(); ++i) m->cen[i] = Env::Centroid(v, static_cast<std::int32_t>(i));
+        for (std::size_t i = 0; i < v.tris.size(); ++i)
+            for (std::size_t k = 0; k < 3; ++k) {
+                const Env::Tri& T = v.tris[i]; const std::int32_t nb = T.nb[k];
+                if (nb < 0 || static_cast<std::size_t>(nb) >= v.tris.size()) continue;
+                const Env::Vec3 e = Mid(v.verts[T.v[k]], v.verts[T.v[(k + 1) % 3]]);
+                m->in[i][k] = Dist(m->cen[i], e); m->out[i][k] = Dist(e, m->cen[static_cast<std::size_t>(nb)]);
+            }
+        return m;
+    }
+
+    void Points(const Env::View& v, std::int32_t tri, const Tuning& t, std::vector<Cand>& out, const MeshFacts* mesh) {
         const Env::Tri& T = v.tris[static_cast<std::size_t>(tri)];
         if (T.flags & Env::kTriWater) return;   // nobody is sent to stand in water
-        const Env::Vec3 c = Env::Centroid(v, tri);
+        const Env::Vec3 c = mesh ? mesh->cen[static_cast<std::size_t>(tri)] : Env::Centroid(v, tri);
         out.push_back({ KeyOfPoint(tri, 0), c, tri, 0.0f });
         const Env::Vec3 &a = v.verts[T.v[0]], &b = v.verts[T.v[1]], &d = v.verts[T.v[2]];
         const float area = 0.5f * std::fabs((b.x - a.x) * (d.y - a.y) - (b.y - a.y) * (d.x - a.x));
@@ -129,22 +148,30 @@ namespace MFO::Iaus::Move {
     }
 
     // How many of the eight compass octants a walk out of here leads into (it must get spotExitU away), not counting one a near foe stands in.
-    std::uint8_t ExitsAt(const Env::View& v, std::int32_t tri, const Env::Vec3& p, const std::vector<Foe>& foes, const Env::Walker& who, const Tuning& t) {
+    namespace { std::uint32_t Octant(float x, float y) { return (x >= 0.0f ? 1u : 0u) | (y >= 0.0f ? 2u : 0u) | (std::fabs(x) >= std::fabs(y) ? 4u : 0u); } }
+    std::uint8_t OpenOctants(const Env::View& v, std::int32_t tri, const Env::Vec3& p, const Env::Walker& who, const Tuning& t, const MeshFacts* mesh) {
         if (tri < 0) return 0;
-        Work::Flood f;
-        Flood(v, p, tri, who, 2.0f * t.spotExitU, 96, f);
-        const auto octant = [](float x, float y) { return (x >= 0.0f ? 1u : 0u) | (y >= 0.0f ? 2u : 0u) | (std::fabs(x) >= std::fabs(y) ? 4u : 0u); };
-        std::uint32_t open = 0, shut = 0;
-        for (const auto& [at, d] : f.d) if (d >= t.spotExitU) { const Env::Vec3 c = Env::Centroid(v, at); open |= 1u << octant(c.x - p.x, c.y - p.y); }
+        thread_local Work::Flood f;
+        Flood(v, p, tri, who, 2.0f * t.spotExitU, 96, f, mesh);
+        const auto mid = [&](std::int32_t at) { return mesh ? mesh->cen[static_cast<std::size_t>(at)] : Env::Centroid(v, at); };
+        std::uint32_t open = 0;
+        for (const auto& [at, d] : f.d) if (d >= t.spotExitU) { const Env::Vec3 c = mid(at); open |= 1u << Octant(c.x - p.x, c.y - p.y); }
         // a mesh of small triangles fills the cap inside the radius: its outermost ring is the frontier
         if (!open && f.d.size() >= 96) {
             float far = 0.0f; for (const auto& e : f.d) far = (std::max)(far, e.second);
-            for (const auto& [at, d] : f.d) if (d >= 0.8f * far) { const Env::Vec3 c = Env::Centroid(v, at); open |= 1u << octant(c.x - p.x, c.y - p.y); }
+            for (const auto& [at, d] : f.d) if (d >= 0.8f * far) { const Env::Vec3 c = mid(at); open |= 1u << Octant(c.x - p.x, c.y - p.y); }
         }
-        for (const Foe& e : foes) if (Dist(e.p, p) < 1.5f * t.spotExitU) shut |= 1u << octant(e.p.x - p.x, e.p.y - p.y);
+        return static_cast<std::uint8_t>(open);
+    }
+    std::uint8_t ExitsOf(std::uint8_t open, const Env::Vec3& p, const std::vector<Foe>& foes, const Tuning& t) {
+        std::uint32_t shut = 0;
+        for (const Foe& e : foes) if (Dist(e.p, p) < 1.5f * t.spotExitU) shut |= 1u << Octant(e.p.x - p.x, e.p.y - p.y);
         std::uint8_t n = 0;
         for (std::uint32_t m = open & ~shut; m; m &= m - 1) ++n;
         return n;
+    }
+    std::uint8_t ExitsAt(const Env::View& v, std::int32_t tri, const Env::Vec3& p, const std::vector<Foe>& foes, const Env::Walker& who, const Tuning& t) {
+        return ExitsOf(OpenOctants(v, tri, p, who, t), p, foes, t);
     }
 
     bool GeomSees(const Env::View& v, const Env::Vec3& a, const Env::Vec3& b, const Tuning& t, Env::Scratch& s, const Env::SightTuning& sight) {
@@ -218,7 +245,7 @@ namespace MFO::Iaus::Move {
         const Foe* f = ThreatOf(g, 0);
         if (!f || (g.act.melee && !IsMove(g.act.family)) || !(c.walk > 100.0f)) return false;
         const Work::Flood* fl = nullptr;
-        for (const auto& e : g.pic.work.foeFlood) if (e.who == f->id) { fl = &e; break; }
+        for (const auto& e : g.pic.work.foeFlood) if (e.who == f->id) { fl = &e.Get(); break; }
         if (!fl) return false;
         const float his = fl->At(c.tri);
         const float lead = (his >= 0.0f ? his : fl->bound) - c.walk;   // not reached by the foe's flood: at least its bound
@@ -246,12 +273,27 @@ namespace MFO::Iaus::Move {
     // the spot itself. Counting open directions alone called a pocket room a way on: its mouth is open, and closed by whoever follows him into it. Flood
     // distances run centre to centre and read long, so a room of less than about 1000 units across is never its own way on.
     bool CheckExit(const GenIn& g, const Cand& c, Env::Scratch&) {
-        Work::Flood f;
-        Flood(g.v, c.p, c.tri, g.m.who, 2.5f * g.t.spotExitU, 256, f);
+        const float radius = 2.5f * g.t.spotExitU;
+        const std::pair<SpotKey, std::uint32_t> id{ c.key, WalkerBits(g.m.who) };
+        auto& memo = g.pic.exitFlood;
+        const auto find = [&]() -> std::shared_ptr<const Work::Flood> {
+            if (!memo) return {};
+            const auto it = memo->find(id);
+            return it != memo->end() && it->second.radius == radius && it->second.p.x == c.p.x && it->second.p.y == c.p.y && it->second.p.z == c.p.z ? it->second.f : nullptr; };
+        auto kept = find();
+        if (!kept) {
+            auto made = std::make_shared<Work::Flood>();
+            Flood(g.v, c.p, c.tri, g.m.who, radius, 256, *made, g.pic.mesh.get());
+            kept = made;
+            if (!memo || memo->size() >= kExitFloods) memo = std::make_shared<Work::ExitFloods>();
+            else if (memo.use_count() > 1) memo = std::make_shared<Work::ExitFloods>(*memo);   // a copy of the picture reads it: never written under it
+            (*memo)[id] = { c.p, radius, kept };
+        }
+        const Work::Flood& f = *kept;
         const float far = f.cut ? (std::min)(2.0f * g.t.spotExitU, 0.8f * f.bound) : 2.0f * g.t.spotExitU;   // a mesh of small triangles fills the cap first: its frontier
         const auto walkOf = [&](const Foe& e, std::int32_t tri, const Env::Vec3& p) {   // not flooded (he targets nobody now, or the flood budget): the straight line, never longer than his walk
             const float line = Dist(e.p, p);
-            for (const auto& fl : g.pic.work.foeFlood) if (fl.who == e.id && !fl.d.empty()) { const float w = fl.At(tri); return w >= 0.0f ? w : (std::max)(line, fl.bound); }
+            for (const auto& fl : g.pic.work.foeFlood) if (fl.who == e.id && !fl.Get().d.empty()) { const float w = fl.Get().At(tri); return w >= 0.0f ? w : (std::max)(line, fl.Get().bound); }
             return line;
         };
         std::vector<float> here;
@@ -259,7 +301,7 @@ namespace MFO::Iaus::Move {
         for (const auto& [at, d] : f.d) {
             if (d < far) continue;
             bool on = true;
-            const Env::Vec3 q = Env::Centroid(g.v, at);
+            const Env::Vec3 q = g.pic.mesh->cen[static_cast<std::size_t>(at)];
             for (std::size_t i = 0; i < g.pic.foes.size() && on; ++i) { const float his = walkOf(g.pic.foes[i], at, q); on = his > c.walk + d && his >= here[i] + g.t.spotExitU; }
             if (on) return true;
         }
