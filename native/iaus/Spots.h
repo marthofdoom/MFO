@@ -60,7 +60,12 @@ namespace MFO::Iaus::Move {
     [[nodiscard]] std::uint32_t AllowedKinds(const RoadCaps& a_caps, const Tuning& a_t);
     // The kinds a class may be offered (the ClassGate rule, as families are gated).
     [[nodiscard]] std::uint32_t SpotKindsFor(const ClassGate& a_g);
-    [[nodiscard]] inline bool Pairs(SpotKind a_k, const RankedAction& a_a) { return a_a.Kind() < Family::kCount && (kSpotKinds[static_cast<std::size_t>(a_k)].families & F(a_a.Kind())) != 0; }
+    // The kinds whose places make a MOVE-ONLY action work (in reach AND in sight of its target).
+    inline constexpr std::uint32_t kServesMoveOnly = KindBit(SpotKind::HealReach);
+    [[nodiscard]] inline bool Pairs(SpotKind a_k, const RankedAction& a_a) {
+        if (a_a.moveOnly && !(KindBit(a_k) & kServesMoveOnly)) return false;
+        return a_a.Kind() < Family::kCount && (kSpotKinds[static_cast<std::size_t>(a_k)].families & F(a_a.Kind())) != 0;
+    }
     // An action that IS a movement: standing still does not serve it.
     [[nodiscard]] bool IsMove(Family a_f);
 

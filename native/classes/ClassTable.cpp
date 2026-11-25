@@ -372,7 +372,7 @@ namespace MFO::Classes {
             Mk(Id::Spellsword,  "spellsword",  "Spellsword",  3, Line::Hybrid, kRootMelee,  Pair(kMeleeT2, Ms(Id::Evoker)),   kMelee1H2H,           kSpellswordG,  "passive.spellsword",  U, U, kDisSpell, GoIn::BiasHealthMagickaRange),
             Mk(Id::Sorcerer,    "sorcerer",    "Sorcerer",    3, Line::Hybrid, kRootMelee,  Pair(kMeleeT2, Ms(Id::Conjurer)), kMelee1H2H,           kSorcererG,    "passive.sorcerer",    U, U, kDisSpell, GoIn::FullSummonsHighHealth),
             Mk(Id::Templar,     "templar",     "Templar",     3, Line::Hybrid, kRootMelee,  Pair(kMeleeT2, Ms(Id::Healer)),   kMelee1H2H | kShield, kTemplarG,     "passive.templar",     U, U, kDisSpell | kShortLeash, GoIn::PartyHealthyOrNoMagicka, 70),
-            Mk(Id::Nightblade,  "nightblade",  "Nightblade",  3, Line::Hybrid, kRootMelee,  Pair(kMeleeT2, Ms(Id::Warlock)),  kMelee1H2H,           kNightbladeG,  "passive.nightblade",  U, U, kDisSpell, GoIn::ControlledFoesOnly),
+            Mk(Id::Nightblade,  "nightblade",  "Nightblade",  3, Line::Hybrid, kRootMelee,  Pair(kMeleeT2, Ms(Id::Warlock)),  kMelee1H2H,           kNightbladeG,  "passive.nightblade",  U, U, kDisSpell | kDarkClass, GoIn::ControlledFoesOnly),
             Mk(Id::Witchhunter, "witchhunter", "Witchhunter", 3, Line::Hybrid, kRootRanged, Pair(Ms(Id::Archer), Ms(Id::Warlock)), kArcherSet,     kWitchhunterG, "passive.witchhunter", U, U, kDisSpell, GoIn::Never),
             Mk(Id::Scout,       "scout",       "Scout",       3, Line::Hybrid, kRootRanged, Pair(Ms(Id::Archer), Ms(Id::Healer)),  kArcherSet,      kScoutG,       "passive.scout",       U, U, kDisSpell | kNearPlayer, GoIn::None, 70),
             // ── tier 4 ──

@@ -52,6 +52,7 @@ namespace Sim {
         { "t.spotRadius", &Tuning::spotRadius }, { "t.spotSplitArea", &Tuning::spotSplitArea }, { "t.spotHighU", &Tuning::spotHighU }, { "t.spotExitU", &Tuning::spotExitU }, { "t.spotPeelU", &Tuning::spotPeelU },
         { "t.spotArriveU", &Tuning::spotArriveU }, { "t.spotFactMoveU", &Tuning::spotFactMoveU }, { "t.spotFactMaxAgeSec", &Tuning::spotFactMaxAgeSec }, { "t.spotKeptAgeSec", &Tuning::spotKeptAgeSec }, { "t.spotUnknownExposure", &Tuning::spotUnknownExposure },
         // S4 (iaus/Light.h): flat while --v4 light is off
+        { "t.moveHealYield", &Tuning::moveHealYield }, { "t.spotActionMomentum", &Tuning::spotActionMomentum },
         { "t.lightNearU", &Tuning::lightNearU }, { "t.lightStoreyU", &Tuning::lightStoreyU }, { "t.lightMaxAgeSec", &Tuning::lightMaxAgeSec }, { "t.lightMinConf", &Tuning::lightMinConf }, { "t.lightLitLevel", &Tuning::lightLitLevel }, { "t.lightGenU", &Tuning::lightGenU }, { "t.lightDarkHoldSec", &Tuning::lightDarkHoldSec },
     };
 

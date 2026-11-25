@@ -201,7 +201,7 @@ namespace MFO::Iaus::MovePass {
             const Spot* s = si >= 0 ? &pic.pool[static_cast<std::size_t>(si)] : nullptr;
             Triple x{ mi, ai, si, mask, pair, 1.0f, FillStatic(pic, m, m.top[ai], s, pair, t) };
             x.incumbent = s && m.commit.on && m.commit.key == s->key;
-            x.scale = KindWeight(mask, profiles(m.classId)) * (x.incumbent ? t.spotMomentum : 1.0f);
+            x.scale = !s && m.top[ai].moveOnly ? 0.0f : KindWeight(mask, profiles(m.classId)) * (x.incumbent ? t.spotMomentum : 1.0f);   // a move-only action does not work from here
             return x;
         }
         std::int32_t TriOf(const PartyPicture& pic, const Triple& x) { return x.spot >= 0 ? pic.pool[static_cast<std::size_t>(x.spot)].tri : -1; }
@@ -367,6 +367,13 @@ namespace MFO::Iaus::MovePass {
             // only the first geomPerGen are ever looked at, and the order is total (a key is one point)
             const auto upTo = found.begin() + static_cast<std::ptrdiff_t>((std::min)(found.size(), static_cast<std::size_t>((std::max)(B.geomPerGen, B.perGen))));
             std::partial_sort(found.begin(), upTo, found.end(), [](const R& x, const R& y) { return x.q != y.q ? x.q < y.q : x.c.key < y.c.key; });
+            // A move-only action round a corner: every near place fails the sight test, so the tests are spread over the whole walk (nearest first still)
+            if (g.act.moveOnly && g.act.sight == Sight::Occluded && row.check && found.size() > static_cast<std::size_t>(B.geomPerGen)) {
+                std::sort(upTo, found.end(), [](const R& x, const R& y) { return x.q != y.q ? x.q < y.q : x.c.key < y.c.key; });
+                const auto step = [&](std::size_t i) { return i * found.size() / static_cast<std::size_t>(B.geomPerGen); };
+                for (std::size_t i = 0; i < static_cast<std::size_t>(B.geomPerGen); ++i) found[i] = found[step(i)];
+                found.resize(static_cast<std::size_t>(B.geomPerGen));
+            }
             int kept = 0, tested = 0;
             for (const R& x : found) {
                 if (kept >= B.perGen) break;

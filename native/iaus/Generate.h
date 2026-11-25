@@ -47,6 +47,8 @@ namespace MFO::Iaus {
     struct Generated {
         std::vector<Candidate> actions;    // for Decide (every family except Posture)
         std::vector<Candidate> postures;   // for DecidePosture
+        std::vector<Candidate> moveOnly;   // Snapshot::moveAsk: heals whose recipient is past the reach or occluded, and who has no heal candidate above. Never for Decide: TopRanked(MoveAsk)
+        std::vector<Sight>     moveOnlySight;   // ... his ray to that recipient now (the candidate itself is scored as if seen)
         float worstPartyHp = 1.0f;         // the lowest readable HP pct of self, the player and the allies
         float emergency = 0.0f;            // EmergencyLevel(worstPartyHp)
         bool  selfUnreadable = false;      // the follower's own maxima read 0: nothing was generated

@@ -1,5 +1,5 @@
 #pragma once
-// iaus/Iaus_internal.h -- state shared by the iaus/ core files only (Catalogue, Score, Decide, Explain).
+// iaus/Iaus_internal.h -- state shared by the iaus/ core files only (Catalogue, Score, Decide, Explain, Generate).
 // PURE like Core.h: standard headers only. Nothing outside native/iaus/ (and the harness) includes this.
 #include "iaus/Core.h"
 

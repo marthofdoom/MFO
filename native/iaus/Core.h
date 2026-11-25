@@ -404,6 +404,8 @@ namespace MFO::Iaus {
         float lightMinConf = 0.25f;              // under this confidence the light of a place is unknown
         float lightLitLevel = 45.0f;             // ground at or above this level is lit (the walk of a member who wants the dark)
         float lightGenU = 900.0f;                // the spot generators: a place known to be lit (at t.lightLitLevel or above, less below it) ranks as if this much farther, for who wants the dark
+        float moveHealYield = 0.0f;              // a heal he would have to walk for ranks under every ranked heal of somebody he reaches NOW that scores at least this share of it (0 = under every one). PLACEHOLDER
+        float spotActionMomentum = 1.0f;         // the momentum of the action his place was chosen for (8.1 spotAction, TickIn). 1 = none. PLACEHOLDER, not searched
         float lightDarkHoldSec = 6.0f;           // who wanted the dark this recently is not lit (the one hysteresis of the cast and the decast)
         WorthTable worth{};
         // S11b (iaus/SpellWorth.h): what one cast of a spell is worth in one unit for every family. SHIPPED INERT (`sw.live` = 0): `sw.<field>` in shared.txt.
@@ -614,6 +616,7 @@ namespace MFO::Iaus {
         float score = 0.0f, reach = 0.0f;   // reach <= 0: range not applicable
         bool  melee = false;
         Sight sight = Sight::None;          // from where he stands, as the action facet read it. None = not a sighted action
+        bool  moveOnly = false;             // Generated::moveOnly: it does not work from where he stands. Staying is worth nothing for it, and only kServesMoveOnly places pair with it
         Family Kind() const { return family == Family::Scroll ? scrollOf : family; }
     };
 
@@ -688,6 +691,8 @@ namespace MFO::Iaus {
         std::uint8_t  rapportRank = 1;        // 1..5 (Rapport::RankFor)
         double        commitWindowSec = 1.5;  // g_suppressWindow x (0.88 + 0.24 Temperament), Engine::MakeTick
         std::uint64_t seed = 0;               // per follower (Temperament bits), Engine::MakeTick
+        bool          hasSpotAction = false;  // MOVEMENT (8.1): the movement pass holds a place for him, chosen for spotAction. A bonus (Tuning::spotActionMomentum), never an order
+        Key           spotAction{};
     };
 
     struct Term { Cons cons; float x; float raw; float w; float s; float comp; };
@@ -748,6 +753,18 @@ namespace MFO::Iaus {
 
     // MOVEMENT (S1): the action he holds (the running decision, when it is ranked) and the best of the rest, at most three. Returns the count.
     std::size_t TopRanked(const Decision& a_d, std::span<const Candidate> a_cands, std::array<RankedAction, 3>& a_out);
+
+    // MOVE-ONLY (Generated::moveOnly): actions he can not do from where he stands but could from another place. Never scored by Decide, never in its order, never cast:
+    // the movement pass alone hears of them, here. Scored as if in reach. One for each target (the best), under every ranked heal of somebody he reaches now
+    // (Tuning::moveHealYield; his own heal holds him nowhere), over any light (a light in the export ranks under the best of them), never the held action.
+    struct MoveAsk {
+        std::span<const Candidate> cands;      // Generated::moveOnly
+        std::span<const Sight>     sight;      // Generated::moveOnlySight: what his ray reads now, for RankedAction::sight
+        const Mind&    mind;
+        const Profile& profile;
+        const Tuning&  tuning;
+    };
+    std::size_t TopRanked(const Decision& a_d, std::span<const Candidate> a_cands, std::array<RankedAction, 3>& a_out, const MoveAsk& a_ask);
 
     // The posture layer (Posture candidates only): deterministic best with postureMomentum on the drawn
     // category. No rapport roll (a weapon swap is animated and expensive: dithering is never wanted). Returns

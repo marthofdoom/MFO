@@ -5,7 +5,7 @@
 // the same fights are played with ONE mechanism of the pass broken (kMoveFaults) and the rule must NOT hold: a rule that passes broken tests nothing.
 // The bodies a rule does not judge are statues (run speed 0, a deep health pool), so what moves and what it reaches is the followers' own doing.
 // SCRIPTED rows replace his own ranking by a fixed one after each lap: the rule is then about the PLACE, for an action he does not pick by himself in
-// that fight (marked in the row; a heal past its reach is no candidate of Generate.cpp at all, iaus-sim-v4.md 17.6).
+// that fight (marked in the row).
 #include "iaus_sim/Oracle.h"
 #include "iaus_sim/Scenarios.h"
 
@@ -94,11 +94,19 @@ namespace Sim {
           c.watch = [](Fight& F, SpotProbe& p) { const MoveClaim& q = F.move->claim[0]; p["win"] = F.move->pic.window; const Body& f = *Foes(F)[0]; const EQ::Vec3 mid{ 0.5f * (F.b[0].c.x + f.c.x), 0.5f * (F.b[0].c.y + f.c.y), F.b[0].c.z };
               if (q.on && (q.kinds & MV::KindBit(MFO::Iaus::SpotKind::Peel))) p["peel"] = 1; if (q.on && MV::Dist(q.p, mid) < 250.0f) p["between"] = 1; };
           c.rule = [](const std::vector<SpotProbe>& r, std::string& o) { const int n = static_cast<int>(r.size()), won = Count(r, [](const SpotProbe& p) { return Get(p, "win", 0) >= 10; }); o = Fmt("windows decided in %d of %d, a peel place in %.0f, a place between them in %.0f", won, n, Sum(r, "peel"), Sum(r, "between")); return won == n && Sum(r, "peel") == 0 && Sum(r, "between") == 0; }; v.push_back(c); }
-        { SpotCase c{ "healer-round-corner", "env-heal-corner", "no-heal" }; c.scripted = true; c.what = "a healer whose patient fights round the corner walks to where he reaches and sees him (scripted: Generate offers no heal past its reach)";
-          c.setup = [](Fight& F) { AllStatues(F); Put(F, F.b[0], At(F, 14, 3, 11)); F.b[0].c.hp = 0.4f * F.b[0].c.hpMax; Put(F, Sub(F), At(F, 4, 2, 11)); Put(F, F.b[static_cast<std::size_t>(F.ctl[1].body)], At(F, 2, 3, 11)); F.ctl[0].leash = 0.0f; int k = 0; for (Body* f : Foes(F)) Put(F, *f, At(F, 15.0f, 2.0f + static_cast<float>(k++), 11)); };
-          c.script = [](Fight& F) { const Body& s = Sub(F); const bool see = EnvSees(F, F.b[0], s); Script(F, 0, { Want(Family::CastHeal, F.b[0].c.id, 1.2f, 1000.0f, see ? Sight::Visible : Sight::Occluded, false) }); };
-          c.watch = [](Fight& F, SpotProbe& p) { const Body& s = Sub(F); if (F.move->claim[0].on && F.move->claim[0].arrived && Fight::Dist(s, F.b[0]) <= 1000.0f && EnvSees(F, s, F.b[0]) && !p.v.count("ok")) p["ok"] = F.now; };
-          c.rule = [](const std::vector<SpotProbe>& r, std::string& o) { const int n = static_cast<int>(r.size()), k = Count(r, [](const SpotProbe& p) { return Get(p, "ok", 1e9) <= 12.0; }); o = Fmt("stands where he reaches and sees the patient within 12 s in %d of %d", k, n); return k * 10 >= n * 9; }; v.push_back(c); }
+        // THE MOVE-ONLY HEAL (iaus-sim-v4.md 20). Unscripted: his own ranking, his own heals. The foes stand with him (a stand at a foe would not bring him near the patient), the patient
+        // never mends by itself, and what is counted is a heal of his that LANDS on the patient.
+        const auto healStage = [](Fight& F, EQ::Vec3 me, EQ::Vec3 pc, float foeY) { AllStatues(F); Put(F, F.b[0], pc); F.b[0].c.hp = 0.4f * F.b[0].c.hpMax; Put(F, Sub(F), me); Body& mate = F.b[static_cast<std::size_t>(F.ctl[1].body)]; Put(F, mate, At(F, 2, 9, 11)); Statue(mate, true); F.ctl[0].leash = 0.0f;
+            int k = 0; for (Body* f : Foes(F)) Put(F, *f, At(F, 1.0f + static_cast<float>(k++), foeY, 11)); };
+        const auto healWatch = [](Fight& F, SpotProbe& p) { const Body& s = Sub(F); if (!p.v.count("first")) { p["first"] = 1; p["hp"] = F.b[0].c.hp; p["reached"] = EnvSees(F, s, F.b[0]) && (Fight::Dist(s, F.b[0]) <= 700.0f); }
+            if (F.b[0].c.hp > p["hp"] + 1.0 && F.t.healDone > p["done"] && !p.v.count("healed")) p["healed"] = F.now; p["hp"] = F.b[0].c.hp; p["done"] = F.t.healDone; if (F.move->claim[0].on && F.move->claim[0].act.Kind() == Family::CastHeal && F.move->claim[0].act.target == F.b[0].c.id) p["filed"] = 1; };
+        const auto healRule = [](const std::vector<SpotProbe>& r, std::string& o) { const int n = static_cast<int>(r.size()), k = Count(r, [](const SpotProbe& p) { return Get(p, "healed", 1e9) <= 15.0; }); o = Fmt("a heal of his lands on the patient within 15 s in %d of %d, a place for that heal filed in %.0f", k, n, Sum(r, "filed")); return k * 10 >= n * 9 && Sum(r, "filed") * 10 >= n * 9 && Sum(r, "reached") == 0; };
+        const auto healer = [](FightSpec& f, const std::vector<SimClass>&) { f.ensure = { "healOther", "heal" }; f.playerPotions = 0; };
+        for (const char* fault : { "no-move-heal", "no-heal" }) {
+            SpotCase c{ fault[3] == 'm' ? "healer-round-corner" : "healer-round-corner (kind)", "env-heal-corner", fault }; c.tweak = healer; c.what = "a healer whose patient STARTS round the corner walks to where he reaches and sees him, and heals him (unscripted)";
+            c.setup = [healStage](Fight& F) { healStage(F, At(F, 4, 2, 11), At(F, 14, 3, 11), 5.0f); }; c.watch = healWatch; c.rule = healRule; v.push_back(c); }
+        { SpotCase c{ "healer-out-of-reach", "env-heal-corner", "no-move-heal" }; c.tweak = healer; c.what = "the same down a straight arm: the patient is in sight and starts past the heal's reach (his heals reach 700 u here)";
+          c.setup = [healStage](Fight& F) { healStage(F, At(F, 4, 8, 11), At(F, 14, 8, 11), 5.0f); for (auto& e : F.ctl[0].book.entries) if (e.nature == MFO::Iaus::Prune::Nature::Heal && e.reach > 0.0f) e.reach = 700.0f; }; c.watch = healWatch; c.rule = healRule; v.push_back(c); }
         // the pocket's squares: rows 1 to 3 of the map
         const auto pocket = [](const EQ::Vec3& p) { return p.y > (9.0f - 4.0f) * 128.0f; };
         { SpotCase c{ "dead-end-retreat (a way on)", "env-dead-end", "exits" }; c.scripted = true; c.sec = 12.0; c.what = "a hurt caster with two blades on him in the hall: no retreat is ever sent into the pocket room (scripted: he ranks a retreat)";

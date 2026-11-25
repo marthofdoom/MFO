@@ -228,6 +228,7 @@ struct SpellEntry {
         bool backOffPressed = false;  // batch I (Q-T2-3): the Mercenary backs off when two or more foes press him. Knight and Warrior keep no
                                       // way out by design. false with the tree OFF
         bool sneakClass = false;      // Flag::kSneakAlways: a sneak class (card G3's hide run). false with the tree OFF
+        bool darkClass = false;       // Classes::WantsDark: a class that sneaks, for LIGHT (the sneak classes and the Nightblade). What fills Combatant::sneakClass. false with the tree OFF
         bool weaponMelee = true;      // the class weapon set holds a melee weapon (dagger / 1H / 2H)
         bool weaponBow = true;
         bool weaponCrossbow = true;
@@ -302,7 +303,7 @@ struct SpellEntry {
         bool  beingHealed = false;          // a heal by ANOTHER party member is in flight on it (a party claim: no second heal)
         // S4 (iaus/Light.h). Every default is "not read": nothing in the DLL fills these yet (G6).
         bool  sneaking = false, hideRun = false, invisible = false;   // he wants the dark NOW (the player too)
-        bool  sneakClass = false;           // his CLASS is one that sneaks (crouched or not): no light is ever cast on him, and ours on him is ended
+        bool  sneakClass = false;           // ClassGate::darkClass: his CLASS is one that sneaks (crouched or not): no light is ever cast on him, and ours on him is ended
         float darkAgoSec = kInf;            // seconds since he last wanted the dark
         float light = -1.0f;                // the light level where he stands, < 0 = unknown (never dark)
         Tri   inPlayerView = Tri::Unknown;  // the player sees him
@@ -404,6 +405,8 @@ struct SpellEntry {
         float chaseCap = 4096.0f;         // Confidence::ChaseRadius
         float combatSec = 0.0f;           // seconds since this fight started for him
 
+        bool  moveAsk = false;            // a movement pass will read this lap's ranking (TopRanked): heals past their reach or round a corner are then kept apart as
+                                          // MOVE-ONLY candidates (Generated::moveOnly), and a heal says its reach. false (the DLL until G2): not one is made
         bool  decastRoad = false;         // S4: a light of ours can be ended (the G6 Harbinger call). false (today): no Decast candidate is made
 
         std::vector<SpellTargetNote> willWork;      // G10 answers for the pairs asked last lap (Unknown passes)
