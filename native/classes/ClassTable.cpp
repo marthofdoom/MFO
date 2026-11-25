@@ -407,6 +407,9 @@ namespace MFO::Classes {
             }
             return true;
         }
+        // marth 11-24: the Nightblade counts as a sneaking class for LIGHT, and for nothing else kSneakAlways says. A Knight does not
+        static_assert(WantsDark(kTableC[static_cast<std::size_t>(Id::Nightblade)].flags) && (kTableC[static_cast<std::size_t>(Id::Nightblade)].flags & kSneakAlways) == 0);
+        static_assert(WantsDark(kTableC[static_cast<std::size_t>(Id::Thief)].flags) && !WantsDark(kTableC[static_cast<std::size_t>(Id::Knight)].flags));
         static_assert(TableIsConsistent(), "classes/ClassTable.cpp: the class table violates its structural rules");
     }
 
