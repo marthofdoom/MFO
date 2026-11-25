@@ -12,7 +12,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from mfo_tune import commands, procs, runreader, settings, tuningfiles   # noqa: E402
+from mfo_tune import catalog, commands, names, procs, runreader, settings, tuningfiles   # noqa: E402
 
 
 def main():
@@ -50,9 +50,32 @@ def main():
                      "rejudge": [{"spec": "mage:family.attack=2", "accepted": True}], "gap": {"kept": {"mage/x": ["mage:0.0.a=2"]}}}}
     check("no recalib, joint passed -> joint.table", runreader.kept_specs(s2) == ["mage:8.35.b=0.3"])
     s2["stages"]["joint"]["verdict"] = "FAIL: x"
-    check("joint failed -> per-class + rejudge + gap", runreader.kept_specs(s2) == ["mage:8.35.b=0.27", "mage:family.attack=2", "mage:0.0.a=2"], runreader.kept_specs(s2))
+    check("joint failed, no ship yet -> nothing offered (review E3)", runreader.kept_specs(s2) == [], runreader.kept_specs(s2))
+    del s2["stages"]["joint"]
+    check("no joint stage -> per-class + rejudge + gap", runreader.kept_specs(s2) == ["mage:8.35.b=0.27", "mage:family.attack=2", "mage:0.0.a=2"], runreader.kept_specs(s2))
     s2["stages"]["recalib"] = {"accepted": ["mage:8.35.b=0.27", "mage:0.0.a=2"], "rows": [{"spec": "mage:0.0.a=2", "holds": False}, {"spec": "mage:8.35.b=0.27", "holds": True}]}
     check("recalib wins; a holds=false spec is dropped and listed", runreader.kept_specs(s2) == ["mage:8.35.b=0.27"] and runreader.recalib_dropped(s2) == ["mage:0.0.a=2"])
+    s2["stages"]["joint"] = {"verdict": "FAIL: x", "table": ["mage:8.35.b=0.27"], "sets": None}
+    check("a failed joint offers nothing, whatever recalib accepted", runreader.kept_specs(s2) == [])
+    s2["ship"] = {"table": [], "sets": [], "joint": "FAIL: x", "needs_joint_rerun": "joint gate: FAIL: x"}
+    check("ship empty -> nothing offered (class rows without joint.sets are never written)", runreader.kept_specs(s2) == [])
+    s2["ship"] = {"table": ["mage:8.35.b=0.3"], "sets": [], "joint": "PASS", "needs_joint_rerun": ""}
+    check("ship.table is what is offered", runreader.kept_specs(s2) == ["mage:8.35.b=0.3"])
+    # the stage list and the log rows of every searching stage (review E7)
+    drv = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "iaus_sim", "tune_driver.py")
+    dflt = [l for l in open(drv).read().splitlines() if l.startswith("DEFAULT_STAGES = ")]
+    check("catalog.STAGES is the driver's DEFAULT_STAGES, in its order", dflt and eval(dflt[0].split("=", 1)[1]).split(",") == catalog.STAGES == catalog.DEFAULT_STAGES.split(","), catalog.STAGES)
+    lg = tempfile.mkdtemp()
+    open(os.path.join(lg, "progress.log"), "w").write("\n".join("11-24 10:00:0%d  %s" % (i, m) for i, m in enumerate([
+        "classes mage pass 1  8.35.b                          0.2      -> 0.27     train +0.41 (se 0.10)  ACCEPTED",
+        "follow mage family.attack                  -> 2        d +0.30 (se 0.05) ACCEPTED: held out",
+        "spells round 2  t.unmeasuredDamage     0.3      -> 0.35     screen +0.120 (se 0.020) ACCEPTED",
+        "worth pass 1  worth.floor                 0.1      -> 0.2      train [0.31, 0.07]  ACCEPTED: holdout",
+        "loot pass 1  loot.gold                  1        -> 2        train None  train: every value raced out"])) + "\n")
+    rows = [e for e in runreader.parse_log(os.path.join(lg, "progress.log")) if e["kind"] == "row"]
+    check("log rows of classes, follow, spells, worth and loot are all read", [(e["stage"], e["knob"], e["accepted"]) for e in rows] ==
+          [("classes", "8.35.b", True), ("follow", "family.attack", True), ("spells", "t.unmeasuredDamage", True), ("worth", "worth.floor", True), ("loot", "loot.gold", False)],
+          [(e["stage"], e["knob"]) for e in rows])
     # validator = the in-game loader
     V = tuningfiles.validate_text
 
@@ -66,12 +89,12 @@ def main():
                "spot.high_ground=1.2", "cast_offense.spot_sight.w=2"):
         good("mage.txt", ln)
     for ln in ("healer:8.35.b=0.27", "mage:8.35.px6=1", "mage:8.35.p=1", "mage:scalar.nope=1", "mage:family.nope=1", "mage:family.attack=0", "mage:8.35.w=0", "spot.nope=1", "spot.firing=0",
-               "mage:8.116.a=1",
-               "mage:25.0.a=1", "mage:8.35.b=inf", "mage:8.35.b=nan", "mage:8.35.b=", "mage:8.35=1", "mage:8.35.b.c=1", "t.momentum=1", "mage:8.35.b=1,2", "mage:8.35.b=++1"):
+               "mage:8.%d.a=1" % len(names.CONS),
+               "mage:%d.0.a=1" % len(names.FAMILIES), "mage:8.35.b=inf", "mage:8.35.b=nan", "mage:8.35.b=", "mage:8.35=1", "mage:8.35.b.c=1", "t.momentum=1", "mage:8.35.b=1,2", "mage:8.35.b=++1"):
         bad("mage.txt", ln)
     for ln in ("t.momentum=1", "t.emergencyHpHigh=0.9, w.8.35=2", "aw.8=1.5", "c.35.a=0.2", "c.35.floor=0.1,c.35.b=0.4", "--set t.kite=3", "t.kite=+3", "t.kite = 3"):
         good("shared.txt", ln)
-    for ln in ("t.kite=-1", "t.emergencyHpLow=1.5", "t.nope=1", "t.kite=1,t.nope=1", "t.kite=1,", "w.8.35=0", "w.attack.range=1", "w.25.0=1", "aw.25=1", "c.97.a=1", "c.35.q=1",
+    for ln in ("t.kite=-1", "t.emergencyHpLow=1.5", "t.nope=1", "t.kite=1,t.nope=1", "t.kite=1,", "w.8.35=0", "w.attack.range=1", "w.%d.0=1" % len(names.FAMILIES), "aw.%d=1" % len(names.FAMILIES), "c.%d.a=1" % len(names.CONS), "c.35.q=1",
                "c.35=1", "st.x=1", "pk.x=1", "row.x=1", "worth.floor=0.5", "loot.gold=1", "mage:t.kite=1", "foo=1"):
         bad("shared.txt", ln)
     good("potions.txt", "worth.floor=0.5")

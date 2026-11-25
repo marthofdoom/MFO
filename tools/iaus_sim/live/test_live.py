@@ -182,12 +182,20 @@ class Generator(unittest.TestCase):
         S = summary(CELLS38, KEPT38, recalib_accepted=full)
         S["stages"]["worth"] = {"kept": ["worth.ratioCap=3.0"], "rows": []}
         S["stages"]["loot"] = {"kept": ["loot.healthTarget=8"], "rows": []}
+        S["stages"]["joint"]["sets"] = "worth.ratioCap=3.0"
         S["stages"]["globals"] = [{"set": "t.momentum=1.1", "verdict": "PASSES RULE"}, {"set": "t.powerCd=7", "verdict": "REJECTED: x"}]
         d = round_dir(S, log_for(KEPT38))
         self.assertEqual(G.main(["--out", d]), 0)
         man = json.load(open(os.path.join(d, "MFO_Tuning", "MANIFEST.json")))
         self.assertEqual(man["shared_values_not_written"], ["worth: worth.ratioCap=3.0", "loot: loot.healthTarget=8", "globals: t.momentum=1.1"])
         self.assertTrue(any("SHARED VALUES NOT IN ANY FILE" in n for n in man["notes"]))
+        S["stages"]["joint"]["sets"] = None                                 # driver P4: the joint graded the class rows without the worth value
+        d = round_dir(S, log_for(KEPT38))
+        self.assertEqual(G.main(["--out", d]), 2)
+        self.assertEqual(G.main(["--out", d, "--unshipped"]), 0)
+        man = json.load(open(os.path.join(d, "MFO_Tuning", "MANIFEST.json")))
+        self.assertIn("worth: worth.ratioCap=3.0 (NOT JOINT-GATED", man["shared_values_not_written"][0])
+        self.assertEqual(man["shared_values_not_written"][1], "loot: loot.healthTarget=8")
 
     def test_log_shows_accepted_values_the_summary_lacks(self):
         emptied = dict(KEPT38, **{c: [] for c in T.NEW_CELLS})             # a summary that lost the 23 new classes' values
