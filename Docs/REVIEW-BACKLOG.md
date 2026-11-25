@@ -3994,3 +3994,25 @@ R6 SEV-4 vacuous scenario half: mutation "Walked clears nothing" PASSES spot-tes
 R7 SEV-4 trust scenarios are one fight repeated: worst == mean on all seeds (2.6 s), so 48 fights / 16 seeds add no evidence there. Variant starts 8,1->18,5 and 9,1->13,6: distrusted + recovered, but "used again after repair" 0 of 12 (may be the route not crossing the gap; not traced).
 Q2 clipped corner: backlogged as SEV-4, agree. avoid ×6 softens it. Deviations 1 to 5: acceptable; 1 (0.02) makes R5 costlier.
 NOT DONE: cost sample (running bf849bgi1 output), cli/off4 read, R7 trace.
+
+### MFO-B869 (OPEN, author's own list for `feat/placed-m2`, 2026-11-24; `iaus/AreaCensus.h`, `iaus/AreaActors.*`)
+1. (SEV-4) `kAreaGuard.safetyMargin` 128 is a PLACEHOLDER sized from the cadence, no field number.
+2. (SEV-4) The build cost (actors x asking followers `IsHostileToActor` calls each 133 ms in a fight) is unmeasured in a crowded town: the `[area-guard] since start` line carries it.
+3. (SEV-4) An area cast picked while clear has no MFO re-check between the claim and the release; Harbinger ch.25 is the only guard there.
+4. (SEV-5) The lab leaves `SpellEntry::hostileArea` false and has no bystanders: a follower's hostile control area beside an ally scores in the lab and not in the game. Fill it from the extracted `placed` bits when the sim is next opened.
+5. (SEV-5) A summon that is not hostile to the caster closes every area beside it, his own included (the plan's definition). The field decides whether that is too strict for a conjurer.
+
+### PLACED-M2: review findings on 14968ab8 (Opus, nothing above SEV-3). F1 (crime hole), F3 and the scroll row go into the M3 round; F2 waits for marth
+
+VERDICT: MERGE (nothing above SEV-3).
+F1 SEV-3 AreaActors.cpp:125 hostility bit = IsHostileToActor ("would attack"); bounty / vampire / werewolf names guards + townsfolk, so they drop out of the table while attacking them is a crime (EngageOnSight.cpp:239ff, :250 crime-faction rule). Harbinger ch.25 uses the same predicate, misses it too. Not a regression. Fix: skip the bit when a->GetCrimeFaction() && !FightingParty(a) (EngageOnSight.cpp:234, same file-local test, currentCombatTarget resolves to player/teammate; s.foes still removes live foes by id, so add: foes list must not re-remove a crime-faction non-fighter) .
+F2 SEV-3 (ruling) AreaActors.cpp:122-127 party summons / player's horse are bystanders. Plan text says so; Harbinger ch.25 Bystander (CastGuard.cpp:319) excludes party-commanded + player-owned per marth 2026-11-02 "Bystanders only". But ch.25 LineOfFire Friendly (:311, area+64) already HOLDS aimed blasts near any non-hostile, summons included, so M2 mostly turns an unfired claim into a re-pick; extra = 128 margin. A conjurer whose atronach tanks: every aimed AoE at that foe closed. Ask marth.
+F3 SEV-4 cost, AreaActors.cpp:108-133: no distance cull, rows x casters IsHostileToActor (up to 64 casters). Estimate 1-3 us/call (2 combat-group lookups, faction reaction, a recursion for teammates): 40x3 ~0.1-0.4 ms; 100x10 ~1-3 ms per 133 ms. Fix: skip actors farther than ~6000 u from every caster BEFORE the hostility calls.
+F4 SEV-4 MFO has no VerifiedAddresses row for IsHostileToActor (36537/37537; ~25 existing callers); Harbinger has one. Pre-existing.
+F5 SEV-4 margin 128: ok as placeholder. Aimed recheck: ch.25 LineOfFire does re-measure per frame at release, non-hostile within area+64, so MFO-B869.3 is overstated when Harbinger is present and armed; absent = none.
+F6 SEV-5 mutations survive: (a) Generate.cpp:606 drop hits.bystanders from friends; (b) AreaCensus.h nearest -> farthest (log only); (c) kScrollOffense SplashSafe removed. Caught: NaN-as-clear, control-ally. (c) is a real untested consumer: add a scroll row.
+F7 SEV-5 ghosts count as bystanders (MFO-B111, no IsGhost row). Dead/disabled/deleted excluded; commanded foes resolve through commander in engine; teammates resolve to the player (disasm 0x6796b0).
+Freshness: no starvation. Tick gate requires pass t-1, so age<=1 in any run tick. Only Read answers NotReady when follower's lap falls on the first combat tick (or right after a pause = tick skipped anyway); re-read next lap <=1.3 s/10 followers. Wants TTL 60 covers it.
+Threads: leaf mutex, shared_ptr const, held NiPointers, Clear after StopPump: ok. Layouts via GetActorRuntimeData, ProcessLists 0x30/0x60 untouched by version: ok. 1.7.104 exe not unpacked here, not disassembled.
+Sim: BASELINE-IDENTICAL; simcmp.log's 292-398 diff is the dec.us timing column. Cons/enum unchanged; SplashSafe appended last on kControl, Off when open.
+merge-tree vs 8ae6f6c6: only Docs/STATUS.md conflicts (Generate/Catalogue/Core/Snapshot/Candidates/harness automerge). Not built merged.

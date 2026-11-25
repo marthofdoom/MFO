@@ -123,6 +123,9 @@ struct SpellEntry {
         std::vector<std::pair<int, float>> buffResists;   // Buff: (resist actor value, points), one row per AV, the largest of several on one AV. Empty = none read
         float         buffSec = -1.0f;          // Buff / Ward / Summon: how long its beneficial effect lasts (the longest duration)
         float         wardPower = -1.0f;        // Ward: the ward's magnitude (Actuation::IsWardEffect)
+        // M2 (iaus/AreaCensus.h): an effect hostile by its own flag has an area of its own (Prune::HostileAreaEffect, the impact hazard included). Read for
+        // Nature::Control only: Harmony's calm area is no crime and stays ungated. The simulator leaves it false.
+        bool          hostileArea = false;
         std::string   name;
     };
 
@@ -322,12 +325,25 @@ struct SpellEntry {
         Tri           answer = Tri::Unknown;
     };
 
+    // ── M2: the bystander picture (iaus/AreaCensus.h; built by iaus/AreaActors.h on the main thread) ──
+    enum class AreaKind : std::uint8_t { Person = 0, Guard, Teammate, Commanded, Mount };   // for the log: every kind closes the gate
+    struct AreaActor {   // an actor that is not hostile to the follower (Gather leaves out himself, his foes and his allies)
+        std::uint32_t id = 0;
+        float x = 0.0f, y = 0.0f, z = 0.0f;
+        float radius = 0.0f;   // its body (0 = the nominal pad)
+        AreaKind kind = AreaKind::Person;
+    };
+    // NotApplicable = this host has no bystanders (the simulator, the harness). In the game Gather always sets Ready or NotReady.
+    enum class AreaPicture : std::uint8_t { NotApplicable = 0, Ready, NotReady };
+
     // ── The whole tick ────────────────────────────────────────────────────────────────────────────────────
     struct Snapshot {
         Combatant              self;
         std::vector<Combatant> foes;     // every foe that passed the P3 gates (own combat group, hostile, alive, loaded,
                                     // inside the chase cap). The top-5 cut is the generator's (pure).
         std::vector<Combatant> allies;   // the player (isPlayer) and the active followers other than the follower
+        AreaPicture            areaPicture = AreaPicture::NotApplicable;   // M2: NotReady closes every hostile area gate this lap
+        std::vector<AreaActor> areaActors;                                 // M2: who is NOT hostile to him nearby
         std::uint32_t playerId = 0;
         bool  selfSneaking = false;   // G2 Layer 1: Actor::IsSneaking() on the follower this lap, counted only when MFO owns the sneak
                                       // (bSneakInCombat on, or G1's stance claim live): with the defaults it stays false, as on main

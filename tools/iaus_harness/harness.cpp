@@ -11,6 +11,7 @@
 #include "iaus/Reach.h"      // ruling Q68: the learned swing reach
 #include "iaus/ReachBook.h"  // marth 2026-11-17: the per-weapon / per-sequence reach book and its one reader
 #include "iaus/SpellWorth.h"  // S11b: the spell-worth reader
+#include "iaus/AreaCensus.h"
 #include "iaus/Generate.h"   // card I4: the pure candidate generator + the Snapshot it reads
 #include "iaus/Disengage.h"  // card G3: the pure questions the disengage gate asks
 #include "iaus/Reposition.h" // batch I: spell range, back-off, hidden step
@@ -2692,6 +2693,55 @@ namespace {
             Check(mx == 120.0f, "lap gross: two bursts 2 s apart read as the larger (120), not the sum (210)");
             // a friendly heal event adds nothing: the sink drops party-caused events (Fills.cpp), so no events and no floor: net drop only (0 here)
             Check(Estimate::LapGross(0.0f, 0, 0.0f) == 0.0f, "lap gross: a party heal event (dropped by the sink) adds nothing");
+        }
+        // M2. THE AREA CENSUS (iaus/AreaCensus.h): who an area hits, bystanders included, and the gate every area consumer reads.
+        {
+            const auto person = [](float x, float y) { AreaActor a; a.id = 0x77; a.x = x; a.y = y; return a; };
+            Snapshot s = MageFight(); s.self.mp = 200;
+            s.allies[0].x = -400.0f; s.allies[0].y = 400.0f; s.allies[1].x = -400.0f; s.allies[1].y = 300.0f;   // the party is nowhere near
+            for (auto& e : s.book.entries) if (e.form == 0x1C789) e.areaUnits = 200.0f;
+            const auto find = [&](const Snapshot& sn, std::uint32_t form) -> Candidate {
+                for (const auto& c : Generate(sn, g, t).actions) if (c.form == form && c.target == 0x3B500) return c;
+                Check(false, "M2: the area candidate exists"); return {}; };
+            const auto score = [&](const Candidate& c) { return ScoreOne(c, Mind{}, Profile{}, t, 3, 0.0f, nullptr); };
+            const Candidate open = find(s, 0x1C789);
+            Check(s.areaPicture == AreaPicture::NotApplicable && open.f.areaGuardOk && open.f.splashSafe && score(open) > 0.0f, "M2: a host without bystanders (the lab) is not gated");
+            Snapshot r = s; r.areaPicture = AreaPicture::Ready;
+            Check(score(find(r, 0x1C789)) == score(open), "M2: a readable picture with nobody in it scores exactly what the lab scores");
+            const float edge = 200.0f + Estimate::kFireBodyPad + kAreaGuard.safetyMargin;   // the target stands at (600, 0)
+            r.areaActors = { person(600.0f, edge - 1.0f) };
+            const Candidate hit = find(r, 0x1C789);
+            const Generated gb = Generate(r, g, t);
+            bool told = false; for (const auto& b : gb.areaBlocked) told |= b.spell == 0x1C789 && b.foe == 0x3B500 && b.bystander == 0x77;
+            Check(!hit.f.areaGuardOk && score(hit) == 0.0f && hit.f.splashSafe && hit.f.foesInArea == open.f.foesInArea && told,
+                  "M2: a bystander inside area + body + margin is a gate at 0, the spell stays a candidate, the [area-guard] line is fed");
+            r.areaActors = { person(600.0f, edge + 1.0f) };
+            Check(score(find(r, 0x1C789)) == score(open), "M2: one unit past the edge is clear");
+            r.areaActors[0].radius = 150.0f;
+            Check(score(find(r, 0x1C789)) == 0.0f, "M2: a big body (a horse, a mammoth) reaches further than the nominal pad");
+            r.areaActors = { person(NAN, 0.0f) };
+            Check(score(find(r, 0x1C789)) == 0.0f, "M2: an unreadable bystander position counts as a hit, never as clear");
+            r.areaActors.clear(); r.areaPicture = AreaPicture::NotReady;
+            Check(score(find(r, 0x1C789)) == 0.0f && score(find(r, 0x12FCD)) == score(find(s, 0x12FCD)) && score(find(s, 0x12FCD)) > 0.0f,
+                  "M2: an unreadable picture closes the area spell and leaves the bolt without an area alone");
+            // the self blast is centred on HIM: a bystander beside him, none beside the foe
+            Snapshot b = s; b.areaPicture = AreaPicture::Ready; b.areaActors = { person(-600.0f, 0.0f) };   // 600 from him, 1200 from the foe
+            for (auto& e : b.book.entries) if (e.form == 0x1C789) { e.selfDelivery = true; e.areaUnits = 700.0f; }
+            Check(!find(b, 0x1C789).f.areaGuardOk, "M2: a self blast counts the bystander beside the caster");
+            b.areaActors = { person(1400.0f, 0.0f) };   // 1400 from him, 800 from the foe
+            Check(find(b, 0x1C789).f.areaGuardOk, "M2: a self blast does not count one outside its own area");
+            // control: a hostile area is guarded (allies too), a harmless one (Harmony) is not, and the lab (hostileArea false) is unchanged
+            Snapshot k = s; k.areaPicture = AreaPicture::Ready; k.areaActors = { person(600.0f, 50.0f) };
+            for (auto& e : k.book.entries) if (e.form == 0x1C789) { e.nature = Prune::Nature::Control; e.resistAv = -1; }
+            Check(score(find(k, 0x1C789)) > 0.0f, "M2: a control area with no hostile effect is not gated by a bystander");
+            for (auto& e : k.book.entries) if (e.form == 0x1C789) e.hostileArea = true;
+            Check(score(find(k, 0x1C789)) == 0.0f, "M2: a HOSTILE control area is");
+            k.areaActors.clear();
+            Check(score(find(k, 0x1C789)) > 0.0f, "M2: ... and opens when nobody is in it");
+            k.allies[0].x = 600.0f; k.allies[0].y = 100.0f;
+            Check(score(find(k, 0x1C789)) == 0.0f, "M2: a party member in a hostile control area closes it");
+            for (auto& e : k.book.entries) if (e.form == 0x1C789) e.hostileArea = false;
+            Check(!find(k, 0x1C789).f.splashSafe && score(find(k, 0x1C789)) > 0.0f, "M2: without the hostile area flag control is judged as before (splashSafe is not read)");
         }
         // 4. The line of fire.
         {

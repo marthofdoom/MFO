@@ -500,6 +500,7 @@ namespace MFO::Iaus {
         bool  alreadyActive = false;
         bool  handFree = true;            // HealStandsOnHand / CastInFlightOnHand on the needed hand
         bool  splashSafe = true;          // no party member inside area of the target
+        bool  areaGuardOk = true;         // M2 (AreaCensus.h): no bystander in a hostile area and the picture is readable (Control: no party member either). Read by splash_safe
         // element and area
         float resist = 0.0f;              // target's resist AV for the spell's element; 0 = none / non-elemental
         bool  hasArea = false;

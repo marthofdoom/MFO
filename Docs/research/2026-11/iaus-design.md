@@ -252,7 +252,7 @@ weight** (a multiplier, default 1.0) that the class profile sets.
 | `target_cond` | the spell's archetype target rule (Turn Undead = undead only, `cond.foe_is_undead` read) + G10(b) | `Bin(0, 1)` veto | 1.0 |
 | `already_active` | the existing "already active" guards (CastAuto's ApplyEffect check, `TargetStreamLive`) | `Bin(0, 1)` veto | 1.0 |
 | `hand_free` | `HealStandsOnHand`, `CastInFlightOnHand` | `Bin(0, 1)` veto (1.3) | 1.0 |
-| `splash_safe` | area > 0: party members (`g_active`, player) within `area` of the target position | `Step` 0 if any (marth: never splash the party). Bystanders are held by Harbinger ch.25 `kCastGuard_Bystanders` | 1.0 |
+| `splash_safe` | area > 0: party members (`g_active`, player) within `area` of the target position | `Step` 0 if any (marth: never splash the party). M2 (2026-11-24): a BYSTANDER in a hostile area, or an unreadable picture, is the same 0 (`iaus/AreaCensus.h`); Control reads it for a hostile area only. Harbinger ch.25 `kCastGuard_Bystanders` still guards the cast itself | 1.0 |
 | `exploit` | spell element = costliest hostile effect's `resistVariable`, target's resist AV (`IsWeakTo` read) | r <= -25: 1.0, r = 0: 0.6, r = 50: 0.3, r >= 85: 0.08, r >= 100: 0 (veto) | 1.0 |
 
 ### 3.2 Per action
