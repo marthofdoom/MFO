@@ -86,13 +86,19 @@ namespace Sim {
         bool interrupt = false;  // a stagger or a control effect on a charging caster ends the cast
         bool summons = false;    // a summon is its own actor (the list's NPC record), the engine's summon limit, eviction, the native gate (World.h LandSummon, SummonGate)
         bool hazards = false;    // what a spell's hazard does to who stands in it (World.h SpawnHazard, HazardStep)
+        bool light = false;      // S4 (movement-plan.md 3.4): a place's light layer, light spells, and every light fact (iaus/Light.h). A place without a layer keeps the fight's one level
         bool drops = false;      // followers take the navmesh's drop links (NOT observed in game: off)
         bool foedrops = false;   // foes take them
         void AllOff() { *this = V4{}; }
-        void Defaults() { env = path = bodies = los = caststart = interrupt = summons = hazards = true; drops = foedrops = false; }
-        [[nodiscard]] bool Any() const { return env || path || bodies || los || caststart || interrupt || summons || hazards || drops || foedrops; }
+        void Defaults() { env = path = bodies = los = caststart = interrupt = summons = hazards = light = true; drops = foedrops = false; }
+        [[nodiscard]] bool Any() const { return env || path || bodies || los || caststart || interrupt || summons || hazards || light || drops || foedrops; }
     };
     inline V4 g_v4;
+    // S4: THE LIGHT MODEL of the lab (one table, MODEL). A light spell on somebody lights the ground round him.
+    struct LightTuning { float buffLevel = 0.8f /* of full daylight, at him, falling to nothing at the radius */, buffRadiusU = 600.0f, meterSec = 2.0f /* how often an actor's own level is read (the engine: 2 s for an NPC) */;
+                         bool sampler = true; /* a point sampler exists (probe L1). false = actors are the only light meters */ int samples = 24; /* spots it answers a window */ };
+    inline LightTuning g_lightT;
+    inline bool g_decastRoad = false;   // --decast-road: a light of ours can be ended (the G6 call)
     // --seat-immunity seen|unseen: does the game's will-work SEE that a foe is immune to paralysis? native cast/WillWork.cpp (c): "Stagger / Paralyze
     // IMMUNITY is not exposed by the engine as a readable bit ... it is only what the MGEF conditions say; the zero-effect hold catches the rest".
     // The lab's foes carry the ImmuneParalysis keyword (immunePar) but its spells carry no conditions, so which it is on a given list is NOT KNOWN here.
@@ -138,6 +144,7 @@ namespace Sim {
         std::vector<EnvPoint> entries, spawns, refs;   // load doors on the mesh / actor spawn points / containers and loose items (batch L)
         bool dupMesh = false;   // two meshes with identical bounds (review of batch L: Vanilla x_Skyrim-104217_1_-2). The extractor should reject such a place; until it does the loader does, by this property and with a counted reason
         std::vector<LootRef> loot; std::vector<LootSpot> guards, bystanders, bodies; bool town = false, fixture = false;   // batch L (Loot.h)
+        std::vector<float> light;   // S4: per triangle, 0 dark .. 1 daylight. Empty = the fight's one level (Setup.h)
         std::vector<float> triArea; float area0 = 0.0f; std::uint32_t tris0 = 0;   // walk component 0
         int defects = 0, plainDoors = 0;   // plainDoors: door triangles joined from REFS by geometry (no DOOR row)
 
@@ -280,6 +287,10 @@ namespace Sim {
             q.id = r.id; q.kind = r.kind; q.baseSig = r.baseSig; q.owned = r.reserved != 0; q.locked = (r.flags & mfoenv::kLocked) != 0; q.count = r.count; q.name = f.str(r.baseNameOff);
             char kb[16]; std::snprintf(kb, sizeof kb, ":%x", r.base & 0xFFFFFFu); q.key = std::string(f.pluginName(r.base)) + kb; E->loot.push_back(std::move(q)); }
         E->fixture = E->set == "Fixture";
+        {   // S4: a fixture's light layer (META "light": base, then rows x0 y0 x1 y1 level, the last one that holds the triangle's middle wins). The extractor has none
+            const std::string& m3 = f.metaJson(); JP jp3{ m3 }; J j3; if (!m3.empty() && m3[0] == '{') j3 = jp3.val(); const J& li = j3["light"];
+            if (li.has()) { E->light.assign(nt, static_cast<float>(li["base"].num()));
+                for (const J& r : li["rows"].a) for (std::size_t i = 0; i < nt; ++i) { const EQ::Vec3 c = EQ::Centroid(v, static_cast<std::int32_t>(i)); if (c.x >= r[0].num() && c.y >= r[1].num() && c.x < r[2].num() && c.y < r[3].num()) E->light[i] = static_cast<float>(r[4].num()); } } }
         { const std::string& m2 = f.metaJson(); JP jp2{ m2 }; J j2; if (!m2.empty() && m2[0] == '{') j2 = jp2.val(); const J& lm = j2["loot"]; E->town = lm["town"].yes(); auto v3 = [](const J& a, std::size_t o) { return EQ::Vec3{ static_cast<float>(a[o].num()), static_cast<float>(a[o + 1].num()), static_cast<float>(a[o + 2].num()) }; };
           for (const J& g : lm["guards"].a) E->guards.push_back({ v3(g, 0), v3(g, 3), true }); for (const J& g : lm["bystanders"].a) E->bystanders.push_back({ v3(g, 0), v3(g, 0), false });
           for (const J& g : lm["bodies"].a) E->bodies.push_back({ v3(g, 0), v3(g, 0), g[3].yes() }); }
@@ -315,7 +326,7 @@ namespace Sim {
 #else
         "tools/iaus_sim/envs";
 #endif
-    inline constexpr const char* kFixtureNames[] = { "open-room", "corridor-l", "doorway", "doorway-open", "doorway-plain", "locked-door", "stair-tower", "ledge", "ridge", "u-corridor", "dead-end", "island", "pillars", "narrow", "seam", "trust-wall", "trust-one-way",
+    inline constexpr const char* kFixtureNames[] = { "open-room", "corridor-l", "doorway", "doorway-open", "doorway-plain", "locked-door", "stair-tower", "ledge", "ridge", "u-corridor", "dead-end", "island", "pillars", "narrow", "seam", "trust-wall", "trust-one-way", "light-hall", "torch-room",
         "loot-room", "loot-backs", "loot-freeze", "loot-gate", "loot-town", "loot-shop", "loot-watch" };   // batch L: nopool, so no ordinary fight draws them and the pool hash is what it was
     inline bool LoadFixtures(EnvPool& P) { bool ok = true; for (const char* n : kFixtureNames) ok = P.Add(g_envDir + "/" + n + ".mfoenv", true) && ok; return ok; }
     // HELD-OUT PLACES (sim v4 batch C): `--env-hold train|heldout` splits the library by a hash of each place's id, one in kEnvHoldEvery held out, so a

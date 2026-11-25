@@ -152,6 +152,8 @@ namespace Sim {
         std::string tag;                 // scenario role ("healer", "archer", "boss" ...)
         // stealth (g_stealth > 0 and a sneak class): his stance, the foes' group record of him and the per-pair levels
         bool  stealthy = false, sneaking = false;
+        struct Lit { std::uint32_t spell = 0, caster = 0; double until = 0.0; }; std::vector<Lit> lit;   // S4: the light effects live on him
+        double darkAt = -1e9;             // S4: when he last wanted the dark
         // The foe group's CombatTarget record of him (calculate-detection-re.md section 5). ONE foe group per fight (MODEL: an
         // encounter is one combat group), so one record per follower. level: the group's detectLevel as stored (a positive level
         // under the notice bar is stored as 0). sp: stealthPoints. lastKnown: lastKnownTimeStamp; (lx, ly): lastKnownLoc.
@@ -520,6 +522,15 @@ namespace Sim {
             if (x.ctl < 0) return 0.0f; const Ctl& c = ctl[static_cast<std::size_t>(x.ctl)];
             return c.armorWeight + (c.drawn == PostureKind::Bow ? x.spec->ranged.weight : x.spec->melee.Has() ? x.spec->melee.weight : 0.0f);
         }
+        // S4: how lit a place is, 0 .. 1: the place's layer (or the fight's one level), and whoever wears a light near it.
+        [[nodiscard]] float LightOn(const EQ::Vec3& p, std::int32_t tri) const {
+            float l = env && !env->light.empty() && tri >= 0 && static_cast<std::size_t>(tri) < env->light.size() ? env->light[static_cast<std::size_t>(tri)] : light;
+            for (const Body& o : b) { if (o.lit.empty() || !o.alive || std::fabs(o.c.z - p.z) > 200.0f) continue;
+                for (const Body::Lit& q : o.lit) if (q.until > now) { l = std::max(l, g_lightT.buffLevel * (1.0f - std::hypot(o.c.x - p.x, o.c.y - p.y) / g_lightT.buffRadiusU)); break; } }
+            return l;
+        }
+        // Who wants the dark right now (native: Light::WantsNow over what the fillers read).
+        [[nodiscard]] bool WantsDarkNow(const Body& x) const { return x.sneaking || now < x.cloakUntil || (x.ctl >= 0 && (ctl[static_cast<std::size_t>(x.ctl)].runPhase == 1 || ctl[static_cast<std::size_t>(x.ctl)].runPhase == 5)); }
         // The engine's level of (observer o, target x) right now: every input of calculate-detection-re.md section 4 the lab has.
         [[nodiscard]] Detect::Out Level(const Body& o, const Body& x) const {
             Detect::In in; in.dist = Dist(o, x); in.angleDeg = AngleDeg(o, x); in.losGeom = Sees(o, x); in.exterior = !interior; in.flying = o.c.outOfMeleeReach || x.c.outOfMeleeReach;   // STAND-IN (MFO-B788): 'out of melee reach' is read as flying, which triples the range against an actor on a ledge too. It errs against the follower
@@ -530,7 +541,7 @@ namespace Sim {
             in.noiseMult = c && x.sneaking ? c->noiseClass : 1.0f;                                   // the class passive (W Thief: sneaking 30% quieter)
             in.moveMod = StealthCombine(D->sneakNoiseRows, *x.spec, true, true);                     // perk entry 48
             in.weight = GearWeight(x); in.action = now < x.noiseUntil ? x.noise : 0.0f;
-            in.light = g_lightScale * light;   // MODEL: the cell's light on him as the cached light level, 0 dark .. g_lightScale in daylight, after the interior / exterior mod
+            in.light = g_lightScale * (g_v4.light ? LightOn({ x.c.x, x.c.y, x.c.z }, x.nav.tri) : light);   // MODEL: the cell's light on him as the cached light level, 0 dark .. g_lightScale in daylight, after the interior / exterior mod
             return Detect::Calculate(dg, in);
         }
         [[nodiscard]] int PairLevel(const Body& o, const Body& x) const { for (const auto& k : x.pairLvl) if (k.first == o.c.id) return k.second; return -1000; }
@@ -1429,6 +1440,7 @@ namespace Sim {
                 // --buff-dur real: up for the record's duration (a record with none keeps the lab's 30 s, MODEL); off: max(30 s, duration) as before
                 const float up = g_buffDurReal ? (s->buffDur > 0.0f ? s->buffDur : 30.0f) : std::max(30.0f, s->buffDur);
                 if (s->armor > 0) r->fx.push_back({ 2, s->armor, -1, now + up, x.c.id });
+                if (g_v4.light && s->lights) { r->lit.push_back({ s->e.form, x.c.id, now + up }); if (trace) std::fprintf(trace, "%7.2f  LIGHT %s lights %s for %.0f s\n", now, x.c.name.c_str(), r->c.name.c_str(), up); }
                 if (s->resistBuffAv >= 0) r->fx.push_back({ 3, s->resistBuff, s->resistBuffAv, now + up, x.c.id });
                 if (x.ctl >= 0) ctl[static_cast<std::size_t>(x.ctl)].active[static_cast<std::size_t>(x.actSpell)].push_back({ r->c.id, now + (g_buffDurReal ? static_cast<double>(up) : std::max(30.0, static_cast<double>(s->buffDur))) });
                 return;
@@ -1855,6 +1867,7 @@ namespace Sim {
             }
             for (std::size_t i = 0; i < late.size();) { if (late[i].at <= now) { const Spawn sp = late[i]; late[i] = late.back(); late.pop_back(); Body& n = Add(Role::Foe, sp.spec, sp.x, sp.y); n.tag = sp.tag; n.dmgScale = sp.dmgScale; IntoRoom(n, std::max(0.5f * arenaR, arenaR - 50.0f));
                     if (!ctl.empty() && t.mpAtLate < 0) { const Body& s0 = b[static_cast<std::size_t>(ctl[0].body)]; t.mpAtLate = s0.c.mpMax > 0 ? s0.c.mp / s0.c.mpMax : 1.0; } } else ++i; }
+            if (g_v4.light) for (Body& x : b) if (WantsDarkNow(x)) x.darkAt = now;   // S4
             if (g_stealth > 0) {
                 for (Body& x : b) if (x.stealthy && x.ctl >= 0) x.sneaking = Up(x) && now >= x.standUntil;   // G1 holds the stance all fight, the hide run included (a crouched run: the drive asks for the run speed, the stance is the claim's)
                 if (now >= nextDetect) { nextDetect = now + static_cast<double>(dg.updateMin); DetectPass(); }

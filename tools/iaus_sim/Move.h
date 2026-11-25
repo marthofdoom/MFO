@@ -47,7 +47,7 @@ namespace Sim {
         const char* name; std::uint32_t kinds = 0 /* never offered */; bool terrainBlind = false /* the pass's rays do not see the ground */; bool blind = false /* ... nor the walls */;
         bool reachBlind = false /* who cannot be walked to is not known */; bool noPortals = false /* no place stands in a doorway */; bool noExits = false /* a dead end counts as a way on */;
         bool noRays = false /* no ray is ever answered */; bool stayHolds = false /* "stay" is carried out as a claim on his own place */; bool meleeHands = false /* the pass is told every attack is a blade's */;
-        bool noTrust = false /* no mark is ever kept (S3) */; bool hairTrust = false /* one lived sign distrusts: the 11-17 GATED mistake */; bool noMemory = false /* a blocked leg does not remember its spot */; bool anyLeg = false /* any goal-less leg that ends ends the claim (S2 review F6) */;
+        bool noTrust = false /* no mark is ever kept (S3) */; bool hairTrust = false /* one lived sign distrusts: the 11-17 GATED mistake */; bool noMemory = false /* a blocked leg does not remember its spot */; bool noLight = false /* S4: the light layer and every light fact off */; bool noVeto = false /* nobody is told to want the dark */; bool noDecast = false /* no road ends a light */; bool noNeed = false /* whom and how dark are not read */; bool noWalked = false /* no walk clears a mark (S3 review R6) */; bool anyLeg = false /* any goal-less leg that ends ends the claim (S2 review F6) */;
     };
     inline constexpr MoveFaultRow kMoveFaults[] = {
         { .name = "none" },
@@ -63,6 +63,11 @@ namespace Sim {
         { .name = "no-trust", .noTrust = true },
         { .name = "hair-trust", .hairTrust = true },
         { .name = "no-memory", .noMemory = true },
+        { .name = "no-light", .noLight = true },
+        { .name = "no-veto", .noVeto = true },
+        { .name = "no-decast", .noDecast = true },
+        { .name = "no-need", .noNeed = true },
+        { .name = "no-walked", .noWalked = true },
         { .name = "any-leg", .anyLeg = true },
     };
     inline const MoveFaultRow* g_moveFault = &kMoveFaults[0];
@@ -77,11 +82,11 @@ namespace Sim {
         float burstSeen = 0.0f;
         // what trust hears of the leg (S3): the planned walk, his own, which of its points he came by. len 0 = nothing to compare (his own movement broke into it)
         bool walks = false;                 // the step in hand is this claim's (a leg that ends in another's step is not this claim's leg)
-        float len = 0.0f, walked = 0.0f; EQ::Vec3 from; std::vector<EQ::Vec3> via; std::uint32_t passed = 0; double walkAt = -1e9;
+        std::uint32_t leg = 0; float len = 0.0f, walked = 0.0f; EQ::Vec3 from; std::vector<EQ::Vec3> via; std::uint32_t passed = 0; double walkAt = -1e9;
     };
     struct MoveState {
         MV::PartyPicture pic; std::vector<MoveClaim> claim;
-        std::vector<MV::RayAsk> asks; std::size_t asked = 0; double winStart = 0.0, winEnd = 0.0; bool open = false;
+        std::vector<MV::RayAsk> asks; std::size_t asked = 0; std::uint32_t legs = 0; double meterAt = -1e9; double winStart = 0.0, winEnd = 0.0; bool open = false;
         std::vector<MFO::Iaus::Trust::Line> trustLog; std::vector<EQ::Vec3> lastAt;   // S3: every [env-trust] line of the fight, and where each body was a step ago
         std::vector<MV::Assignment> last;   // what the last window assigned (diagnostics, the scenario tests)
     };

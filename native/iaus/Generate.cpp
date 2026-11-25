@@ -5,6 +5,7 @@
 
 #include "iaus/Disengage.h"   // card G3: "has a foe found him" (the seam to G2 Layer 1)
 #include "iaus/Estimate.h"
+#include "iaus/Light.h"         // S4: who wants the dark, whom a light goes to
 #include "iaus/Reposition.h"   // batch I: the spell range, the back-off need, the hidden step
 #include "iaus/SpellWorth.h"   // S11b: the spell-worth reader (read only while Tuning::spellWorth.live > 0)
 
@@ -198,6 +199,7 @@ namespace MFO::Iaus {
         void Holds(Ctx& x) {
             if (!x.hold) return;
             Candidate c = x.Make(Family::Sneak, nullptr);
+            if (x.s.self.light >= 0.0f) c.f.selfLight = x.s.self.light;   // S4: standing in the light is a worse place to hold
             x.Push(std::move(c));
             // G18 (batch I item 5, marth 11-12 Q-SIM-3): the hold row has no exit. Hidden with no blow ready, he steps quietly toward a foe
             // that does not detect him to gain a strike (blade) or a line of fire (bow), staying hidden: a short H3 run (Concealment Kind::Step)
@@ -211,6 +213,27 @@ namespace MFO::Iaus {
                     x.Push(std::move(st));
                 }
             }
+        }
+
+        // ── S4: end a light of ours on a stealth class, or on anybody who wants the dark now (iaus/Light.h WantsLightEnded). His own caster's decision or the wearer's, free and instant. Never one the
+        // player cast himself, never an item's. Nothing is generated while the road does not exist (the G6 call).
+        void Decasts(Ctx& x) {
+            const Snapshot& s = x.s;
+            if (!s.decastRoad) return;
+            const auto at = [&](const Combatant& r, bool self) {
+                if (!Light::WantsLightEnded(r)) return;
+                for (const LiveLight& l : r.lights) {
+                    if (!Light::MayEnd(l, s.playerId) || !Light::InParty(s, l.caster) || (!self && l.caster != s.self.id)) continue;
+                    Candidate c = x.Make(Family::Decast, nullptr);
+                    c.form = l.spell;
+                    c.target = r.id;
+                    c.targetName = r.name;
+                    c.f.lightOnStealth = true;
+                    x.Push(std::move(c));
+                }
+            };
+            at(s.self, true);
+            for (const Combatant& a : s.allies) if (Readable(a)) at(a, false);
         }
 
         // ── give ground / block / bash: lab families, each behind its road flag (Harbinger capabilities that do not exist yet) ──
@@ -633,7 +656,7 @@ namespace MFO::Iaus {
             if (o.twoHanded ? anyBusy : bothBusy) return false;
             if (o.cost > 0.0f && (!poolOk || !Prune::Affordable(o.cost, pool))) return false;
             if (a_self) return true;   // his own heal: self-delivery or aimed, either lands on him
-            if (o.selfDelivery && !o.allyRoad) return false;
+            if (o.selfDelivery && !o.AllyRoadTo(a_recipient.id)) return false;
             return !((o.reach > 0.0f && a_recipient.dist > o.reach) || a_recipient.sight == Sight::Occluded);
         }
         bool FastHealAvailable(const Ctx& x, const Combatant& a_recipient, bool a_self) {
@@ -956,7 +979,7 @@ namespace MFO::Iaus {
                         // right now (e.allyRoad: Harbinger's delivery-flip proxy, or MFO's ConcProxy for a concentration spell;
                         // fix/mage-buff-loop item 5, heals since 1dfcuabd309). The candidate is the SOURCE spell; the reach below
                         // is e.reach, which for a Self spell is Heal Other's (Actuation::HealReach), the same test the road makes.
-                        if (!self && e.selfDelivery && !e.allyRoad) continue;
+                        if (!self && e.selfDelivery && !e.AllyRoadTo(r->id)) continue;
                         const float hp = self ? x.selfHp : Pct(r->hp, r->hpMax);
                         if (heal && !Prune::Hurt(hp)) continue;   // hurt targets only
                         if (!heal && std::find(e.activeOn.begin(), e.activeOn.end(), r->id) != e.activeOn.end()) {
@@ -997,6 +1020,12 @@ namespace MFO::Iaus {
                             c.f.alreadyActive = Note(s.liveStreams, e.form, self ? 0u : r->id) == Tri::Yes;
                         } else {
                             c.f.meleeBuff = e.meleeBuff;
+                            if (e.light) {   // S4: whom a light goes to, and to whom never
+                                c.f.lightBuff = true;
+                                c.f.recipientWantsDark = Light::WantsDark(*r, x.t);
+                                c.f.recipientLight = r->light;
+                                c.f.lightRank = Light::RecipientRank(*r);
+                            }
                             if (!scroll) c.f.handLost = HandLostShare(x, e);   // a scroll is read, never channelled
                             for (const Combatant* foe : a_foes)
                                 if (Between(*foe, *r) <= s.meleeReach) { c.f.recipientInMelee = true; break; }
@@ -1112,6 +1141,7 @@ namespace MFO::Iaus {
         Holds(x);
         Regroups(x);
         Guards(x);
+        Decasts(x);
         if (a_s.hasBook) {
             Drinks(x);
             BuffPotions(x);

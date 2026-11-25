@@ -33,6 +33,8 @@ THE .txt FORMAT
     loot a lever                           an activator (a lever / a gate's switch)
     guard a [b]                            a guard at a, walking to b and back      bystander a      a witness who is no guard
     body a [bystander]                     a body lying there when the place loads (bystander: not hostile at death)
+    light <0..1>                           S4: the place has a light layer, this level everywhere
+    lit X0 Y0 X1 Y1 <0..1>                 ... and this one on those squares (the last line wins). META "light" (sim-only)
     town                                   the place is a town (the player's location is under a town anchor)
   guard / bystander / body / town go to META "loot" (sim-only keys). Loot refs are ordinary REFS rows, owner in `reserved` as the extractor writes it.
 
@@ -45,7 +47,7 @@ import fmt   # noqa: E402  (the extractor's own writer structs)
 
 
 def parse(path):
-    f = {'cell': 128.0, 'interior': True, 'class': 'fixture', 'rows': [], 'z': [], 'ramp': [], 'drop': [], 'portal': [], 'seam': None, 'defect': [], 'pool': True, 'loot': [], 'guard': [], 'bystander': [], 'body': [], 'town': False}
+    f = {'cell': 128.0, 'interior': True, 'class': 'fixture', 'rows': [], 'z': [], 'ramp': [], 'drop': [], 'portal': [], 'seam': None, 'defect': [], 'pool': True, 'light': None, 'lightrows': [], 'loot': [], 'guard': [], 'bystander': [], 'body': [], 'town': False}
     inmap = False
     for raw in open(path):
         line = raw.rstrip('\n')
@@ -66,6 +68,8 @@ def parse(path):
         elif t[0] == 'nopool': f['pool'] = False
         elif t[0] in ('loot', 'guard', 'bystander', 'body'): f[t[0]].append(t[1:])
         elif t[0] == 'town': f['town'] = True
+        elif t[0] == 'light': f['light'] = float(t[1])
+        elif t[0] == 'lit': f['lightrows'].append([int(v) for v in t[1:5]] + [float(t[5])])
         else: raise SystemExit('%s: unknown line %r' % (path, line))
     return f
 
@@ -186,6 +190,7 @@ def build(name, f):
             allt.append((*t['v'], *t['nb'], fl, 0))
     meta = {'name': name, 'set': 'Fixture', 'class': f['class'], 'interior': f['interior'], 'plugins': ['fixture.esm'], 'cells': [], 'pool': f['pool'], 'counts': {'tris': len(allt)}}
     if lootmeta: meta['loot'] = lootmeta
+    if f['light'] is not None: meta['light'] = {'base': f['light'], 'rows': [[x0 * C, (H - 1 - y1) * C, (x1 + 1) * C, (H - y0) * C, l] for x0, y0, x1, y1, l in f['lightrows']]}
     return meta, plug, S, meshes, allv, allt, alll, alld, refs, dfct
 
 

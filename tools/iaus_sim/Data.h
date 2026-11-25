@@ -221,6 +221,7 @@ namespace Sim {
         float mpDmg = 0, spDmg = 0; // magicka / stamina damage at impact
         float heal = 0, hot = 0, hotDur = 0;
         float armor = 0, buffDur = 0;      // +damage resist (armor spells)
+        bool  lights = false;              // S4: a Light effect on its recipient (archetype 12, by record). Read only with --v4 light=on
         float resistBuff = 0; int resistBuffAv = -1;
         bool  ctrl = false, ctrlPar = false, ctrlCalm = false, ctrlFlee = false, ctrlFrenzy = false, turnUndead = false;
         float ctrlDur = 0, ctrlMaxLevel = 1e9f;   // illusion: the magnitude is the highest level affected
@@ -490,7 +491,7 @@ namespace Sim {
                 hs->e.name = h["edid"].s; hs->e.areaUnits = 0; z.spell = std::move(hs);
                 if (z.radius > 0) out.hazard = std::move(z); }
             if (arch == kArReanimate) { reanimate = true; out.ctrlMaxLevel = static_cast<float>(mag); out.summonDur = static_cast<float>(d > 0 ? d : 60); }   // card G7: the magnitude is the highest level it raises
-            weighable |= Prune::EffectWeighable(arch); anyLight |= arch == kArLight; healthAv |= av == kAvHealth;
+            weighable |= Prune::EffectWeighable(arch); anyLight |= arch == kArLight; healthAv |= av == kAvHealth; out.lights |= arch == kArLight;
             if (arch == kArCalm || arch == kArDemoralize || arch == kArFrenzy || arch == kArParalysis || arch == kArTurnUndead) {
                 control = true; out.ctrlDur = std::max(out.ctrlDur, static_cast<float>(d));
                 if (arch == kArParalysis) out.ctrlPar = true; else out.ctrlMaxLevel = static_cast<float>(mag);

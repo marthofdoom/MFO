@@ -6,8 +6,10 @@
 //   trusted     no mark
 //   doubted     one mark (one blocked leg is only a blocked leg)
 //   distrusted  two different signs, or one sign Rules::repeat times, or a static sign whose row says so alone
+//   Lived marks of ONE EVENT count once: one leg (Mark::leg), or everything within Rules::eventSec, whoever it was and whatever the signs (S3 review R4).
 // WHAT TAKES A MARK AWAY: its own decay. A walk ACROSS the place it was seen at, THE WAY it was going (the player's or a follower's): an edge walkable one way only
-// is not proven by the other way. A stamp change (a door, a cell attached): everything goes.
+// is not proven by the other way. It clears the marks it crosses and no other (R3). Across = past what stopped him: Rules::clearAheadU beyond where he stood, near
+// the mark's own line and along it. A slide along an oblique wall gains ground too, but sideways (R2). A stamp change (a door, a cell attached): everything goes.
 // A place the player himself stood on lately reads trusted whatever its region says (Table::trail).
 //
 // TO ADD A SIGN: one row of kTrustSigns (and its enumerator, in order). A lived sign also needs the LegEvent or the Note call of whoever sees it.
@@ -56,9 +58,12 @@ namespace MFO::Iaus::Trust {
     struct Rules {
         float regionU = 512.0f, regionZ = 256.0f;
         int   repeat = 2;              // one LIVED sign this often is distrust. 1 = the 11-17 GATED mistake, the negative scenario holds it off
-        float repeatSec = 1.5f;        // the same sign of the same body in the same region within this is one event
+        float repeatSec = 1.5f;        // the same sign of the same body in the same region within this is not marked twice
+        float eventSec = 1.5f;         // lived marks this near in time are one event
         float aheadU = 32.0f;          // what stopped him is this far ahead of where he stood: the region that gets the mark
-        float clearU = 64.0f;          // a walk across a mark passes this near
+        float clearU = 40.0f;          // a walk across a mark passes this near its line (a body width and some: the way round a thin end is another way)
+        float clearAheadU = 64.0f;     // ... this far beyond where he stood
+        float clearCos = 0.9f;         // ... and this much along it (26 degrees)
         float routeU = 128.0f;         // ... a planned route, whose corners are that much coarser
         float levelU = 96.0f;          // ... and on this level
         float trailU = 96.0f;          // a place this near to where the player stood is proven
@@ -70,7 +75,7 @@ namespace MFO::Iaus::Trust {
     };
     inline constexpr Rules kTrustRules{};
 
-    struct Mark { Region region = 0; Sign sign = Sign::kCount; FormID who = 0; double t = 0.0; Env::Vec3 at; float dx = 0.0f, dy = 0.0f; float a = 0.0f, b = 0.0f; };   // a, b: the evidence (planned / walked length, a measured value)
+    struct Mark { Region region = 0; Sign sign = Sign::kCount; FormID who = 0; double t = 0.0; Env::Vec3 at; float dx = 0.0f, dy = 0.0f; float a = 0.0f, b = 0.0f; std::uint32_t leg = 0; };   // a, b: the evidence (planned / walked length, a measured value). leg: whose leg it was, 0 = not a leg
     struct Refusal { FormID who = 0; std::uint64_t spot = 0; double t = 0.0; };
     struct Trail { Env::Vec3 p; double t = 0.0; };
     struct Line { Region region = 0; Level level = Level::Trusted; Mark why; };
@@ -91,6 +96,7 @@ namespace MFO::Iaus::Trust {
     enum class End : std::uint8_t { Arrived = 0, Stuck, Blocked, Refused, Walking /* not an end: the length is checked on the way */ };
     struct LegEvent {
         FormID who = 0; std::uint64_t spot = 0; End end = End::Arrived; double t = 0.0;
+        std::uint32_t leg = 0;           // the holder's number of this leg (of any member), 0 = it does not count them
         bool laneClear = true;           // no door and no body in the lane (an end they explain is no sign)
         Env::Vec3 at, toward;            // where he stands, where he was going next
         float planned = 0.0f, walked = 0.0f;                        // FindPath's length, his own
@@ -104,7 +110,7 @@ namespace MFO::Iaus::Trust {
     [[nodiscard]] Level RouteLevel(const Table& a_t, const Env::Vec3& a_from, std::span<const Env::Vec3> a_via);
     [[nodiscard]] bool  Refused(const Table& a_t, FormID a_who, std::uint64_t a_spot);
 
-    bool Note(Table& a_t, Sign a_s, FormID a_who, const Env::Vec3& a_at, const Env::Vec3& a_toward, double a_now, float a_a = 0.0f, float a_b = 0.0f);   // one mark. false = the same event again
+    bool Note(Table& a_t, Sign a_s, FormID a_who, const Env::Vec3& a_at, const Env::Vec3& a_toward, double a_now, float a_a = 0.0f, float a_b = 0.0f, std::uint32_t a_leg = 0);   // one mark. false = the same event again
     int  Leg(Table& a_t, const LegEvent& a_e);                                    // what an end says: marks and refusals. Returns the marks made
     void Walked(Table& a_t, bool a_player, const Env::Vec3& a_from, const Env::Vec3& a_to, double a_now);   // a short piece of somebody's walk (one sample): clears, and the player's trail
     void Forget(Table& a_t);                                                      // a stamp change. What was said stays said

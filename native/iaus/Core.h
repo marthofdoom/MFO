@@ -73,6 +73,8 @@ namespace MFO::Iaus {
                       // to gain a strike (blade) or a line of fire (bow) and stay hidden. Behind Snapshot::stepRoad + a point
         DrinkBuff,    // feat/buff-potions (ClickUp 1dfcuabd18f): a carried potion whose effect is not a restore (resist, fortify, regen,
                       // invisibility). One candidate per kind he carries (iaus/PotionBuff.h); Candidate::form = the potion, Facts::buffKind = the kind
+        Decast,       // S4 (iaus/Light.h): end a light of ours on somebody who wants the dark. form = the light spell, target = who wears it. Generated only behind
+                      // Snapshot::decastRoad (never today)
         kCount
     };
     inline constexpr std::size_t kFamilies = static_cast<std::size_t>(Family::kCount);
@@ -181,6 +183,13 @@ namespace MFO::Iaus {
         BoostSpotCover,     // multiplier: from the spot he sees a foe that threatens an ally who has his place (cover each other)
         SpotRegionTrust,    // (APPENDED, S3) how far the mesh round the spot is trusted (iaus/EnvTrust.h): 1 doubted, 2 distrusted. NOT APPLICABLE while trusted
         SpotPathTrust,      // (APPENDED, S3) ... and the walk to it
+        // LIGHT (APPENDED, S4, iaus/Light.h). NOT APPLICABLE while its fact is unread (the game until G6).
+        LightVeto,          // gate: a light buff on somebody who wants the dark
+        LightNeed,          // a light buff: how dark it is where the recipient stands (the level). Past the curve's zero: he is lit already
+        LightRank,          // a light buff: whom (Light::RecipientRank). The player first, then members in his view
+        SelfLight,          // the hidden hold: how lit he stands
+        LightOnStealth,     // decast: one of our lights is on somebody who wants the dark
+        SpotPathLight,      // seconds of the walk over lit ground, for a member who wants the dark
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -388,6 +397,14 @@ namespace MFO::Iaus {
         float spotFactMaxAgeSec = 5.0f;          // ... or got this old
         float spotKeptAgeSec = 1.0f;             // a committed spot's own sight is asked again once its answer is this old (kMarkSightLost)
         float spotUnknownExposure = 0.75f;       // the share an UNANSWERED threat counts as in spot_exposure: neither hidden nor surely seen. It keeps the ray budget from deciding the place
+        // LIGHT (S4, iaus/Light.h). PLACEHOLDERS: the level's scale is the engine's cached actor light level (probe-light reports it)
+        float lightNearU = 256.0f;               // a sample says something about places this near
+        float lightStoreyU = 96.0f;              // ... and this near in height
+        float lightMaxAgeSec = 20.0f;            // ... for this long
+        float lightMinConf = 0.25f;              // under this confidence the light of a place is unknown
+        float lightLitLevel = 45.0f;             // ground at or above this level is lit (the walk of a member who wants the dark)
+        float lightGenU = 900.0f;                // the spot generators: a place known to be lit (at t.lightLitLevel or above, less below it) ranks as if this much farther, for who wants the dark
+        float lightDarkHoldSec = 6.0f;           // who wanted the dark this recently is not lit (the one hysteresis of the cast and the decast)
         WorthTable worth{};
         // S11b (iaus/SpellWorth.h): what one cast of a spell is worth in one unit for every family. SHIPPED INERT (`sw.live` = 0): `sw.<field>` in shared.txt.
         SpellWorth spellWorth{};
@@ -566,6 +583,13 @@ namespace MFO::Iaus {
         bool  buffOpener = false;         // fortify kinds: FightStart applies (a fortify is an opener, drunk before the fight is old)
         Tri   buffStealth = Tri::Unknown; // invisibility: Yes = stealth intent stands, No = it does not (a gate); Unknown = n/a
         float consumableWorth = -1.0f;    // Cons::ConsumableWorth: iaus/ConsumableWorth.h Worth(need, cost share) for the item this drink uses; < 0 = n/a
+        // S4 (iaus/Light.h): each not applicable at its sentinel
+        bool  lightBuff = false;          // a buff cast / scroll that lights its recipient: the three below are read, and Decide keeps it under a heal or a ward
+        bool  recipientWantsDark = false;
+        float recipientLight = -1.0f;     // the level where he stands; < 0 = unknown
+        float lightRank = -1.0f;          // Light::RecipientRank
+        float selfLight = -1.0f;          // the hold row: the level where he himself stands; < 0 = unknown
+        bool  lightOnStealth = false;     // decast
         bool  foeHelpless = false;        // BoostControlled: the foe is PARALYSED (he cannot answer a blow). Not a fleeing foe:
                                           // foeControlled also covers fleeing (the control-cast gate), and a boost on a runner
                                           // pulled followers after him (review of 303c14d, F2)
@@ -578,7 +602,7 @@ namespace MFO::Iaus {
         Tri   sees = Tri::Unknown, fireLineClear = Tri::Unknown, inHostileArea = Tri::Unknown, foeReachable = Tri::Unknown;
         Tri   laneCrossed = Tri::Unknown, portalBusy = Tri::Unknown, serves = Tri::Unknown;
         float exposure = -1.0f, rangeX = -1.0f, exits = -1.0f, allyDist = -1.0f, leashX = -1.0f;
-        float detected = -1.0f, light = -1.0f;   // S4 hooks
+        float detected = -1.0f, light = -1.0f, pathLitSec = -1.0f;   // S4: for a member who wants the dark, where the light is known
         float spotRegionTrust = -1.0f, pathRegionTrust = -1.0f;   // Trust::Level as a number, -1 while trusted (S3)
         bool  coversAlly = false;
         bool operator==(const SpotFacts&) const = default;

@@ -489,6 +489,7 @@ namespace MFO::Scheduler {
         case Family::Exploit:
         case Family::Regroup:      // the road family with no executor yet: generated only behind Snapshot::regroupRoad,
                                    // which no engine code sets (a regroup client)
+        case Family::Decast:       // S4: generated only behind Snapshot::decastRoad, which no engine code sets (G6)
         case Family::kCount:
             a_whyNot = "no action road for this family yet";
             return false;

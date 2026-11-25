@@ -560,10 +560,21 @@ namespace {
             Row(n1 && l1 == Level::Doubted, "one lived sign doubts and never distrusts");
             Row(!n2 && l2 == Level::Doubted, "the same event again (inside repeatSec) is not a repeat");
             Row(n3 && l3 == Level::Distrusted, "one sign repeated distrusts");
-            TR::Table b; TR::Note(b, Sign::NoGround, 1, at, ahead, 0.0); TR::Note(b, Sign::EngineRefused, 1, at, ahead, 0.1);
+            TR::Table b; TR::Note(b, Sign::NoGround, 1, at, ahead, 0.0); TR::Note(b, Sign::EngineRefused, 1, at, ahead, 2.0);
             Row(TR::Of(b, here) == Level::Distrusted, "two different signs distrust");
-            TR::Table c; TR::Note(c, Sign::NoGround, 1, at, ahead, 0.0); TR::Note(c, Sign::NoGround, 2, at, ahead, 0.2);
+            TR::Table c; TR::Note(c, Sign::NoGround, 1, at, ahead, 0.0); TR::Note(c, Sign::NoGround, 2, at, ahead, 2.0);
             Row(TR::Of(c, here) == Level::Distrusted, "the same sign lived by two bodies is a repeat");
+            // S3 review R4: one event is one sign
+            TR::Table o; TR::Note(o, Sign::NoGround, 1, at, ahead, 0.0); TR::Note(o, Sign::NoGround, 2, at, ahead, 0.2); TR::Note(o, Sign::EngineRefused, 1, at, ahead, 0.1);
+            const auto oneMoment = TR::Of(o, here); TR::Note(o, Sign::NoGround, 2, at, ahead, 3.0);
+            Row(o.marks.size() == 4 && oneMoment == Level::Doubted && TR::Of(o, here) == Level::Distrusted, "two bodies stuck and a refusal at one moment are one event, a later one is the second");
+            TR::Table g; TR::Note(g, Sign::LengthFar, 1, at, ahead, 0.0, 0, 0, 5); TR::Note(g, Sign::NoGround, 1, at, ahead, 8.0, 0, 0, 5); const auto oneLeg = TR::Of(g, here);
+            TR::Note(g, Sign::NoGround, 1, at, ahead, 12.0, 0, 0, 6);
+            Row(g.marks.size() == 3 && oneLeg == Level::Doubted && TR::Of(g, here) == Level::Distrusted, "one leg that was far and then stuck is one event, the next leg's is the second");
+            TR::Table ch; for (int i = 0; i < 6; ++i) TR::Note(ch, Sign::NoGround, static_cast<FormID>(1 + i % 2), at, ahead, 1.2 * i);
+            Row(ch.marks.size() == 6 && TR::Of(ch, here) == Level::Distrusted, "two bodies that take turns under an event's length are more than one event (a mark is measured from the event's first)");
+            TR::Table st; TR::Note(st, Sign::DanglingLink, 1, at, ahead, 0.0); TR::Note(st, Sign::OneWayLinks, 1, at, ahead, 0.0);
+            Row(TR::Of(st, here) == Level::Distrusted, "... static signs are not lived: two kinds read at one moment are two");
             bool lived = true, stat = true;
             for (const auto& row : TR::kTrustSigns) { TR::Table d; TR::Note(d, row.sign, 1, at, ahead, 0.0); (row.lived ? lived : stat) &= TR::Of(d, here) == row.alone && (!row.lived || row.alone == Level::Doubted) && row.decaySec > 0.0f && TR::Seen(row.sign, row.threshold) && !TR::Seen(row.sign, row.threshold - 0.01f); }
             Row(lived && stat, "every row of kTrustSigns: alone it argues its own level, no lived row distrusts alone, every row decays, its threshold is >=");
@@ -573,11 +584,20 @@ namespace {
             TR::Table b = a; TR::Decay(b, 29.0); const auto d1 = TR::Of(b, here); TR::Decay(b, 31.0); const auto d2 = TR::Of(b, here); TR::Decay(b, 36.0);
             Row(d1 == Level::Distrusted && d2 == Level::Doubted && b.Clean(), "marks decay one by one (30 s): distrusted, doubted, trusted");
             const auto walk = [&](Env::Vec3 p, Env::Vec3 q) { TR::Table w = a; TR::Walked(w, true, p, q, 6.0); return w.Clean(); };
-            Row(walk({ 1000, 800, 0 }, { 1040, 800, 0 }), "a walk across the place, the way it was going, clears the region");
-            Row(!walk({ 1040, 800, 0 }, { 1000, 800, 0 }), "... the other way does not (a one-way edge)");
-            Row(!walk({ 1040, 900, 0 }, { 1080, 900, 0 }) && !walk({ 1000, 1000, 0 }, { 1040, 1000, 0 }), "... nor a walk beside it or on the far side of it");
-            Row(!walk({ 1000, 800, 300 }, { 1040, 800, 300 }), "... nor one on the floor above");
-            TR::Table f = a; TR::Walked(f, false, { 1000, 800, 0 }, { 1040, 800, 0 }, 6.0);
+            Row(walk({ 1000, 800, 0 }, { 1080, 800, 0 }), "a walk across the place, the way it was going, clears it");
+            {   // S3 review R2 and R3
+                const auto slide = [&](float deg, float u) { TR::Table w = a; const float c = std::cos(deg * 0.0174533f), n = std::sin(deg * 0.0174533f); for (float s = 0.0f; s < 160.0f; s += u) TR::Walked(w, false, { 1000.0f + c * s, 800.0f + n * s, 0 }, { 1000.0f + c * (s + u), 800.0f + n * (s + u), 0 }, 6.0); return w.marks.size(); };
+                Row(slide(45, 30) == 2 && slide(45, 7) == 2 && slide(-45, 30) == 2 && slide(60, 30) == 2 && slide(30, 30) == 2, "sliding along a wall at 30, 45 or 60 degrees to the way he was going clears nothing (R2)");
+                TR::Table w = a; for (const auto& [p, q] : { std::pair{ Env::Vec3{ 1000, 800, 0 }, Env::Vec3{ 1000, 850, 0 } }, std::pair{ Env::Vec3{ 1000, 850, 0 }, Env::Vec3{ 1100, 850, 0 } }, std::pair{ Env::Vec3{ 1100, 850, 0 }, Env::Vec3{ 1100, 800, 0 } } }) TR::Walked(w, false, p, q, 6.0);
+                Row(w.marks.size() == 2, "... nor does walking round the end of a thin one (R2)");
+                Row(!walk({ 1000, 800, 0 }, { 1050, 800, 0 }), "... nor a push a body's width on");
+                TR::Table far = a; TR::Note(far, Sign::LengthFar, 1, { 1480, 800, 0 }, { 1900, 800, 0 }, 5.5); TR::Walked(far, false, { 1500, 800, 0 }, { 1560, 800, 0 }, 6.0);
+                Row(far.marks.size() == 2 && TR::Of(far, here) == Level::Distrusted, "a walk across one mark leaves the region's others (R3)");
+            }
+            Row(!walk({ 1080, 800, 0 }, { 1000, 800, 0 }), "... the other way does not (a one-way edge)");
+            Row(!walk({ 1080, 800, 0 }, { 1140, 800, 0 }) && !walk({ 1000, 900, 0 }, { 1080, 900, 0 }), "... nor a walk beside it or on the far side of it");
+            Row(!walk({ 1000, 800, 300 }, { 1080, 800, 300 }), "... nor one on the floor above");
+            TR::Table f = a; TR::Walked(f, false, { 1000, 800, 0 }, { 1080, 800, 0 }, 6.0);
             Row(f.Clean() && f.trail.empty(), "a follower's crossing clears too, and leaves no trail");
             TR::Table g = a; TR::Walked(g, true, { 1200, 700, 0 }, { 1210, 700, 0 }, 6.0);
             Row(TR::Of(g, Env::Vec3{ 1250, 720, 0 }) == Level::Trusted && TR::Of(g, Env::Vec3{ 1100, 950, 0 }) == Level::Distrusted, "a place the player stood on is proven, the rest of the region is not");
@@ -646,6 +666,20 @@ namespace {
             for (const auto& o : one.work.offers) two.trust.refused.push_back({ 0x61, one.pool[static_cast<std::size_t>(o.spot)].key, 0.0 });
             Window(m, two, t); bool same = false; for (const auto& o : two.work.offers) for (const auto& x : one.work.offers) same = same || two.pool[static_cast<std::size_t>(o.spot)].key == one.pool[static_cast<std::size_t>(x.spot)].key;
             Row(!one.work.offers.empty() && !two.work.offers.empty() && !same, "... and the next best are looked for in its stead");
+            {   // S3 review R1: many refused places. What is looked at next is the next best, never the unsorted rest
+                const auto room = Build(std::vector<std::string>{ "##############", "#............#", "#............#", "#............#", "#............#", "#............#", "#............#", "#............#", "#............#", "#............#", "#............#", "##############" }); const auto v = room.Get();
+                std::set<SpotKey> gone; float worst = 0.0f; bool order = true; int rounds = 0;
+                for (; rounds < 60; ++rounds) {
+                    PartyPicture p; p.party = { Who(0x71, At(2, 2), { Act(Family::Regroup, 0, 0.8f, 0.0f, Sight::None) }) }; p.party[0].anchor = At(11, 9); p.party[0].leash = 4000.0f; p.envStamp = v.stamp; WallVerts(v, p.wallVert);
+                    for (const auto k : gone) p.trust.refused.push_back({ 0x71, k, 0.0 });
+                    Window(room, p, t); if (p.pool.empty()) break;
+                    Work::Flood fl; Flood(v, p.party[0].p, p.party[0].tri, p.party[0].who, t.spotRadius, kMoveBudget.gatherTris, fl);
+                    float lo = kInf, hi = 0.0f; for (const auto& s : p.pool) { const float w = s.tri == p.party[0].tri ? Dist(p.party[0].p, s.p) : fl.At(s.tri) + Dist(Env::Centroid(v, s.tri), s.p); lo = (std::min)(lo, w); hi = (std::max)(hi, w); if (!gone.insert(s.key).second) order = false; }
+                    if (lo < worst - 1.5f) order = false;
+                    worst = (std::max)(worst, hi);
+                }
+                Row(rounds >= 40 && gone.size() > 100 && order, "refused places take no room: the next best are found in order, however many were refused (R1)");
+            }
             PartyPicture late = TwoWays(m); gapMark(late, 2); late.t = 60.0; Window(m, late, t);
             Row(late.trust.Clean() && late.avoid.empty(), "the pass lets marks decay");
             PartyPicture k = TwoWays(m); Window(m, k, t); const bool was = k.party[0].commit.on; k.trust.refused.push_back({ 0x61, k.party[0].commit.key, k.t }); const auto old = k.party[0].commit.key; const auto rk = Window(m, k, t);
@@ -658,6 +692,60 @@ namespace {
             Row(SameAsks(qa, qb) && Same(xa, xb) && !b.trust.Clean(), "a mark made inside a window changes nothing in it");
             PartyPicture d = TwoWays(m); gapMark(d, 2); d.envStamp = 999; Window(m, d, t);
             Row(d.trust.Clean(), "a new stamp forgets the marks");
+        }
+    }
+
+    void LightRows() {
+        std::printf("\n== movement: light (S4) ==\n");
+        namespace L = Light; const Tuning& t = ShippedTuning(); const auto m = Build(kRoom);
+        {   // the field
+            L::Field f; L::Add(f, { { 100, 100, 0 }, 80.0f, 1.0 }); L::Add(f, { { 110, 100, 0 }, 10.0f, 2.0 }); L::Add(f, { { 110, 90, 0 }, 99.0f, 1.5 });
+            Row(f.samples.size() == 1 && f.samples[0].level == 10.0f, "one sample a cell, the freshest");
+            Row(L::At(f, { 110, 100, 0 }, 2.0, t).level == 10.0f && L::At(f, { 110, 100, 0 }, 2.0, t).conf > 0.9f, "a place beside a sample has its level");
+            Row(!L::At(f, { 110 + t.lightNearU, 100, 0 }, 2.0, t).Known() && !L::At(f, { 110, 100, t.lightStoreyU + 1 }, 2.0, t).Known(), "far off, or on another floor: unknown");
+            Row(!L::At(f, { 110, 100, 0 }, 2.0 + t.lightMaxAgeSec, t).Known() && !L::At(f, { 110 + 0.9f * t.lightNearU, 100, 0 }, 2.0, t).Known(), "too old, or worth too little: unknown, never a level");
+            L::Add(f, { { 300, 100, 0 }, 70.0f, 2.0 }); Row(L::At(f, { 280, 100, 0 }, 2.0, t).level == 70.0f && L::At(f, { 130, 100, 0 }, 2.0, t).level == 10.0f, "the nearest one answers");
+            L::Add(f, { { 1, 1, 1 }, std::numeric_limits<float>::quiet_NaN(), 2.0 }); L::Add(f, { { std::numeric_limits<float>::infinity(), 1, 1 }, 1.0f, 2.0 }); L::Add(f, { { 5000, 1, 1 }, -3.0f, 2.0 }); Row(f.samples.size() == 2, "a reader's bad number is no sample");
+            for (int i = 0; i < 600; ++i) L::Add(f, { { 1000.0f + 200.0f * static_cast<float>(i), 0, 0 }, 5.0f, 3.0 + i });
+            Row(f.samples.size() == L::kFieldSamples && f.samples.back().t == 602.0, "the memory is bounded, the oldest goes");
+            L::Decay(f, 602.0, t); Row(!f.samples.empty() && std::all_of(f.samples.begin(), f.samples.end(), [&](const auto& s) { return 602.0 - s.t < static_cast<double>(t.lightMaxAgeSec); }), "old samples are dropped");
+        }
+        {   // the engine's formula: the light term and the rest of it
+            L::DetectGmst g; L::DetectIn in; in.dist = 300; in.targetIsOsTarget = true; in.sneakingT = true; in.skillO = 30; in.skillT = 30; in.light = 0.0f; const auto dark = L::DetectLevel(g, in); in.light = 100.0f; const auto lit = L::DetectLevel(g, in);
+            const float d = 0.88f * 0.88f;
+            Row(std::fabs((lit.score - dark.score) - d * (L::DetectLightTerm(100.0f, false, g) - L::DetectLightTerm(0.0f, false, g))) < 1.0e-3f && lit.level > dark.level, "the score's light part is the light term times the distance factor");
+            Row(L::DetectLightTerm(1000.0f, false, g) == L::DetectLightTerm(g.lightMax, false, g) && L::DetectLightTerm(100.0f, true, g) > L::DetectLightTerm(100.0f, false, g), "... capped, and the exterior has its own factor");
+            in.losGeom = false; Row(L::DetectLevel(g, in).light == 0.0f, "no line of sight, no light part"); in.losGeom = true; in.invisible = true; Row(L::DetectLevel(g, in).light == 0.0f, "... nor for the invisible");
+        }
+        // the pass
+        const auto fight = [&](bool dark, float left, float right) {   // left half / right half of the room at these levels (< 0 = not known)
+            PartyPicture p; p.caps.pin = true; p.party = { Who(0x81, At(5, 6), { Act(Family::Disengage, 0, 0.8f, 0.0f, Sight::None) }) }; p.party[0].wantsDark = dark; p.party[0].sneakSkill = 40.0f; p.party[0].kinds = KindBit(SpotKind::Stay) | KindBit(SpotKind::Cover);
+            p.foes = { Bad(0x91, At(5, 3), 0x81) }; p.foes[0].faceY = 1.0f; p.foes[0].skill = 30.0f;
+            for (int y = 1; y < 8; ++y) for (int x = 1; x < 11; ++x) if (const float l = x < 6 ? left : right; l >= 0.0f) Light::Add(p.lightField, { At(static_cast<float>(x), static_cast<float>(y)), l, 0.0 });
+            return p; };
+        Tuning pin = t; pin.spotPinKinds = 1.0f;
+        const auto run = [&](PartyPicture p) { const auto r = Window(m, p, pin); return std::pair{ p, r }; };
+        {
+            const auto [pd, rd] = run(fight(true, 5.0f, 90.0f)); const auto [pl, rl] = run(fight(true, 90.0f, 5.0f)); const auto [pn, rn] = run(fight(false, 90.0f, 5.0f)); const auto [pu, ru] = run(fight(true, -1.0f, -1.0f)); const auto [p0, r0] = run(fight(false, -1.0f, -1.0f));
+            const auto x = [](const Ran& r) { return Of(r, 0x81)->p.x / kCell; };
+            Row(Of(rd, 0x81)->spot >= 0 && Of(rl, 0x81)->spot >= 0 && x(rd) < 6.0f && x(rl) > 6.0f, "who wants the dark takes cover on the dark side, whichever it is");
+            Row(Same(rn.as, r0.as), "a member who does not want the dark reads no light at all");
+            Row(Of(ru, 0x81)->key == Of(r0, 0x81)->key && Of(ru, 0x81)->score == Of(r0, 0x81)->score, "unknown light everywhere: the same place and the same score as without the layer");
+            PartyPicture k = fight(true, 90.0f, 90.0f); Env::Scratch s; std::vector<RayAsk> q; std::vector<Assignment> as; MP::Freeze(k, m.Get(), pin); while (!MP::Phase1(k, m.Get(), s, &NoClass, pin, q, 1.0e9f)) {} PartyPicture j = k;
+            for (const auto& sp : k.pool) k.light.push_back({ sp.key, 1.0f });
+            MP::Phase3(k, &NoClass, pin, as); const float with = as[0].score; MP::Phase3(j, &NoClass, pin, as); Row(with > as[0].score, "a sampler's answer at the spot wins over the field");
+        }
+        {   // spot_detected (S4 review F8): stays only, the sight of the place not answered
+            const auto stay = [&](float foeSkill, float sneak, float level) { PartyPicture p = fight(true, level, level); p.party[0].kinds = KindBit(SpotKind::Stay); p.party[0].sneakSkill = sneak; p.foes[0].skill = foeSkill; const auto r = Window(m, p, pin, 1.0e9f, false); return Of(r, 0x81)->score; };
+            Row(stay(100.0f, 5.0f, 90.0f) < stay(0.0f, 100.0f, 90.0f) && stay(0.0f, 100.0f, 90.0f) > 0.0f, "a place somebody may see and would detect him at scores lower, though its sight is not answered");
+            Row(stay(100.0f, 5.0f, 90.0f) < stay(100.0f, 5.0f, 5.0f), "... and in the light lower than in the dark");
+            Row(stay(-1.0f, 5.0f, 90.0f) == stay(-1.0f, 100.0f, 90.0f) && stay(100.0f, -1.0f, 90.0f) == stay(0.0f, -1.0f, 90.0f), "... a foe or a sneak skill nobody read is not applicable");
+            Row(stay(100.0f, 5.0f, -1.0f) == stay(0.0f, 100.0f, -1.0f), "... nor is it where the light is unknown");
+        }
+        {   // the facts through the score
+            const Profile p; SpotFacts f; f.pathSec = 1.0f; const float u = ScoreSpot(f, Family::Step, p, t);
+            SpotFacts a = f, b = f, c = f; a.detected = 0.0f; b.detected = 1.0f; c.pathLitSec = 2.0f;
+            Row(ScoreSpot(a, Family::Step, p, t) > ScoreSpot(b, Family::Step, p, t) && ScoreSpot(c, Family::Step, p, t) < u, "a place he is detected at, and a walk over lit floor, score lower");
         }
     }
 
@@ -681,6 +769,10 @@ namespace {
                 for (int i = 0; i < 2; ++i) Trust::Note(p.trust, Trust::Sign::NoGround, 0x61, At(5.4f, 2), At(9, 2), -4.0 + 2.0 * i);
                 Trust::Note(p.trust, Trust::Sign::LengthFar, 0x62, At(9, 6), At(10, 6), -1.0, 900.0f, 1700.0f); p.trust.refused.push_back({ 0x62, KeyOfPoint(20, 0), -1.0 });
                 p.trust.trail.push_back({ At(3, 5), -1.0 }); return std::pair{ m, p }; } },
+            { "light", [] { PartyPicture p = RoomFight(); p.caps.pin = true; p.t = 1.0; p.exterior = true;   // S4: a hunted thief in a half lit room, a sampler's answer, another member who reads none of it
+                p.party[1].top[0] = Act(Family::Disengage, 0, 0.8f, 0.0f, Sight::None); p.party[1].nTop = 1; p.party[1].wantsDark = true; p.party[1].sneakSkill = 45.0f; p.foes[0].target = 0x12; p.foes[0].faceY = 1.0f; p.foes[0].skill = 35.0f; p.foes[1].skill = 20.0f; p.foes[1].faceX = 0.6f; p.foes[1].faceY = 0.8f;
+                for (int y = 1; y < 8; ++y) for (int x = 1; x < 9; ++x) Light::Add(p.lightField, { At(static_cast<float>(x), static_cast<float>(y)), 7.0f + 9.0f * static_cast<float>(x), 0.1 * y });
+                p.light.push_back({ KeyOfPoint(3, 0), 44.0f }); return std::pair{ Build(kRoom), p }; }, { { "t.spotPinKinds", 1.0f } } },
             { "class_room", [] { PartyPicture p = RoomFight(); for (auto& m : p.party) m.classId = 1; p.foes[0].target = 0x12; return std::pair{ Build(kRoom), p }; } },
         };
     }
@@ -723,13 +815,13 @@ namespace {
             Row(asked && exact && worst <= 1.0e-4f, b);
             ++cases;
         }
-        Row(err.empty() && cases == 24, "every golden case was read");
+        Row(err.empty() && cases == 27, "every golden case was read");
     }
 }
 
 int MoveRows(const char* a_golden, bool a_write) {
     g_bad = 0;
-    Determinism(); Tunables(); Scoring(); Behaviour(); Budgets(); Review(); TrustRows(); Golden(a_golden, a_write);
+    Determinism(); Tunables(); Scoring(); Behaviour(); Budgets(); Review(); TrustRows(); LightRows(); Golden(a_golden, a_write);
     return g_bad;
 }
 

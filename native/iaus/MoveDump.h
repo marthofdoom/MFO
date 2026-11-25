@@ -17,7 +17,7 @@
 
 namespace MFO::Iaus::MoveDump {
 
-    inline constexpr int kVersion = 2;
+    inline constexpr int kVersion = 3;
 
     struct Mesh {   // a View that owns its arrays
         std::vector<Env::Vec3> verts; std::vector<Env::Tri> tris; std::vector<Env::Door> doors; std::vector<Env::Wall> walls; std::vector<std::uint32_t> walk, weak; Env::Grid grid;
@@ -65,20 +65,22 @@ namespace MFO::Iaus::MoveDump {
         for (const auto& d : a_m.doors) { line("d"); o << d.tri << d.state << d.key << d.id << d.leaf << d.ax << d.ay << d.bx << d.by << d.z0 << d.z1; }
         }
         for (const auto& [n, x] : a_tuning) { line("u"); f << ' ' << n; o << x; }
-        line("pic"); o << a_pic.envStamp << a_pic.t << a_pic.caps.point << a_pic.caps.hold << a_pic.caps.pin << a_pic.caps.facing << a_pic.caps.gait;
+        line("pic"); o << a_pic.envStamp << a_pic.t << a_pic.caps.point << a_pic.caps.hold << a_pic.caps.pin << a_pic.caps.facing << a_pic.caps.gait << a_pic.exterior;
         for (const auto& m : a_pic.party) {
             line("m"); o << m.id << m.p << m.ageSec << m.decides << m.classId << m.kinds << m.speed << m.anchor << m.leash << m.wantsDark << (m.marks | m.seen)
-                         << m.who.radius << m.who.opensDoors << m.who.unlocks << m.who.large << m.who.drops << m.who.maxDrop;
+                         << m.who.radius << m.who.opensDoors << m.who.unlocks << m.who.large << m.who.drops << m.who.maxDrop << m.sneakSkill << m.invisible;
             for (std::size_t k = 0; k < m.nTop; ++k) { line("a"); detail::Act(o, m.top[k]); }
             if (m.commit.on) { line("c"); o << m.commit.key << m.commit.p << m.commit.tri << m.commit.kinds << m.commit.at; detail::Act(o, m.commit.act); detail::Act(o, m.commit.held); }
         }
-        for (const auto& e : a_pic.foes) { line("f"); o << e.id << e.p << e.ageSec << e.target << e.faceX << e.faceY; }
+        for (const auto& e : a_pic.foes) { line("f"); o << e.id << e.p << e.ageSec << e.target << e.faceX << e.faceY << e.skill; }
         for (const auto& r : a_pic.areas) { line("r"); o << r.p << r.r; }
         for (const auto& l : a_pic.light) { line("l"); o << l.key << l.level; }
+        for (const auto& s : a_pic.lightField.samples) { line("i"); o << s.p << s.level << s.t << s.source; }   // S4
+        if (!a_pic.lightField.samples.empty()) { line("g"); Light::EachFormulaNumber(a_pic.detect, [&](const float& v) { o << v; }); }
         for (const auto& [k, x] : a_pic.facts) { line("k"); o << k.first << k.second << x.sees << x.t << x.actorTri << x.actorAt << x.spotAt; }
         for (const auto& q : a_pic.carried) { line("q"); o << q.spot << q.p << q.viewer; }
         for (const auto& q : a_pic.late) { line("b"); o << q.spot << q.p << q.viewer << q.t << q.viewerAt << q.viewerTri; }
-        for (const auto& m : a_pic.trust.marks) { line("w"); o << m.sign << m.who << m.region << m.t << m.at << m.dx << m.dy << m.a << m.b; }   // S3
+        for (const auto& m : a_pic.trust.marks) { line("w"); o << m.sign << m.who << m.region << m.t << m.at << m.dx << m.dy << m.a << m.b << m.leg; }   // S3
         for (const auto& r : a_pic.trust.refused) { line("z"); o << r.who << r.spot << r.t; }
         for (const auto& q : a_pic.trust.trail) { line("y"); o << q.p << q.t; }
         for (const auto& a : a_answers) { line("n"); o << a.spot << a.viewer << a.sees << a.t << a.viewerAt; }
@@ -101,18 +103,20 @@ namespace MFO::Iaus::MoveDump {
             else if (k == "v") { Env::Vec3 p; i >> p; c->mesh.verts.push_back(p); }
             else if (k == "t") { Env::Tri t; for (auto& x : t.v) i >> x; for (auto& x : t.nb) i >> x; for (auto& x : t.kind) i >> x; i >> t.flags >> t.door; c->mesh.tris.push_back(t); }
             else if (k == "d") { Env::Door d; i >> d.tri >> d.state >> d.key >> d.id >> d.leaf >> d.ax >> d.ay >> d.bx >> d.by >> d.z0 >> d.z1; c->mesh.doors.push_back(d); }
-            else if (k == "pic") i >> P.envStamp >> P.t >> P.caps.point >> P.caps.hold >> P.caps.pin >> P.caps.facing >> P.caps.gait;
+            else if (k == "pic") i >> P.envStamp >> P.t >> P.caps.point >> P.caps.hold >> P.caps.pin >> P.caps.facing >> P.caps.gait >> P.exterior;
             else if (k == "m") { Move::Member m; i >> m.id >> m.p >> m.ageSec >> m.decides >> m.classId >> m.kinds >> m.speed >> m.anchor >> m.leash >> m.wantsDark >> m.marks
-                                                   >> m.who.radius >> m.who.opensDoors >> m.who.unlocks >> m.who.large >> m.who.drops >> m.who.maxDrop; P.party.push_back(m); }
+                                                   >> m.who.radius >> m.who.opensDoors >> m.who.unlocks >> m.who.large >> m.who.drops >> m.who.maxDrop >> m.sneakSkill >> m.invisible; P.party.push_back(m); }
             else if (k == "a" && !P.party.empty() && P.party.back().nTop < 3) { auto& m = P.party.back(); detail::Act(i, m.top[m.nTop++]); }
             else if (k == "c" && !P.party.empty()) { auto& x = P.party.back().commit; x.on = true; i >> x.key >> x.p >> x.tri >> x.kinds >> x.at; detail::Act(i, x.act); detail::Act(i, x.held); }
-            else if (k == "f") { Move::Foe e; i >> e.id >> e.p >> e.ageSec >> e.target >> e.faceX >> e.faceY; P.foes.push_back(e); }
+            else if (k == "f") { Move::Foe e; i >> e.id >> e.p >> e.ageSec >> e.target >> e.faceX >> e.faceY >> e.skill; P.foes.push_back(e); }
             else if (k == "r") { Move::Area r; i >> r.p >> r.r; P.areas.push_back(r); }
             else if (k == "l") { Move::LightAt l; i >> l.key >> l.level; P.light.push_back(l); }
+            else if (k == "i") { Light::Sample s; i >> s.p >> s.level >> s.t >> s.source; P.lightField.samples.push_back(s); }
+            else if (k == "g") Light::EachFormulaNumber(P.detect, [&](float& v) { i >> v; });
             else if (k == "k") { Move::PairKey key; Move::PairFact x; i >> key.first >> key.second >> x.sees >> x.t >> x.actorTri >> x.actorAt >> x.spotAt; P.facts[key] = x; }
             else if (k == "q") { Move::RayAsk q; i >> q.spot >> q.p >> q.viewer; P.carried.push_back(q); }
             else if (k == "b") { Move::RayAsk q; i >> q.spot >> q.p >> q.viewer >> q.t >> q.viewerAt >> q.viewerTri; P.late.push_back(q); }
-            else if (k == "w") { Trust::Mark m; i >> m.sign >> m.who >> m.region >> m.t >> m.at >> m.dx >> m.dy >> m.a >> m.b; if (m.sign >= Trust::Sign::kCount) { a_err = "sign: " + row; return nullptr; } P.trust.marks.push_back(m); P.trust.gen = 1; }
+            else if (k == "w") { Trust::Mark m; i >> m.sign >> m.who >> m.region >> m.t >> m.at >> m.dx >> m.dy >> m.a >> m.b >> m.leg; if (m.sign >= Trust::Sign::kCount) { a_err = "sign: " + row; return nullptr; } P.trust.marks.push_back(m); P.trust.gen = 1; }
             else if (k == "z") { Trust::Refusal r; i >> r.who >> r.spot >> r.t; P.trust.refused.push_back(r); }
             else if (k == "y") { Trust::Trail q; i >> q.p >> q.t; P.trust.trail.push_back(q); }
             else if (k == "u") { const std::string n = i.Tok(); float x = 0.0f; i >> x; c->tuning.push_back({ n, x }); }

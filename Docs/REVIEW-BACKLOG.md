@@ -3968,6 +3968,21 @@ F8 SEV-5 CheckExit floods 256 triangles; on dense meshes f.cut makes `far` small
 S1 BACKLOG: R3 flood alloc FIXED. R1 (21.8 ms slices) OPEN, measured 4.5 to 8.4 ms worst window here with small parties, still over one 3 ms slice. R2 re-ask stamp OPEN in native (sim always sends t); must be closed before G2.
 HEAL FINDING (8): real in game. Generate.cpp:969 drops any heal whose recipient is past e.reach or Sight::Occluded (Actuation::HealInReach, same in the cast roads), and the ch.24 held-heal approach (CombatApproach.cpp) is built for a heal already held, so a patient who STARTS out of reach or round a corner gets no approach. heal_reach gets no ranked heal, so its weight can not be tuned: the tune would learn nothing. Do: a small native brief (own review) before S5: emit such a heal as a MOVE-ONLY candidate (scored as if in reach, never a Decide winner, never cast, exported only through TopRanked / MoveNoteRanked), gated so that shipped decisions stay byte identical when no pass asks. Safety: HealRefused must still apply. Then the healer scenario runs unscripted.
 
+### MOVE-S4: what `feat/move-s4` closed of the MOVE-S3 findings below (evidence: iaus-sim-v4.md 19.1)
+- R1 CLOSED: a refused place is dropped before the sort. Harness row (60 rounds of refusals, the next best in order) fails without it.
+- R2 CLOSED: the line is 64 past where he stood, 40 wide, and the walk goes along it (26 degrees). Rows for slides at 30, 45, 60 degrees and the thin end fail with the old numbers.
+- R3 CLOSED (per mark), R4 CLOSED (one leg or 1.5 s is one event), R6 CLOSED (`trust-walk-clears`, fault `no-walked`), R7 CLOSED (starts and targets vary) with its trace: in the reviewer's variants the target is SEEN once the wall is gone, so he needs no place, "used again 0 of 12" was the rule's fault. The other three mutations of R6 (allroute, noexempt, notrail) stay harness rows only.
+- OPEN: R5 (before G2, field calibration), the clipped corner.
+- SEV-4 (author, S4): the straight-line half of `SpotPoint::lit` reads three points of a straight way. Round a corner it reads a way he does not take. Only the rank of candidates, the score reads the real walk.
+- SEV-4 (author, S4): `Light::At` is a linear scan of up to 256 samples. It runs per candidate point for members who want the dark only (19.4 has the cost). An index is due before a party of five stealth members is in the game (G6).
+
+### MOVE-S4: review findings on 8ae6f6c6 (Opus). F1 (SEV-2), F2, F3, F4 (SEV-3), F5, F7, F8, F10 and the scroll of ward of F11 FIXED in the round (iaus-sim-v4.md 19.6). F12 no action
+- F6 SEV-4 SpellEntry::lightRadius filled, never read: a light on an unsneaking player/member next to a hidden one lights him (lit-ally-stealth passes only because they stand 3-4 cells apart). Plan is per recipient; needs marth's word before G6. **RULED (marth 2026-11-24): ignore the radius, only the hidden one himself is never lit. No code.**
+- F9 SEV-4 decast-road-off off arm is 3..9 of 48 over 19 seeds (never 0, but weak): make the off arm strong (one other party member, player lit). Adequate evidence, not a strong row. OPEN.
+- F11 SEV-5 scroll of ward not under the cap (FIXED); Candidates.cpp:457/:547 still read e.allyRoad only (right today, must become AllyRoadTo in G6 or a live proxy stream at an allyRoadOn recipient is not seen). MovePass.cpp:131 comment "a last bit of libm does not reach the rank" is not strictly true (a score at an integer edge). OPEN.
+- F12 SEV-5 capped light can fall under actFloor and still be ranked (Decide :168) - harmless. NO ACTION.
+- OPEN (author): "a class that sneaks" is `kSneakAlways` (Thief, Master Thief, Nightingale, Listener). Nightblade has no such flag, so a Nightblade is dark only while he sneaks, hides or is invisible.
+
 ### MOVE-S3: review findings on 6996d274 (Opus, nothing above SEV-3). R1 and R2 are fixed at the start of S4; R5 before G2
 
 R1 SEV-3 (determinism) MovePass.cpp UnitGenerate: partial_sort to max(geomPerGen 64, perGen 3), but the new `Trust::Refused -> continue` does not count in `tested`, so a checked kind with k refused spots in its prefix reads k entries of the UNSORTED tail (order implementation defined: gcc vs MSVC, golden/live parity). Fix: drop refused before the sort, or add refused.size() to the bound.
@@ -4008,3 +4023,18 @@ Author's own list. (1) The Summon item's own 0x0F (engine 0x8318F0 -> 0x8201F0: 
 ### fix/summon-claim (Opus 5.5 review, against fbb527b7)
 - **(SEV-4, deferred F3):** Fix 5 flap: no hold-off; a flicker costs one release + one claim/equip per controller edge, at most 1 per service lap; a steady controller never flaps. It does not check CastInFlightOnHand: a charge in flight is cut (takeBack). Acceptable; Fire-reached only when InCombat false, else claim stands as before (the "waiting for his combat controller" pass never calls Fire), so Fix 5 is partial there: FacetExpiry ends it.
 - **(SEV-3, FIXED in the fix round):** F1 (isCast true for the body's whole lifetime: BuffUpTransparent added to SummonHoldsCastChannel) and F2 (g_neverFired erased on a no-controller ask: controller test first).
+
+### MOVE-S4 round 2 review on 8914e1c3 (Opus, nothing above SEV-4; fix R2-1 and R2-3 before G6). marth 11-24: Nightblade counts as a sneaking class, never lit
+
+ROUND 2 (8914e1c3) started Tue Nov 24 09:01:01 PM PST 2026
+VERDICT @8914e1c3: MERGE. Nothing above SEV-4. Fuzz: _localbuild/review-s4/r2/p3.cpp (b.sh).
+F1 FIXED: 4000 random boards x ranks 0-5 x 60 seeds (1.44M ticks; 2886 boards with heal/ward/scroll, 1220 ward, 894 scroll; half a running light; with and without window; shuffled): light first 0, Hold on a light 0, light before any ranked heal/ward in the order 0 (2.07M light fall-back steps, so the fall-back is kept), empty order 0.
+F2 FIXED: player known needing: 0 of 242179 light picks elsewhere. F3: known board, unknown picked 0 of 339310.
+R2-1 SEV-4 Decide.cpp:196-206 (uncertain 2: YES). `known` = min over ALL known light candidates, also those under the floor. Known Lydia at 60..68.5 (raw .17...03, under the floor, never lit) drags player+self unknown (.88/.51) under the floor: no light to anybody as long as she stands there; at 69.5 her candidate is vetoed and both jump back to .88/.51. Also min over spells: an expensive second light's .31 caps all. Conservative direction, mixed known/unknown only, DLL has no fill. Before G6: cap at the best known score per recipient, and only from known ones above the floor.
+R2-2 SEV-5 Decide.cpp:209-212 (uncertain 3: no new loss). Lift: player at 68.5 raw .048 becomes .521 and beats attack .494. Only ever to a score a real member light already held on that board, so a light beat the attack anyway; a ranked heal caps it. One spare cast per light duration on a nearly lit player. It also copies the member's running momentum into base (Scored.base != score/mom). Accept.
+R2-3 SEV-4 coverage: two mutations survive: scroll of ward out of HealOrWard (F11); yielding lights take pool places (the `continue` in the pool loop). Behaviour right, rows missing (p3.cpp covers the first).
+CAUGHT: OrderLights off; InParty without self (4 rows).
+F5 InParty, F7 heads, F10 length weights (via ends at the goal, PartyPicture.h:123), F8 rows: read, correct. Decast: WantsLightEnded = WantsNow or class; player sneaking loses only MayEnd + InParty + own-caster lights. Nightblade without kSneakAlways: author's open item, marth's call.
+UNCHANGED: pin digest main 9d94875f = branch fbf8ec48124dd622; extended digest (verdict + order, 6 ranks x 50 seeds x running/window) 19a729538b65e5df both. Author off/det logs SAME. No DLL fill of decastRoad / light / lightField.
+MERGE STATE: origin/main 9d94875f is an ancestor; merge-tree clean.
+
