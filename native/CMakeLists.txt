@@ -237,6 +237,7 @@ if(MFO_DEV_SELFTEST)
         selftest/Setup.cpp
         selftest/TestsHold.cpp
         selftest/TestsAnim.cpp
+        selftest/NavSpots.cpp
         selftest/LightProbe.cpp
         apmf/DevHold.cpp
     )

@@ -42,7 +42,10 @@ namespace MFO::SelfTest {
         // ── tunables of the exerciser, one table ─────────────────────────────────────────────────
         struct Tuning {
             float passInside   = 0.90f;   // gate P2
-            float planWait     = 3.0f;    // a plan answer later than this is a "no point"
+            float coverWalk    = 1400.0f; // how far he may walk to a cover / flank point
+            float coverGap     = 250.0f;  // a cover point stays this far from the foe
+            int   coverPerFrame = 10;     // engine sight answers (3 rays each) per frame
+            float planWait     = 8.0f;    // a plan answer later than this is a "no point"
             float replanEvery  = 2.0f;    // a place that needs geometry is looked for again this often ...
             float replanFor    = 8.0f;   // ... for this long
             float busyWait     = 8.0f;    // how long a leg waits for another MFO ch.24 claim to end
@@ -88,7 +91,7 @@ namespace MFO::SelfTest {
                                          { "hold", Where::Near, 100, a_sec }, { "hold", Where::Near, 64, a_sec } };
             };
             static const std::vector<HoldTest> k = {
-                { "g0b.cover", "(any follower, any place) a point hidden from the foe, else a far open one (PROXY)", Who::Any, kArcher,
+                { "g0b.cover", "(any follower, any place) a point hidden from the foe that he can walk to; none = SKIP with the counts", Who::Any, kArcher,
                   { { "cover", Where::Cover, 100, 15 }, { "cover", Where::Cover, 64, 15 } } },
                 { "g0b.doorway", "(any follower, any place) a doorway within 1200 units, else open ground (PROXY)", Who::Any, kMelee,
                   { { "doorway", Where::Doorway, 150, 15 }, { "doorway", Where::Doorway, 100, 15 } } },
@@ -211,35 +214,19 @@ namespace MFO::SelfTest {
                     for (const float off : { 1.5708f, 1.2217f, 1.9199f })
                         for (const float d : { 250.0f, 180.0f, 330.0f })
                             if (stand(a_foe, face + s * off, d, pt) && pt.GetDistance(fp) > 120.0f) { o.ok = true; o.pt = pt; o.why = "foe's side"; return o; }
-                o.why = "no standable point at the foe's side";
-                return o;
-            }
-            if (a_where == Where::Cover) {
-                // hidden from the foe (no foe yet = the precondition's question: hidden from where the follower stands now)
-                RE::Actor* viewer = foe ? foe : f;
-                float      best   = 1e9f;
-                RE::NiPoint3 far{};
-                float farD = 0.0f;
-                for (const float d : { 200.0f, 350.0f, 500.0f, 700.0f })
-                    for (int i = 0; i < 10; ++i) {
-                        if (!stand(a_fid, static_cast<float>(i) * kTwoPi / 10.0f, d, pt)) continue;
-                        if (viewer != f && pt.GetDistance(viewer->GetPosition()) < 250.0f) continue;
-                        const float cost = me.GetDistance(pt);
-                        if (const float fd = viewer->GetPosition().GetDistance(pt); cost >= 160.0f && cost <= 400.0f && fd > farD) { farD = fd; far = pt; }
-                        if (cost < 80.0f || cost >= best) continue;
-                        if (Sightline::PointSeenNow(viewer, pt, kT.bodyHeight) != Sightline::PointSight::Hidden) continue;
-                        best = cost;
-                        o.ok = true;
-                        o.pt = pt;
-                    }
-                if (o.ok) { o.why = "hidden from the foe by geometry"; return o; }
-                if (farD > 0.0f) {   // no cover anywhere near: the standable point furthest from the foe, so the hold itself is still measured
-                    o.ok  = true;
-                    o.pt  = far;
-                    o.why = std::format("PROXY for cover (nothing hides a point within 700 units): the open point furthest from the foe, {:.0f}u", farD);
+                // the straight walks failed: any point he can walk to at the foe's side
+                std::string nav;
+                for (const auto& n : WalkPoints(f, foe, kT.coverWalk, nav)) {
+                    const float d = n.p.GetDistance(fp);
+                    const float off = std::fabs(std::remainder(std::atan2(n.p.x - fp.x, n.p.y - fp.y) - face, kTwoPi));
+                    if (d < 130.0f || d > 400.0f || off < 1.0f || off > 2.15f || me.GetDistance(n.p) < 160.0f || !nearPlayer(n.p)) continue;
+                    o.ok = true;
+                    o.pt = n.p;
+                    o.why = std::format("foe's side by the navmesh, walk {:.0f}u", n.walk);
                     return o;
                 }
-                proxy = "PROXY for cover: ";
+                o.why = "no point at the foe's side (straight walks failed; navmesh: " + nav + ")";
+                return o;
             }
             // Near / Corner: a clear standable point 250 to 400 units off, not on top of the foe. A corner turns ~110 degrees per leg.
             const float base = a_where == Where::Corner ? f->GetAngleZ() + 1.92f * static_cast<float>(a_leg)
@@ -256,12 +243,75 @@ namespace MFO::SelfTest {
                     o.why = std::string(proxy) + "open ground";
                     return o;
                 }
-            o.why = "no clear standable point around him";
+            std::string nav;
+            for (const auto& n : WalkPoints(f, foe, 600.0f, nav)) {   // a tight place: any point he can walk to
+                if (me.GetDistance(n.p) < std::max(160.0f, a_radius + kT.startOutside) || !nearPlayer(n.p)) continue;
+                if (foe && n.p.GetDistance(foe->GetPosition()) < 150.0f) continue;
+                o.ok = true;
+                o.pt = n.p;
+                o.why = std::string(proxy) + std::format("by the navmesh, walk {:.0f}u", n.walk);
+                return o;
+            }
+            o.why = "no clear standable point around him (navmesh: " + nav + ")";
             return o;
+        }
+
+        // COVER: hidden from the REAL foe's eye by the engine's rays (Sightline::PointSeenNow), over the points he can WALK to, nearest walk
+        // first. Sliced: kT.coverPerFrame answers a frame, each slice re-resolves its forms. The miss is diagnosable: every count is in `why`.
+        struct CoverJob { std::uint32_t ticket = 0; RE::FormID f = 0, foe = 0; std::vector<NavPoint> pts; std::size_t at = 0, asked = 0;
+                          int nearMe = 0, nearFoe = 0, farPlayer = 0, seen = 0, dead = 0; std::string nav; };
+        void AnswerPlan(std::uint32_t a_t, Plan a_p) {
+            std::lock_guard lk(g_planMx);
+            g_plans[a_t] = std::move(a_p);
+        }
+        void CoverSlice(std::shared_ptr<CoverJob> j) {
+            auto* f   = RE::TESForm::LookupByID<RE::Actor>(j->f);
+            auto* foe = RE::TESForm::LookupByID<RE::Actor>(j->foe);
+            auto* pc  = RE::PlayerCharacter::GetSingleton();
+            Plan  o;
+            if (!f || !foe || !pc || f->IsDead() || foe->IsDead() || !f->Is3DLoaded() || !foe->Is3DLoaded()) {
+                o.why = "the follower or the foe is gone";
+                return AnswerPlan(j->ticket, std::move(o));
+            }
+            if (j->nav.empty()) {
+                j->pts = WalkPoints(f, foe, kT.coverWalk, j->nav);
+                if (j->nav.empty()) j->nav = "?";
+            }
+            int left = kT.coverPerFrame;
+            for (; j->at < j->pts.size() && left > 0; ++j->at) {
+                const auto& n = j->pts[j->at];
+                if (f->GetPosition().GetDistance(n.p) < 170.0f) { ++j->nearMe; continue; }
+                if (foe->GetPosition().GetDistance(n.p) < kT.coverGap) { ++j->nearFoe; continue; }
+                if (pc->GetPosition().GetDistance(n.p) > kT.playerReach) { ++j->farPlayer; continue; }
+                --left;
+                ++j->asked;
+                const auto ps = Sightline::PointSeenNow(foe, n.p, kT.bodyHeight);
+                if (ps == Sightline::PointSight::Seen) { ++j->seen; continue; }
+                if (ps != Sightline::PointSight::Hidden) { ++j->dead; continue; }
+                o.ok = true;
+                o.pt = n.p;
+                o.why = std::format("hidden from the foe, walk {:.0f}u; asked {} of {} points", n.walk, j->asked, j->pts.size());
+                return AnswerPlan(j->ticket, std::move(o));
+            }
+            if (j->at < j->pts.size()) {
+                MainThread::Post([j]() { CoverSlice(j); });
+                return;
+            }
+            o.why = std::format("NO COVER: {}; asked {}, seen by the foe {}, ray unavailable {}, under 170u from him {}, under {:.0f}u from the foe {}, past the player's reach {}",
+                                j->nav, j->asked, j->seen, j->dead, j->nearMe, kT.coverGap, j->nearFoe, j->farPlayer);
+            AnswerPlan(j->ticket, std::move(o));
         }
 
         std::uint32_t PostPlan(RE::FormID a_f, RE::FormID a_foe, Where a_where, int a_leg, float a_radius, bool a_style, bool a_point) {
             const auto t = g_ticket++;
+            if (a_point && a_where == Where::Cover) {
+                auto j    = std::make_shared<CoverJob>();
+                j->ticket = t;
+                j->f      = a_f;
+                j->foe    = a_foe;
+                MainThread::Post([j]() { CoverSlice(j); });
+                return t;   // a cover leg is never a quiet one: no style is asked for
+            }
             MainThread::Post([t, a_f, a_foe, a_where, a_leg, a_radius, a_style, a_point]() {
                 Plan p;
                 if (a_point) p = PlanOnMain(a_f, a_foe, a_where, a_leg, a_radius);
@@ -630,6 +680,7 @@ namespace MFO::SelfTest {
                         r.phase  = Phase::Filing;
                         r.phaseT = 0.0f;
                     } else if (r.phaseT < kT.replanFor) {
+                        spdlog::info("[hold] {:08X} {} leg {}: no point yet: {}", c.id, t.id, r.leg + 1, p->why);
                         r.ticket  = 0;
                         r.replanT = 0.0f;
                         r.endWhy  = p->why;

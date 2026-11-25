@@ -159,6 +159,9 @@ namespace MFO::SelfTest {
     void                         HoldTick(float a_dt); // TestsHold.cpp, WORKER, every unpaused pump tick: sample the standing dev holds
     void                         HoldEnd(RE::FormID a_follower);   // WORKER, every way a run ends (Runner Finish): release his dev claims
     void                         ClearHoldState();     // TestsHold.cpp: forget every hold run and release its claims (ClearAll)
+    // NavSpots.cpp, MAIN THREAD: navmesh points he can walk to (around obstacles), nearest walk first. a_why = the counts / why none.
+    struct NavPoint { RE::NiPoint3 p{}; float walk = 0.0f; };
+    std::vector<NavPoint>        WalkPoints(RE::Actor* a_from, RE::Actor* a_foe, float a_maxWalk, std::string& a_why);
     void                         LightTick(float a_dt);// LightProbe.cpp, WORKER: [probe-light]
     void                         ClearT2State();       // TestsT2.cpp: their main-thread result cache (called by ClearTestState)
     const std::vector<ManualItem>& T2ManualItems();    // TestsT2.cpp: the T2 steps a human must judge (appended to ManualItems())
