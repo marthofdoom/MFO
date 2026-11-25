@@ -599,6 +599,7 @@ namespace MFO::SelfTest {
         }
         ClearDrivenState();
         ClearHoldState();
+        ClearStrictState();
         ClearAnimState();
         ClearT2State();
         std::lock_guard lk(g_hmsMx);
@@ -633,9 +634,11 @@ namespace MFO::SelfTest {
     }
 
     void RegisterAll() {
-        RegisterHold(true);    // TestsHold.cpp: g0b.cover, g0b.doorway first
+        RegisterHold(0);       // TestsHold.cpp: g0b.cover first
+        RegisterStrict();      // TestsStrict.cpp: strict.*
+        RegisterHold(1);       // g0b.doorway
         RegisterAnim();        // TestsAnim.cpp: anim.*
-        RegisterHold(false);   // the other g0b.*
+        RegisterHold(2);       // the other g0b.*
         Register({ "b1.heal_left_offense_right", "MFO-B1",
                    "(self-setup) a caster loadout (no one-hander in the right hand); temp heal + offense rules and a spawned fight",
                    120.0f, B1Pre, B1Fix, B1Step, B1Timeout });

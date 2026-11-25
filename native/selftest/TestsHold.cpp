@@ -789,10 +789,11 @@ namespace MFO::SelfTest {
         template <int I> void Fix(Ctx& c, FixtureRequest& q) { FixHold(c, q, I); }
         template <int I> Step Stp(Ctx& c) { return StepHold(c, I); }
         template <int I> Step Tmo(Ctx& c) { return TimeoutHold(c, I); }
-        constexpr int kFirstTests = 2;   // cover, doorway: RegisterHold(true)
-        template <int... I> void RegisterEach(bool a_first, std::integer_sequence<int, I...>) {
-            const auto one = [a_first](int i, auto pre, auto fix, auto stp, auto tmo) {
-                if ((i < kFirstTests) != a_first) return;
+        // the registration parts: 0 = cover (first of all), 1 = doorway (after strict.*), 2 = the rest (after anim.*)
+        constexpr int PartOf(int i) { return i < 2 ? i : 2; }
+        template <int... I> void RegisterEach(int a_part, std::integer_sequence<int, I...>) {
+            const auto one = [a_part](int i, auto pre, auto fix, auto stp, auto tmo) {
+                if (PartOf(i) != a_part) return;
                 const auto& t   = Tests()[i];
                 float       sec = 45.0f;   // the spawn, the first approach
                 for (const auto& l : t.legs) sec += 1.5f * l.sec + kT.busyWait + kT.roleWait;
@@ -802,12 +803,12 @@ namespace MFO::SelfTest {
         }
     }
 
-    void RegisterHold(bool a_first) {
+    void RegisterHold(int a_part) {
         if (Tests().size() != kCount) {
             spdlog::error("[hold] {} hold tests in the table, {} expected -- none registered", Tests().size(), kCount);
             return;
         }
-        RegisterEach(a_first, std::make_integer_sequence<int, static_cast<int>(kCount)>{});
+        RegisterEach(a_part, std::make_integer_sequence<int, static_cast<int>(kCount)>{});
     }
 
     void HoldTick(float a_dt) {

@@ -31,6 +31,7 @@
 // ledger, acks) is under the LEAF lock g_mx, never held across an engine call.
 
 #include "selftest/SelfTest_internal.h"
+#include "apmf/APMFBridge.h"
 #include "logistics/InvSnapshot.h"   // INVARIANTS #84
 #include "Followers.h"
 #include "Vocabulary.h"
@@ -420,8 +421,12 @@ namespace MFO::SelfTest {
         constexpr const char*      kRetestMarker = "_retest.1124c";
         constexpr std::string_view kRetestIds[]  = { "anim.summon_iaus", "anim.summon_gambit", "anim.fire_once", "anim.party_gap_conc", "buff.animated_claim_road",
                                                      "bound_bow.fires", "costparity.fireforget", "costparity.concentration", "g0b.cover" };
+        // A strict.* test closed as SKIP because Harbinger did not serve strict orders runs again on a load where it does. (Asked before g_mx: a leaf.)
         void ApplyCodeRetest() {
+            const bool strictAbi = APMFBridge::DevAbi() >= 48;
             std::lock_guard lk(g_mx);
+            if (strictAbi)
+                std::erase_if(g_results, [](const auto& kv) { return kv.first.starts_with("strict.") && kv.second.evidence.starts_with("SKIP: NOT SERVED"); });
             if (g_results.contains(kRetestMarker)) return;
             std::size_t cleared = 0;
             for (const auto id : kRetestIds) cleared += g_results.erase(std::string(id));
@@ -451,6 +456,7 @@ namespace MFO::SelfTest {
             FinishStep(a_id, a_run, own, a_word, a_error, a_backoff);
         }
         void FinishStep(RE::FormID a_id, Run& a_run, const Step& a_step, const char* a_word, bool a_error, std::chrono::seconds a_backoff) {
+            StrictEnd(a_id);
             HoldEnd(a_id);   // G0b: his dev claims (ch.24 hold, ch.33 quiet style) never outlive the run
             const auto* d    = a_run.def;
             const bool  done = a_step.v == Verdict::Pass || a_step.v == Verdict::Fail || a_step.v == Verdict::Info;
@@ -807,6 +813,7 @@ namespace MFO::SelfTest {
             for (const auto t : tokens) PostFixtureCleanup(t, "a finished test");
         }
 
+        StrictTick(dt);  // strict.*: same place, same reason
         HoldTick(dt);    // G0b: before the followers are served, so step() reads this tick's sample
         std::unordered_set<RE::FormID> live;
         bool anyRule = false;

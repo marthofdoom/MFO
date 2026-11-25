@@ -238,6 +238,7 @@ if(MFO_DEV_SELFTEST)
         selftest/TestsStorage.cpp
         selftest/Setup.cpp
         selftest/TestsHold.cpp
+        selftest/TestsStrict.cpp
         selftest/TestsAnim.cpp
         selftest/NavSpots.cpp
         selftest/LightProbe.cpp

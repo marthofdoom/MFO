@@ -152,7 +152,11 @@ namespace MFO::SelfTest {
     void                         RegisterBuffPotion(); // TestsBuffPotion.cpp: the buff-potion scoring test (feat/buff-potions; called from RegisterAll, after RegisterT2)
     void                         RegisterStorage();    // TestsStorage.cpp: the off-class storage tests (feat/offclass-storage; called from RegisterAll, after RegisterBuffPotion)
     void                         RegisterPerkEffects();// TestsPerkEffects.cpp: the perk-effect table test (1dfcuabd2pk; called from RegisterAll, after RegisterStorage)
-    void                         RegisterHold(bool a_first);   // TestsHold.cpp: the G0b hold exerciser (movement-plan.md): true = cover + doorway (FIRST in RegisterAll), false = the rest
+    void                         RegisterHold(int a_part);   // TestsHold.cpp: the G0b hold exerciser (movement-plan.md): 0 = cover (FIRST in RegisterAll), 1 = doorway, 2 = the rest
+    void                         RegisterStrict();     // TestsStrict.cpp: the strict movement order tests (strict.*, hm1-seat-brief 13.2), right after g0b.cover
+    void                         StrictTick(float a_dt);// TestsStrict.cpp, WORKER, every unpaused pump tick (beside HoldTick)
+    void                         StrictEnd(RE::FormID a_follower);   // WORKER, every way a run ends (the claim itself is released by HoldEnd)
+    void                         ClearStrictState();
     void                         RegisterAnim();       // TestsAnim.cpp: the animated-cast tests (anim.*), after the first hold tests
     void                         RegisterAnimSession();// TestsAnim.cpp: anim.session, LAST of all
     void                         AnimSinks();          // TestsAnim.cpp, MAIN: its passive spell-cast event sink (from RegisterSinks)

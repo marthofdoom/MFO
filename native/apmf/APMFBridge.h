@@ -2207,10 +2207,22 @@ namespace MFO::APMFBridge {
         std::uint32_t applied = 0, engineInside = 0;
         const char*   state = "none";
     };
-    const char* DevHoldFile(RE::FormID a_follower, const RE::NiPoint3& a_point, float a_radius);
+    const char* DevHoldFile(RE::FormID a_follower, const RE::NiPoint3& a_point, float a_radius, bool a_strict = false);
     bool        DevHoldRepoint(RE::FormID a_follower, const RE::NiPoint3& a_point, float a_radius);
     const char* DevQuietFile(RE::FormID a_follower, RE::FormID a_style);
     DevHoldInfo DevHoldRead(RE::FormID a_follower);
+    //   STRICT (ABI v48, selftest/TestsStrict.cpp). DevStrictServe: "" = this exact strict claim is served (ABI >= 48, kMoveCaps_Strict, CanServe),
+    //   else why not. Any thread. DevStrictRead: GetMoveOrderState. DevStrictAskFree: posts SetMoveOrder(kMove_Free), answer in DevStrictInfo::setFree.
+    struct DevStrictInfo {
+        bool          api = false, ours = false;
+        std::uint32_t phase = 0, sinceMs = 0, passed = 0, displaced = 0, gen = 0;   // phase: an APMF MovePhase ordinal (DevStrictPhaseName)
+        float         dist = -1.0f, stopError = 0.0f;
+        std::int32_t  setFree = -1;
+    };
+    std::string   DevStrictServe(RE::FormID a_follower, const RE::NiPoint3& a_point, float a_radius);
+    DevStrictInfo DevStrictRead(RE::FormID a_follower);
+    const char*   DevStrictPhaseName(std::uint32_t a_phase);
+    void          DevStrictAskFree(RE::FormID a_follower);
     void        DevHoldRelease(RE::FormID a_follower);
     void        DevHoldReleaseAll();
     bool        DevGroundStepStands(RE::FormID a_follower);
