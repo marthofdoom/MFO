@@ -52,6 +52,18 @@ namespace MFO::AreaActors {
             return std::any_of(a_casters.begin(), a_casters.end(), [&](const auto& c) { return c.get() == cmd.get(); });
         }
 
+        // M3 review F5: EngageOnSight::FightingParty knows only the player and his teammates as a target. A guard (or any crime-faction actor) whose current
+        // target is the party's own summon, or one of the askers who is not a teammate, is fighting the party too, so he is no bystander-by-crime. The shared
+        // reader stays as it is (EngageOnSight's behaviour); this widens the table's own test only.
+        bool FightingPartyOrItsOwn(RE::Actor* a_a, const std::vector<RE::NiPointer<RE::Actor>>& a_casters) {
+            if (EngageOnSight::FightingParty(a_a)) return true;
+            auto  tp = a_a->GetActorRuntimeData().currentCombatTarget.get();   // HOLD
+            auto* t  = tp.get();
+            if (!t) return false;
+            return std::any_of(a_casters.begin(), a_casters.end(), [&](const auto& c) { return c.get() == t; }) ||
+                   (t->IsCommandedActor() && PartyCommanded(t, a_casters));
+        }
+
         Iaus::AreaKind KindOf(RE::Actor* a_a, const std::vector<RE::NiPointer<RE::Actor>>& a_casters) {
             if (OwnedByPlayer(a_a)) return Iaus::AreaKind::PlayerHorse;
             if (a_a->IsCommandedActor()) return PartyCommanded(a_a, a_casters) ? Iaus::AreaKind::PartySummon : Iaus::AreaKind::Commanded;
@@ -150,7 +162,7 @@ namespace MFO::AreaActors {
                 // F1 (the crime hole): an actor with a CRIME FACTION who is not fighting the party is somebody whose being hit is a crime, whatever the engine's
                 // "would attack" answer says (a bounty, a vampire or a werewolf names every guard and townsperson hostile). He is listed as hostile to NOBODY,
                 // so every asker reads him as a bystander (the rule EngageOnSight::IsEnemy applies to a fight it would start).
-                r.a.crimeNotFighting = a->GetCrimeFaction() && !EngageOnSight::FightingParty(a);
+                r.a.crimeNotFighting = a->GetCrimeFaction() && !FightingPartyOrItsOwn(a, casters);
                 if (!r.a.crimeNotFighting)
                     for (std::size_t i = 0; i < casters.size(); ++i)
                         if (casters[i].get() != a && a->IsHostileToActor(casters[i].get())) r.hostileTo |= std::uint64_t{ 1 } << i;   // asked FROM the actor, as Gather's brawl gate does

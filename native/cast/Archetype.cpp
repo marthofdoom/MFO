@@ -224,8 +224,7 @@ namespace MFO::Actuation {
                 if (kv.second->hazard->data.flags.all(RE::BGSHazardData::BGSHazardFlags::kDropToGround)) {
                     a_drops = true;
                     const auto& hd = kv.second->hazard->data;
-                    const float r = (hd.flags.all(RE::BGSHazardData::BGSHazardFlags::kInheritRadius) && a_efitArea > 0)
-                                        ? Iaus::Prune::AreaUnits(static_cast<float>(a_efitArea)) : hd.radius;
+                    const float r = Iaus::Prune::HazardFootprintUnits(hd.flags.all(RE::BGSHazardData::BGSHazardFlags::kInheritRadius), a_efitArea, hd.radius);   // FEET -> units (M3 review F1)
                     if (std::isfinite(r) && r > a_dropRadius) a_dropRadius = r;
                 }
             }

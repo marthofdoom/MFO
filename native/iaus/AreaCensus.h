@@ -31,6 +31,14 @@ namespace MFO::Iaus {
         // (AreaActors.cpp BuildPass). The widest placed area is a hazard or a Fire Storm (about 2200 units) round a foe inside the chase cap; Harbinger's
         // cast guard keeps nothing past 4096 for the same reason.
         float         cullRange = 6000.0f;
+        // PLACEHOLDER (M3 review F2). A wall's hazard LIVES (30 s, 10 hits), so a bystander who walks in after the cast moment is hit and it is a crime owned by
+        // the caster: the margin round a wall's footprint AND its stream line is a walking distance, not the 128 sized for one 0.15 to 0.3 s cast moment
+        // (about 1000 units = 3 s of a walk-to-run). BYSTANDERS only: a party member who walks in is the test list's and REVIEW-BACKLOG MFO-B871's open
+        // half, it is not a crime. Read by Generate.cpp's wall block only.
+        float         wallMargin = 1000.0f;
+        // PLACEHOLDER (M3 review F6). The least footprint a wall is guarded with when its hazard radius could not be read (0 would leave everybody past the
+        // foe unguarded); a vanilla barrier is 3 to 3.5 ft = 64 to 75 units. SpellBook.cpp, the wall entry.
+        float         wallFloorUnits = 64.0f;
     };
     inline constexpr AreaGuardTuning kAreaGuard{};
 
@@ -61,10 +69,11 @@ namespace MFO::Iaus {
             return std::sqrt(dx * dx + dy * dy + dz * dz);
         }
 
-        // (center, radius, caster): the caster is a_s.self. a_foes = the foes the decision counts (Generate's kept list, the numbers AreaValue always read).
+        // (center, radius, caster): the caster is a_s.self. a_bystanderMargin: how far past the radius a bystander still counts (a wall passes kAreaGuard.wallMargin). a_foes = the foes the decision counts (Generate's kept list, the numbers AreaValue always read).
         // a_allyPad = how far past the radius an ally still counts (0 for his own blast, kFireBodyPad for a blast at a target).
         template <class FoeList>   // any range of const Combatant*
-        [[nodiscard]] AreaHits AreaCensus(const Snapshot& a_s, const FoeList& a_foes, float a_cx, float a_cy, float a_cz, float a_radius, float a_allyPad) {
+        [[nodiscard]] AreaHits AreaCensus(const Snapshot& a_s, const FoeList& a_foes, float a_cx, float a_cy, float a_cz, float a_radius, float a_allyPad,
+                                              float a_bystanderMargin = kAreaGuard.safetyMargin) {
             AreaHits h;
             const auto dist = [&](float x, float y, float z) { const float d = AreaDist(x, y, z, a_cx, a_cy, a_cz); return std::isfinite(d) ? d : 1.0e9f; };
             for (const Combatant* f : a_foes) if (dist(f->x, f->y, f->z) <= a_radius) ++h.foes;
@@ -75,21 +84,22 @@ namespace MFO::Iaus {
                 if (!CountsAsBystander(a_s, b)) continue;
                 const float body = (std::max)(kFireBodyPad, Pos(b.radius));
                 const float d = AreaDist(b.x, b.y, b.z, a_cx, a_cy, a_cz);
-                if (d > a_radius + body + kAreaGuard.safetyMargin) continue;   // a NaN never passes this test, so it counts as a hit
+                if (d > a_radius + body + a_bystanderMargin) continue;   // a NaN never passes this test, so it counts as a hit
                 if (h.bystanders++ == 0 || d < h.firstDist) { h.firstBystander = b.id; h.firstKind = b.kind; h.firstDist = d; }
             }
             return h;
         }
         template <class FoeList>
-        [[nodiscard]] AreaHits AreaCensus(const Snapshot& a_s, const FoeList& a_foes, const Combatant& a_centre, float a_radius, float a_allyPad) {
-            return AreaCensus(a_s, a_foes, a_centre.x, a_centre.y, a_centre.z, a_radius, a_allyPad);
+        [[nodiscard]] AreaHits AreaCensus(const Snapshot& a_s, const FoeList& a_foes, const Combatant& a_centre, float a_radius, float a_allyPad,
+                                              float a_bystanderMargin = kAreaGuard.safetyMargin) {
+            return AreaCensus(a_s, a_foes, a_centre.x, a_centre.y, a_centre.z, a_radius, a_allyPad, a_bystanderMargin);
         }
 
         // THE LINE (M3, a wall's stream): bystanders along the segment from a_from to a_to, where they project BETWEEN the two ends (one behind the caster or
-        // past the target is the area census's business, not the stream's), within the corridor kFireLinePad (or his body when larger) + the safety margin.
+        // past the target is the area census's business, not the stream's), within the corridor max(kFireLinePad, a_areaUnits + his body) + a_margin (the hazard's footprint runs along the whole stream, M3 review F4).
         // The same bystander rules as the area census: an unreadable position is a hit, an unreadable picture is blind. Allies on the line are
         // Estimate::InLineOfFire's, not counted here.
-        [[nodiscard]] inline AreaHits AreaCensusLine(const Snapshot& a_s, const Combatant& a_from, const Combatant& a_to) {
+        [[nodiscard]] inline AreaHits AreaCensusLine(const Snapshot& a_s, const Combatant& a_from, const Combatant& a_to, float a_areaUnits, float a_margin) {
             AreaHits h;
             h.blind = a_s.areaPicture == AreaPicture::NotReady;
             if (a_s.areaPicture != AreaPicture::Ready) return h;
@@ -110,7 +120,7 @@ namespace MFO::Iaus {
                     }
                 }
                 if (!between) continue;
-                const float reach = (std::max)(kFireLinePad, Pos(b.radius)) + kAreaGuard.safetyMargin;
+                const float reach = (std::max)(kFireLinePad, Pos(a_areaUnits) + Pos(b.radius)) + a_margin;
                 if (d > reach) continue;   // a NaN never passes this test, so it counts as a hit
                 if (h.bystanders++ == 0 || d < h.firstDist) { h.firstBystander = b.id; h.firstKind = b.kind; h.firstDist = d; }
             }

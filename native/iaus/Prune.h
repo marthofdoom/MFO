@@ -263,6 +263,12 @@ namespace MFO::Iaus::Prune {
     [[nodiscard]] inline float AreaUnits(float a_areaFeet) {
         return (std::isfinite(a_areaFeet) && a_areaFeet > 0.0f) ? a_areaFeet * kUnitsPerFoot : 0.0f;
     }
+    // A ground hazard's footprint radius in UNITS (M3 review F1). BGSHazardData::radius is in FEET like the EFIT area (the engine's Hazard::update multiplies it
+    // by 22.0 per foot before its hit test, 1.6.1170), so a 3 ft Fire Barrier is ~64 units, not 3. A kInheritRadius hazard takes the effect's EFIT area (feet) when
+    // it has one. Same conversion as the sim's BlastUnits (1 ft = 64/3 units; the engine's 22 is 3% larger, inside the guard's pads). 0 = unreadable.
+    [[nodiscard]] inline float HazardFootprintUnits(bool a_inherit, std::uint32_t a_efitFeet, float a_hazardRadiusFeet) {
+        return AreaUnits(a_inherit && a_efitFeet > 0 ? static_cast<float>(a_efitFeet) : a_hazardRadiusFeet);
+    }
     // The radius the never-splash rule and foes-in-area read (I4 review F2): the LARGER of the EFIT area and the
     // explosion radius of the spell's effect / projectile (BGSExplosion radius, already in units). The explosion
     // is what actually deals the area damage of an aimed blast and can exceed the EFIT area; an under-sized

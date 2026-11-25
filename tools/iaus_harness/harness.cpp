@@ -2842,7 +2842,7 @@ namespace {
             const auto person = [](float x, float y, std::uint32_t id = 0x77) { AreaActor a; a.id = id; a.x = x; a.y = y; return a; };
             Snapshot s = MageFight(); s.self.mp = 200;
             s.allies[0].x = -400.0f; s.allies[0].y = 400.0f; s.allies[1].x = -400.0f; s.allies[1].y = 300.0f;   // the party is nowhere near
-            for (auto& e : s.book.entries) if (e.form == 0x1C789) { e.wall = true; e.concentration = true; e.areaUnits = 150.0f; }   // the Fireball slot stands in for a wall
+            for (auto& e : s.book.entries) if (e.form == 0x1C789) { e.wall = true; e.concentration = true; e.areaUnits = Prune::HazardFootprintUnits(false, 0, 3.0f); }   // the Fireball slot stands in for a wall
             const auto find = [&](const Snapshot& sn, std::uint32_t form) -> Candidate {
                 for (const auto& c : Generate(sn, g, t).actions) if (c.form == form && c.target == 0x3B500) return c;
                 Check(false, "M3: the wall candidate exists"); return {}; };
@@ -2851,16 +2851,47 @@ namespace {
             Check(open.f.areaGuardOk && open.f.hasArea && score(open) > 0.0f, "M3: a wall with nobody about is a candidate and scores (the lab is not gated)");
             Snapshot r = s; r.areaPicture = AreaPicture::Ready;
             Check(score(find(r, 0x1C789)) == score(open), "M3: a readable empty picture scores what the lab scores");
-            r.areaActors = { person(600.0f, 150.0f + Estimate::kFireBodyPad + kAreaGuard.safetyMargin - 1.0f) };   // by the foe, inside the footprint, off the stream
-            Check(score(find(r, 0x1C789)) == 0.0f, "M3: a bystander in the hazard's footprint round the foe closes the wall");
-            r.areaActors = { person(300.0f, 100.0f) };   // between him and the foe, 100 off the line: inside the corridor 80 + margin 128
-            Check(!Generate(r, g, t).areaBlocked.empty() && score(find(r, 0x1C789)) == 0.0f, "M3: a bystander on the stream's line closes the wall (and the [area-guard] line is fed)");
-            r.areaActors = { person(300.0f, Estimate::kFireLinePad + kAreaGuard.safetyMargin + 1.0f) };
-            Check(score(find(r, 0x1C789)) == score(open), "M3: one unit outside the corridor is clear");
-            r.areaActors = { person(-300.0f, 0.0f) };   // behind him: the stream does not run there
-            Check(score(find(r, 0x1C789)) == score(open), "M3: a bystander behind the caster is not on the line");
-            r.areaActors = { person(300.0f, NAN) };
-            Check(score(find(r, 0x1C789)) == 0.0f, "M3: an unreadable bystander on the line is a hit, never clear");
+            // F1: a hazard's radius is FEET (engine 22 units per foot): the Fire Barrier's 3 ft is the sim's 64 units, never 3
+            Check(std::fabs(Prune::HazardFootprintUnits(false, 0, 3.0f) - 64.0f) < 0.01f, "M3 F1: a 3 ft hazard radius is 64 units (about 64, not 3)");
+            Check(std::fabs(Prune::HazardFootprintUnits(true, 6, 3.0f) - 128.0f) < 0.01f && std::fabs(Prune::HazardFootprintUnits(true, 0, 3.0f) - 64.0f) < 0.01f,
+                  "M3 F1: a kInheritRadius hazard takes the effect's EFIT feet, and its own radius when the effect has none");
+            Check(Prune::HazardFootprintUnits(false, 0, 0.0f) == 0.0f && Prune::HazardFootprintUnits(false, 0, NAN) == 0.0f, "M3 F1: an unreadable radius is 0 (SpellBook floors it, F6)");
+            Check(kAreaGuard.wallFloorUnits > 0.0f && kAreaGuard.wallMargin > kAreaGuard.safetyMargin, "M3 F6/F2: the wall's floor and margin come from the one table (floor > 0, margin past the cast moment's)");
+            // F2: the wall's bystander margin (a hazard lives 30 s): just inside / just outside footprint + body + wallMargin, off the line
+            const float wallArea = Prune::HazardFootprintUnits(false, 0, 3.0f);
+            const float fp = wallArea + Estimate::kFireBodyPad + kAreaGuard.wallMargin;
+            r.areaActors = { person(600.0f, fp - 1.0f) };
+            Check(score(find(r, 0x1C789)) == 0.0f, "M3 F2: a bystander just inside the wall's footprint + wallMargin closes the wall");
+            r.areaActors = { person(600.0f, fp + 1.0f) };
+            Check(score(find(r, 0x1C789)) == score(open), "M3 F2: one unit past it is clear");
+            r.areaActors = { person(600.0f, 64.0f + Estimate::kFireBodyPad + kAreaGuard.safetyMargin + 10.0f) };   // past the cast moment's margin, inside the wall's
+            Check(score(find(r, 0x1C789)) == 0.0f, "M3 F2: the wall uses wallMargin, not the cast moment's safetyMargin (footprint)");
+            // THE LINE, on a foe far enough (3000) that the footprint (area + body + wallMargin, ~1128) cannot reach a bystander on the stream
+            Snapshot fz = r; fz.foes[0].x = 3000.0f;
+            const float reach = std::max(Estimate::kFireLinePad, wallArea) + kAreaGuard.wallMargin;
+            const float openFar = [&] { Snapshot z = fz; z.areaActors.clear(); return score(find(z, 0x1C789)); }();
+            fz.areaActors = { person(1000.0f, 100.0f) };
+            Check(!Generate(fz, g, t).areaBlocked.empty() && score(find(fz, 0x1C789)) == 0.0f, "M3 F3: a bystander on the stream's line (outside the footprint) closes the wall, and the [area-guard] line is fed");
+            fz.areaActors = { person(1000.0f, reach - 1.0f) };
+            Check(score(find(fz, 0x1C789)) == 0.0f, "M3 F3: ... up to the corridor's edge (80 + wallMargin)");
+            fz.areaActors = { person(1000.0f, reach + 1.0f) };
+            Check(score(find(fz, 0x1C789)) == openFar, "M3 F3: one unit past the corridor is clear");
+            fz.areaActors = { person(-1500.0f, 0.0f) };   // behind him: the stream does not run there (F8 mutation A: the line's t >= 0)
+            Check(score(find(fz, 0x1C789)) == openFar, "M3 F8: a bystander behind the caster is not on the line");
+            fz.areaActors = { person(3000.0f + wallArea + Estimate::kFireBodyPad + kAreaGuard.wallMargin + 300.0f, 0.0f) };   // past the foe, outside the footprint
+            Check(score(find(fz, 0x1C789)) == openFar, "M3 F8: a bystander past the foe, outside the footprint, is not on the line (t <= 1)");
+            { AreaActor big = person(1000.0f, 1380.0f); big.radius = 500.0f;   // F8 mutation B: his body widens the corridor (reach 1564, footprint 1564 from a foe 2000+ away)
+              fz.areaActors = { big };
+              Check(score(find(fz, 0x1C789)) == 0.0f, "M3 F8: a big bystander's radius widens the line's corridor"); }
+            // F4: the corridor is the footprint along the line: a wide hazard (300) reaches max(80, 300) + wallMargin
+            for (auto& e : fz.book.entries) if (e.form == 0x1C789) e.areaUnits = 300.0f;
+            fz.areaActors = { person(1000.0f, 1200.0f) };
+            Check(score(find(fz, 0x1C789)) == 0.0f, "M3 F4: a wide hazard widens the corridor past the flat 80 + margin");
+            fz.areaActors = { person(1000.0f, 1300.0f + 1.0f) };
+            Check(score(find(fz, 0x1C789)) > 0.0f, "M3 F4: ... and clear one unit past it");
+            for (auto& e : fz.book.entries) if (e.form == 0x1C789) e.areaUnits = wallArea;
+            fz.areaActors = { person(1000.0f, NAN) };
+            Check(score(find(fz, 0x1C789)) == 0.0f, "M3: an unreadable bystander is a hit, never clear");
             r.areaActors.clear(); r.areaPicture = AreaPicture::NotReady;
             Check(score(find(r, 0x1C789)) == 0.0f, "M3: an unreadable picture closes the wall");
             // a party member in the footprint: splash_safe (an ally who fights that foe in melee stands in it)
@@ -2898,7 +2929,7 @@ namespace {
                 const AreaHits h = Estimate::AreaCensus(n, std::vector<const Combatant*>{}, 600.0f, 0.0f, 0.0f, 150.0f, 0.0f);
                 Check(h.bystanders == 3 && h.firstBystander == 0x82, "M3 F6: the census reports the NEAREST bystander (the log names him)");
                 n.areaActors = { person(300.0f, 90.0f, 0x81), person(300.0f, 30.0f, 0x82) };
-                const AreaHits l = Estimate::AreaCensusLine(n, n.self, n.foes[0]);
+                const AreaHits l = Estimate::AreaCensusLine(n, n.self, n.foes[0], 64.0f, kAreaGuard.wallMargin);
                 Check(l.bystanders == 2 && l.firstBystander == 0x82, "M3 F6: the line census reports the nearest one too");
                 Generated gb = Generate(n, g, t);
                 bool named = false; for (const auto& ab : gb.areaBlocked) named |= ab.spell == 0x1C789 && ab.bystander == 0x82;

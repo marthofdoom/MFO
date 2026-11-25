@@ -8,6 +8,7 @@
 #include "PrecisionBridge.h"   // card I6 (marth Q64): the measured weapon length, main thread
 #include "Vocabulary.h"
 #include "cast/Actuation.h"
+#include "iaus/AreaCensus.h"   // kAreaGuard (M3 review F6)
 #include "iaus/ClassCurves.h"
 #include "iaus/Fills.h"
 #include "iaus/EffectMirror.h"   // INVARIANTS #84: the one per-actor effect mirror (FoeFx reads it)
@@ -360,6 +361,7 @@ namespace MFO::Iaus::SpellBook {
             // ONE area guard and the foes-in-area count read it like any other area. Its EFIT area is 0 and its hazard is no explosion, so before this a wall had none.
             e.wall = arch.shape == Actuation::SpellShape::Wall;
             if (e.wall && std::isfinite(arch.impactHazardUnits) && arch.impactHazardUnits > e.areaUnits) e.areaUnits = arch.impactHazardUnits;
+            if (e.wall && !(e.areaUnits > 0.0f)) e.areaUnits = kAreaGuard.wallFloorUnits;   // F6: an unreadable footprint is guarded as the least a barrier is, never as none
             e.hostileArea = blast.hostileArea || arch.hostileImpact;   // M2 (iaus/AreaCensus.h): read for a Control area
             if (arch.area > 0 || blast.explosionUnits > 0.0f)
                 a_probes.emplace_back(e.form, std::format("area probe: {} ({:08X}): EFIT area {} ft = {:.0f} units, explosion radius {:.0f} units ({}), "
