@@ -26,6 +26,8 @@ namespace Sim {
         std::function<void(Fight&, SpotProbe&)> watch = nullptr;            // after every step
         std::function<bool(const std::vector<SpotProbe>&, std::string&)> rule = nullptr;   // over all fights; writes its numbers
         const char* what = "";
+        bool light = false, decast = false;                                 // S4: --v4 light=on, and a road that ends a light
+        std::function<void(FightSpec&, const std::vector<SimClass>&)> tweak = nullptr;   // the scenario's fight, changed before it is built
     };
     namespace SpotDetail {
         inline EQ::Vec3 At(const Fight& F, float sx, float sy, int rows, float cell = 128.0f) { const EQ::View v = EnvViewOf(F); const EQ::Vec3 p{ (sx + 0.5f) * cell, (static_cast<float>(rows) - sy - 0.5f) * cell, 0.0f }; EQ::Vec3 best = p; float bd = 1e30f;
@@ -178,6 +180,45 @@ namespace Sim {
           c.script = [=](Fight& F) { bow(F); Body& x = Sub(F); if (!F.move) return; MoveClaim& q = F.move->claim[0]; if (q.on && !q.arrived && F.now > 2.0 && x.perch == false && q.since > 0.0 && F.t.spotArrived >= 0 && F.t.spotBlocked == 0 && F.t.apprDrops == 0) { F.t.apprDrops = 1; x.nav.goalBody = 0; EnvLegEnd(F, x, LegEnd::Unreachable); F.t.apprBlocked = q.on ? 2 : 1; } };
           c.watch = [](Fight& F, SpotProbe& p) { if (F.t.apprBlocked && !p.v.count("did")) { p["did"] = 1; p["kept"] = F.t.apprBlocked == 2; p["marks"] = F.t.trustMarks; } };
           c.rule = [](const std::vector<SpotProbe>& r, std::string& o) { const int n = static_cast<int>(r.size()); o = Fmt("the other leg ended in %.0f of %d, the claim stayed in %.0f, marks %.0f", Sum(r, "did"), n, Sum(r, "kept"), Sum(r, "marks")); return Sum(r, "did") * 10 >= n * 9 && Sum(r, "kept") == Sum(r, "did") && Sum(r, "marks") == 0; }; v.push_back(c); }
+        // ── LIGHT (S4, movement-plan.md 3.4). Placeholder numbers everywhere: each row is about WHO and WHERE, not how much
+        const auto cast = [](const char* env, const char* a, const char* b) { return [=](FightSpec& fs, const std::vector<SimClass>& cl) { fs.cls = ClassBySlug(cl, a); fs.others.clear(); if (b) fs.others.push_back(ClassBySlug(cl, b)); fs.env = g_envPool.ByName(env); fs.interior = true; fs.light = -1; fs.freeEntry = 0; fs.targetRatio = 0; fs.ensure.clear(); fs.ensureOthers.clear(); }; };
+        const auto candle = [](Fight& F, std::size_t ci) {   // he knows a self-delivery light buff (Candlelight's shape)
+            Ctl& c = F.ctl[ci]; auto bd = std::make_shared<FollowerBuild>(*c.build); SimSpell s = Fx("Candle", MFO::Iaus::Prune::Nature::Buff, 18, -1, 10.0f, 0.0f, 0.0f, 0.0f); s.lights = true; s.buffDur = 60.0f; s.e.form = 0x00FF43F3u; bd->spells.push_back(s);
+            c.build = bd; c.book.entries.push_back(s.e); c.active.emplace_back(); c.summonUntil.push_back(0.0); c.gate.spellsOnClass = true; };
+        const auto litOn = [](const Fight& F, const Body& x) { for (const Body::Lit& q : x.lit) if (q.until > F.now) return true; return false; };
+        { SpotCase c{ "dark-corner-hide", "env-dead-end", "no-light" }; c.light = true; c.scripted = true; c.road = Road::Pinned; c.pin = 1.0f; c.sec = 12.0; c.tweak = cast("light-hall", "thief", nullptr); c.what = "a Thief a foe has found hides in the dark corner, not in the nearer lit one (pinned road, scripted: he ranks the hide)";
+          c.setup = [=](Fight& F) { AllStatues(F); for (std::size_t i = 1; i < Foes(F).size(); ++i) Foes(F)[i]->alive = false; Body& f = *Foes(F)[0]; Put(F, f, At(F, 10.0f + vary(F, 1, 2), 2.0f + vary(F, 2, 2), 12)); Put(F, F.b[0], At(F, 3, 2, 12)); Put(F, Sub(F), At(F, 11.0f + vary(F, 3, 2), 5.0f + vary(F, 4, 2), 12)); f.c.targetId = Sub(F).c.id; F.ctl[0].leash = 0.0f; };
+          c.script = [](Fight& F) { Script(F, 0, { Want(Family::Disengage, 0, 0.9f, 0.0f, Sight::None, false) }); };
+          c.watch = [](Fight& F, SpotProbe& p) { const MoveClaim& q = F.move->claim[0]; if (q.on && !p.v.count("dark")) { p["filed"] = 1; p["dark"] = F.LightOn(q.p, q.tri) < 0.2f; } };
+          c.rule = [](const std::vector<SpotProbe>& r, std::string& o) { const int n = static_cast<int>(r.size()); o = Fmt("a place filed in %.0f of %d, in the dark corner in %.0f", Sum(r, "filed"), n, Sum(r, "dark")); return Sum(r, "filed") * 10 >= n * 9 && Sum(r, "dark") * 10 >= n * 9; }; v.push_back(c); }
+        { SpotCase c{ "torch-step", "env-dead-end", "no-light" }; c.light = true; c.scripted = true; c.road = Road::Pinned; c.pin = 1.0f; c.sec = 10.0; c.tweak = cast("torch-room", "thief", nullptr); c.what = "the hidden step goes behind the foe by dark floor: no place whose walk crosses the lit patch (pinned road, scripted: he ranks the step)";
+          c.setup = [=](Fight& F) { AllStatues(F); for (std::size_t i = 1; i < Foes(F).size(); ++i) Foes(F)[i]->alive = false; Body& f = *Foes(F)[0]; Put(F, f, At(F, 14, 5, 12)); Put(F, F.b[0], At(F, 2, 2, 12)); Put(F, Sub(F), At(F, 3.0f + vary(F, 3, 3), 5, 12)); f.hx = 1.0f; f.hy = 0.0f; F.ctl[0].leash = 0.0f; };
+          c.script = [](Fight& F) { Body& f = *Foes(F)[0]; f.hx = 1.0f; f.hy = 0.0f; f.c.targetId = F.b[0].c.id; Script(F, 0, { Want(Family::Step, f.c.id, 0.9f, 0.0f, Sight::None, false) }); };
+          c.watch = [](Fight& F, SpotProbe& p) { const MoveClaim& q = F.move->claim[0]; if (!q.on || p["done"] > 0) return; p["filed"] = 1; const Body& s = Sub(F); if (F.LightOn({ s.c.x, s.c.y, s.c.z }, s.nav.tri) > 0.5f) p["lit"] = 1; if (q.arrived) { p["there"] = 1; p["done"] = 1; } };
+          c.rule = [](const std::vector<SpotProbe>& r, std::string& o) { const int n = static_cast<int>(r.size()); o = Fmt("a place filed in %.0f of %d, reached in %.0f, he crossed the light in %.0f", Sum(r, "filed"), n, Sum(r, "there"), Sum(r, "lit")); return Sum(r, "there") * 10 >= n * 9 && Sum(r, "lit") * 10 <= n; }; v.push_back(c); }
+        const auto still = [](Fight& F) { AllStatues(F); for (Body* f : Foes(F)) { f->c.hp = f->c.hpMax = 50000.0f; } };
+        const auto party = [=](Fight& F, std::size_t mage) { still(F); int k = 0; for (Body* f : Foes(F)) Put(F, *f, At(F, 19, 3.0f + static_cast<float>(k++), 12)); Put(F, F.b[0], At(F, 3, 4, 12)); F.b[0].hx = 1.0f; F.b[0].hy = 0.0f; for (std::size_t i = 0; i < F.ctl.size(); ++i) { Body& x = F.b[static_cast<std::size_t>(F.ctl[i].body)]; F.ctl[i].leash = 0.0f; Put(F, x, i == mage ? At(F, 2.0f, 5.0f + vary(F, 1, 2), 12) : At(F, 6.0f + vary(F, 2, 2), 4, 12)); x.retargetAt = 1e9; }
+            candle(F, mage); };
+        const auto hold = [](Fight& F, std::size_t i) { Body& x = F.b[static_cast<std::size_t>(F.ctl[i].body)]; x.fleeUntil = 0; F.b[0].hx = 1.0f; F.b[0].hy = 0.0f; x.c.mp = x.c.mpMax; };
+        const auto lights = [=](Fight& F, SpotProbe& p) { const auto who = [&](const Body& x, const char* k) { if (litOn(F, x)) { p[k] = 1; if (!p.v.count("first")) p["first"] = x.c.id == F.b[0].c.id ? 0 : 1; } }; who(F.b[0], "player"); for (std::size_t i = 0; i < F.ctl.size(); ++i) who(F.b[static_cast<std::size_t>(F.ctl[i].body)], i ? "other" : "self"); };
+        { SpotCase c{ "lit-ally-stealth", "env-dead-end", "no-veto" }; c.light = true; c.sec = 25.0; c.tweak = cast("torch-room", "healer", "nightblade"); c.what = "a mage with a light and a sneaking Nightblade: the player is lit, the Nightblade never";
+          c.setup = [=](Fight& F) { party(F, 0); }; c.script = [=](Fight& F) { hold(F, 0); }; c.watch = [=](Fight& F, SpotProbe& p) { lights(F, p); const Body& x = F.b[static_cast<std::size_t>(F.ctl[1].body)]; int top = -1000; for (const Body* f : Foes(F)) top = std::max(top, F.Level(*f, x).level); p["seen"] += top > 0 ? TM::dt : 0.0; };
+          c.rule = [](const std::vector<SpotProbe>& r, std::string& o) { const int n = static_cast<int>(r.size()); o = Fmt("the player lit in %.0f of %d, the Nightblade in %.0f, a foe's formula has the Nightblade %.1f s a fight", Sum(r, "player"), n, Sum(r, "other"), Sum(r, "seen") / n); return Sum(r, "player") * 10 >= n * 9 && Sum(r, "other") == 0; }; v.push_back(c); }
+        { SpotCase c{ "sneaking-player", "env-dead-end", "no-veto" }; c.light = true; c.sec = 25.0; c.tweak = cast("torch-room", "healer", "knight"); c.what = "the player sneaks in the dark: no light goes to him";
+          c.setup = [=](Fight& F) { party(F, 0); F.b[0].sneaking = true; }; c.script = [=](Fight& F) { hold(F, 0); F.b[0].sneaking = true; }; c.watch = lights;
+          c.rule = [](const std::vector<SpotProbe>& r, std::string& o) { const int n = static_cast<int>(r.size()); o = Fmt("the sneaking player lit in %.0f of %d, somebody else in %d", Sum(r, "player"), n, Count(r, [](const SpotProbe& p) { return Get(p, "other", 0) + Get(p, "self", 0) > 0; })); return Sum(r, "player") == 0; }; v.push_back(c); }
+        { SpotCase c{ "light-on-player", "env-dead-end", "no-need" }; c.light = true; c.sec = 25.0; c.tweak = cast("torch-room", "healer", "knight"); c.what = "a dark room, nobody sneaks: the light goes to the player before the mage himself or anybody else";
+          c.setup = [=](Fight& F) { party(F, 0); }; c.script = [=](Fight& F) { hold(F, 0); }; c.watch = lights;
+          c.rule = [](const std::vector<SpotProbe>& r, std::string& o) { const int n = static_cast<int>(r.size()), f = Count(r, [](const SpotProbe& p) { return p.v.count("first") > 0; }), pl = Count(r, [](const SpotProbe& p) { return Get(p, "first", 1) == 0; }); o = Fmt("a light cast in %d of %d, the first on the player in %d", f, n, pl); return pl * 10 >= n * 9; }; v.push_back(c); }
+        const auto lit4 = [=](Fight& F) { party(F, 1); Body& x = Sub(F); x.standUntil = 4.0; x.sneaking = false; x.lit.push_back({ 0x00FF43F3u, F.b[static_cast<std::size_t>(F.ctl[1].body)].c.id, 60.0 }); };
+        { SpotCase c{ "decast-on-sneak", "env-dead-end", "no-decast" }; c.light = c.decast = true; c.sec = 12.0; c.tweak = cast("torch-room", "thief", "healer"); c.what = "a lit Thief crouches: the light of ours is ended within one lap of the party's decisions, and he is not lit again";
+          c.setup = lit4; c.script = [=](Fight& F) { hold(F, 1); };
+          c.watch = [=](Fight& F, SpotProbe& p) { const bool on = litOn(F, Sub(F)); if (F.now < 4.0) { if (on) p["was"] = 1; return; } if (!on && !p.v.count("off")) p["off"] = F.now; if (on && p.v.count("off")) p["again"] = 1; };
+          c.rule = [](const std::vector<SpotProbe>& r, std::string& o) { const int n = static_cast<int>(r.size()), k = Count(r, [](const SpotProbe& p) { return Get(p, "off", 1e9) <= 4.5; }); o = Fmt("lit before he crouched in %.0f of %d, ended within half a second in %d, lit again in %.0f", Sum(r, "was"), n, k, Sum(r, "again")); return Sum(r, "was") == n && k * 10 >= n * 9 && Sum(r, "again") == 0; }; v.push_back(c); }
+        { SpotCase c{ "decast-road-off", "env-dead-end", "no-veto" }; c.light = true; c.sec = 25.0; c.tweak = cast("torch-room", "thief", "healer"); c.what = "the same without a road that ends a light: it burns out, and no new one is cast on him";
+          c.setup = [=](Fight& F) { lit4(F); Sub(F).lit[0].until = 6.0; F.b[0].lit.push_back({ 1u, F.b[0].c.id, 60.0 }); }; c.script = [=](Fight& F) { hold(F, 1); };
+          c.watch = [=](Fight& F, SpotProbe& p) { if (F.now > 6.1 && litOn(F, Sub(F))) p["again"] = 1; };
+          c.rule = [](const std::vector<SpotProbe>& r, std::string& o) { o = Fmt("a new light on him in %.0f of %zu", Sum(r, "again"), r.size()); return Sum(r, "again") == 0; }; v.push_back(c); }
         return v;
     }
 
@@ -189,9 +230,10 @@ namespace Sim {
         for (const SpotCase& c : cases) { if (only && std::strncmp(c.name, only, std::strlen(only))) continue;
             const Scenario* sc = nullptr; for (const Scenario& s : all) if (!std::strcmp(s.name, c.scenario)) sc = &s; if (!sc) { std::printf("SPOT-TEST %s: no scenario %s\n", c.name, c.scenario); return 2; }
             Tuning t = *base; t.spotPinKinds = c.pin; ActiveTuning() = &t; g_road = c.road;
+            const bool light0 = g_v4.light, decast0 = g_decastRoad;
             for (int arm = 0; arm < 2; ++arm) {
-                g_moveFault = arm ? MoveFaultByName(c.fault) : &kMoveFaults[0]; std::vector<SpotProbe> res(N); std::atomic<int> next{ 0 };
-                auto work = [&]() { for (;;) { const int f = next.fetch_add(1); if (f >= N) return; Rng R; R.g.seed(seed * 2654435761ULL + std::uint64_t(f) * 7919 + 17); FightSpec fs = sc->make(D, classes, R); fs.seed = R.g(); fs.rank = 3;
+                g_moveFault = arm ? MoveFaultByName(c.fault) : &kMoveFaults[0]; g_v4.light = c.light && !g_moveFault->noLight; g_decastRoad = c.decast && !g_moveFault->noDecast; std::vector<SpotProbe> res(N); std::atomic<int> next{ 0 };
+                auto work = [&]() { for (;;) { const int f = next.fetch_add(1); if (f >= N) return; Rng R; R.g.seed(seed * 2654435761ULL + std::uint64_t(f) * 7919 + 17); FightSpec fs = sc->make(D, classes, R); fs.seed = R.g(); fs.rank = 3; if (c.tweak) c.tweak(fs, classes);
                     Fight F = BuildFight(D, fs, t1); F.SetArena(); if (c.setup) c.setup(F); if (traced && std::string(traced) == std::string(c.name) + ":" + char('0' + arm) + ":" + std::to_string(f)) F.trace = stdout;
                     IausPolicy P; P.T = &t; SpotProbe& p = res[static_cast<std::size_t>(f)];
                     while (!F.over && F.now < c.sec) {
@@ -202,7 +244,7 @@ namespace Sim {
                 std::string o; const bool held = c.rule(res, o), ok = arm ? !held : held; ++checks; fails += !ok;
                 std::printf("SPOT-TEST %-28s %-18s %s  %s%s\n", c.name, arm ? (std::string("fault ") + c.fault).c_str() : "the pass", ok ? (arm ? "FAILS AS IT MUST" : "HOLDS") : (arm ? "*** STILL HOLDS" : "*** DOES NOT HOLD"), o.c_str(), c.scripted && !arm ? "  [scripted ranking]" : "");
             }
-            ActiveTuning() = base; }
+            g_v4.light = light0; g_decastRoad = decast0; ActiveTuning() = base; }
         g_road = Road::Off; g_moveFault = &kMoveFaults[0];
         std::printf("SPOT-TESTS %s: %zu scenarios, %d checks, %d failed\n", fails ? "FAIL" : "PASS", cases.size(), checks, fails);
         return fails ? 1 : 0;

@@ -72,7 +72,7 @@ namespace Sim {
             if (!Fight::Up(x)) continue;
             if (!x.Party()) {
                 MV::Foe f; f.id = x.c.id; f.p = { x.c.x, x.c.y, x.c.z }; const Body* tg = F.Find(x.c.targetId); f.target = tg && tg->Party() && Fight::Up(*tg) ? tg->c.id : 0;
-                f.faceX = x.hx; f.faceY = x.hy; P.foes.push_back(f); continue; }
+                f.faceX = x.hx; f.faceY = x.hy; if (g_v4.light) f.skill = x.spec->Skill(15); P.foes.push_back(f); continue; }
             MV::Member m; for (MV::Member& o : was) if (o.id == x.c.id) { m = o; break; }
             m.id = x.c.id; m.p = { x.c.x, x.c.y, x.c.z }; m.who = WalkerOf(x); m.speed = x.spec->run * (x.sneaking ? 0.55f : 1.0f); m.nTop = 0; m.decides = false;
             m.anchor = { F.b[0].c.x, F.b[0].c.y, F.b[0].c.z }; m.leash = 0.0f;
@@ -82,10 +82,18 @@ namespace Sim {
                 // what the holder finds: he was hit hard, and a place the leash no longer lets him stand on (a leash wins over a point, kLeashStandU past it he still stands)
                 if (x.burstMax > q.burstSeen + 1.0f && x.burstMax >= kOneHitLine * x.c.hpMax) m.marks |= MV::kMarkHitHard;
                 q.burstSeen = x.burstMax;
+                m.wantsDark = g_v4.light && (F.WantsDarkNow(x) || c.gate.sneakClass); m.invisible = F.now < x.cloakUntil;
+                m.sneakSkill = g_v4.light ? x.spec->Skill(15) + StealthCombine(F.D->sneakSkillRows, *x.spec, false) : -1.0f;
                 if (m.commit.on && m.leash > 0.0f && MV::Dist(m.commit.p, m.anchor) > m.leash + kLeashStandU) m.marks |= MV::kMarkOrder;
                 if (!m.decides && m.commit.on) { m.commit = MV::Commit{}; }   // another mover has him: the place is given up, he asks again when he is free
             } else m.commit = MV::Commit{};
             P.party.push_back(m);
+        }
+        P.light.clear();
+        if (g_v4.light) {   // S4: every actor of the fight is a light meter
+            P.exterior = !F.interior; P.detect = F.dg;
+            if (F.now >= S.meterAt) { S.meterAt = F.now + static_cast<double>(g_lightT.meterSec);
+                for (const Body& x : F.b) if (Fight::Up(x)) { const EQ::Vec3 p{ x.c.x, x.c.y, x.c.z }; MFO::Iaus::Light::Add(P.lightField, { p, g_lightScale * F.LightOn(p, x.nav.tri), F.now, MFO::Iaus::Light::Source::Actor }); } }
         }
         for (const Area& a : F.areas) { const Body* o = F.Find(a.src); if (a.hostile && o && !o->Party()) P.areas.push_back({ { a.x, a.y, a.z }, a.r }); }
         for (const Hazard& h : F.hazards) if (!h.party && !h.pcOnly) P.areas.push_back({ { h.x, h.y, h.z }, h.r });   // 16.3: a hazard is a spot input, as designed
@@ -103,6 +111,8 @@ namespace Sim {
             while (!MP::Phase1(S.pic, v, tl_envScratch, &MoveProfile, t, S.asks, 0.0f)) { if (g_moveFault->reachBlind) for (auto& r : S.pic.work.reach) r.second = Tri::Yes; }
             if (g_moveFault->noPortals) { for (MV::Spot& s : S.pic.pool) s.portals = {}; for (auto& p : S.pic.work.pairs) p.path.nPortals = 0; for (MV::Member& m : S.pic.party) m.portals = {}; }
         } else while (!MP::Phase1(S.pic, v, tl_envScratch, &MoveProfile, t, S.asks, MFO::Iaus::kInf)) {}
+        if (g_v4.light && g_lightT.sampler && std::any_of(S.pic.party.begin(), S.pic.party.end(), [](const MV::Member& m) { return m.wantsDark; }))   // S4: the point sampler (probe L1), so many spots a window
+            for (std::size_t i = 0; i < S.pic.pool.size() && S.pic.light.size() < static_cast<std::size_t>(g_lightT.samples); ++i) { const MV::Spot& s = S.pic.pool[i]; S.pic.light.push_back({ s.key, g_lightScale * F.LightOn(s.p, s.tri) }); }
         S.asked = 0; S.open = true; S.winStart = F.now; S.winEnd = F.now + static_cast<double>(MFO::Iaus::MoveDecisionSec(t));
         const long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
         g_moveNs += ns; ++g_moveWindows; long long w = g_moveWorstNs.load(); while (ns > w && !g_moveWorstNs.compare_exchange_weak(w, ns)) {}

@@ -51,6 +51,8 @@ namespace Sim {
         { "t.moveDecisionSec", &Tuning::moveDecisionSec }, { "t.spotPinKinds", &Tuning::spotPinKinds }, { "t.spotMomentum", &Tuning::spotMomentum }, { "t.spotPreempt", &Tuning::spotPreempt },
         { "t.spotRadius", &Tuning::spotRadius }, { "t.spotSplitArea", &Tuning::spotSplitArea }, { "t.spotHighU", &Tuning::spotHighU }, { "t.spotExitU", &Tuning::spotExitU }, { "t.spotPeelU", &Tuning::spotPeelU },
         { "t.spotArriveU", &Tuning::spotArriveU }, { "t.spotFactMoveU", &Tuning::spotFactMoveU }, { "t.spotFactMaxAgeSec", &Tuning::spotFactMaxAgeSec }, { "t.spotKeptAgeSec", &Tuning::spotKeptAgeSec }, { "t.spotUnknownExposure", &Tuning::spotUnknownExposure },
+        // S4 (iaus/Light.h): flat while --v4 light is off
+        { "t.lightNearU", &Tuning::lightNearU }, { "t.lightStoreyU", &Tuning::lightStoreyU }, { "t.lightMaxAgeSec", &Tuning::lightMaxAgeSec }, { "t.lightMinConf", &Tuning::lightMinConf }, { "t.lightLitLevel", &Tuning::lightLitLevel }, { "t.lightDarkHoldSec", &Tuning::lightDarkHoldSec },
     };
 
     // tune 2.11.1: the worth-the-gold table (iaus/ConsumableWorth.h WorthTable, carried in Tuning::worth) and the loot table

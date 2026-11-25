@@ -111,10 +111,12 @@ namespace MFO::Iaus {
                 if (aw > 0.0f) d.bestHeal = (std::max)(d.bestHeal, o.score / mom / aw);
             }
             if (o.score < t.actFloor) return;
-            top.Add(o.score);
+            if (!c.f.lightBuff) top.Add(o.score);   // S4: a light may be capped below, so it never prunes another
             d.ranked.push_back(Scored{ static_cast<std::uint16_t>(i), o.score, o.score / mom, o.focus, running });
         };
 
+        bool anyLight = false;   // S4: a light buff is on the board (never in the DLL until G6)
+        for (std::size_t i = 0; i < lim && !anyLight; ++i) anyLight = cands[i].f.lightBuff;
         // Pass 1: everything but the heal-dependent families. Heals (spells and heal scrolls) are never pruned:
         // Retreat and the health drink read the best heal score, so it must be exact.
         for (std::size_t i = 0; i < lim; ++i) {
@@ -124,7 +126,8 @@ namespace MFO::Iaus {
             // A damage-class offense is never P5-pruned: the buff cap below reads the best offense score, and a pruned (below-cutoff because
             // of uncapped buffs) offense would leave it at -1 (Opus review 2026-11-13, finding 3).
             const bool exactOffense = f == Family::CastOffense && cands[i].f.damageClass;
-            scoreOne(i, 0.0f, !detail::IsHeal(cands[i]) && !exactOffense);
+            const bool exactWard = anyLight && (f == Family::CastWard);   // S4: the light cap below reads the best ward
+            scoreOne(i, 0.0f, !detail::IsHeal(cands[i]) && !exactOffense && !exactWard);
         }
         // Pass 2: Retreat, DrinkHealth.
         for (std::size_t i = 0; i < lim; ++i)
@@ -151,6 +154,20 @@ namespace MFO::Iaus {
                         ++d.buffCapped;
                     }
                 }
+        }
+
+        // S4 (marth: "never above heal or ward"): a light buff ranks under every heal and every ward that cleared the floor, by more than a tie.
+        if (anyLight) {
+            float under = kInf;
+            for (const Scored& sc : d.ranked) {
+                const Candidate& c = cands[sc.idx];
+                if (detail::IsHeal(c) || c.family == Family::CastWard) under = (std::min)(under, sc.score);
+            }
+            if (under < kInf) {
+                const float cap = (std::max)(0.0f, under - 2.0f * t.tieEps);   // under EVERY one of them: the best may yet be declined by its road
+                for (Scored& sc : d.ranked)
+                    if (cands[sc.idx].f.lightBuff && sc.score > cap) { sc.base = sc.score > 0.0f ? sc.base * (cap / sc.score) : 0.0f; sc.score = cap; ++d.buffCapped; }
+            }
         }
 
         // Rank, then break ties (4.8): within |dS| < tieEps of a cluster head, the running decision, then the

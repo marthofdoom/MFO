@@ -102,7 +102,30 @@ namespace MFO::Iaus::MovePass {
                 for (const Area& r : pic.areas) if (Dist(at, r.p) < r.r) f.inHostileArea = Iaus::Tri::Yes;
             }
             if (m.leash > 0.0f) f.leashX = Dist(at, m.anchor) / m.leash;
-            if (m.wantsDark) for (const LightAt& l : pic.light) if (l.key == key) f.light = l.level;
+            if (m.wantsDark) {   // S4. Unknown stays NOT APPLICABLE: never dark
+                for (const LightAt& l : pic.light) if (l.key == key && l.level >= 0.0f) f.light = l.level;
+                if (f.light < 0.0f) f.light = Light::At(pic.lightField, at, pic.t, t).level;
+                if (pair && pair->path.nVia) {   // the walk as the engine would take it: the claim names a place, not a way
+                    int known = 0, lit = 0;
+                    for (std::size_t i = 0; i < pair->path.nVia; ++i) if (const auto r = Light::At(pic.lightField, pair->path.via[i], pic.t, t); r.Known()) { ++known; lit += r.level >= t.lightLitLevel; }
+                    if (known) f.pathLitSec = f.pathSec * static_cast<float>(lit) / static_cast<float>(pair->path.nVia);
+                }
+                if (f.light >= 0.0f && m.sneakSkill >= 0.0f) {   // the engine's own formula, crouched and still there, per foe that may see the place
+                    float worst = -1.0f;
+                    for (const Foe& e : pic.foes) {
+                        if (e.skill < 0.0f) continue;
+                        Light::DetectIn in; in.dist = Dist(e.p, at); in.exterior = pic.exterior; in.targetIsOsTarget = e.target == m.id; in.oHasTarget = e.target != 0;
+                        in.skillO = e.skill; in.skillT = m.sneakSkill; in.sneakingT = true; in.invisible = m.invisible; in.light = f.light;
+                        const float dx = at.x - e.p.x, dy = at.y - e.p.y, d = std::sqrt(dx * dx + dy * dy);
+                        if (d > 1.0f && (e.faceX != 0.0f || e.faceY != 0.0f)) in.angleDeg = std::acos((std::clamp)((e.faceX * dx + e.faceY * dy) / d, -1.0f, 1.0f)) * 57.29578f;   // unknown = straight ahead
+                        const auto s = Sees(pic, key, e.id); in.losGeom = s != Iaus::Tri::No;
+                        const int level = Light::DetectLevel(pic.detect, in).level;   // a whole number: a last bit of libm does not reach the rank
+                        const float x = level > 0 ? (std::min)(1.0f, static_cast<float>(level) / (std::max)(1.0f, pic.detect.barSneak)) : 0.0f;
+                        worst = (std::max)(worst, s == Iaus::Tri::Unknown ? x * t.spotUnknownExposure : x);
+                    }
+                    f.detected = worst;
+                }
+            }
             if (spot && !pic.trustNow.Clean()) {   // where he stands now is nobody's plan: staying hands him back to the engine, and is never priced
                 if (const auto l = Trust::Of(pic.trustNow, spot->p); l != Trust::Level::Trusted) f.spotRegionTrust = static_cast<float>(l);
                 if (pair) if (const auto l = Trust::RouteLevel(pic.trustNow, m.p, { pair->path.via.data(), pair->path.nVia }); l != Trust::Level::Trusted) f.pathRegionTrust = static_cast<float>(l);
@@ -534,6 +557,7 @@ namespace MFO::Iaus::MovePass {
         std::erase_if(pic.still, [&](const auto& s) { return !ById(pic.party, s.who) && !ById(pic.foes, s.who); });
         if (moved) Trust::Forget(pic.trust);           // a door, a cell: what was learned is about another mesh
         Trust::Decay(pic.trust, pic.t);
+        Light::Decay(pic.lightField, pic.t, t);
         pic.trustNow = pic.trust; pic.trustNow.log.clear(); pic.trustNow.said.clear();
         if (moved || pic.trustGen != pic.trust.gen) {
             pic.trustGen = pic.trust.gen; pic.paths.clear(); pic.avoid.clear();

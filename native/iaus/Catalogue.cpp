@@ -49,6 +49,7 @@ namespace MFO::Iaus {
         case Family::BackOff:      return "back_off";
         case Family::Step:         return "step";
         case Family::DrinkBuff:    return "drink_buff";
+        case Family::Decast:       return "decast";
         case Family::kCount:       break;
         }
         return "?";
@@ -86,6 +87,7 @@ namespace MFO::Iaus {
             "spot_path", "spot_sight", "spot_exposure", "spot_fire_line", "spot_range", "spot_path_exposed", "spot_exits", "spot_ally_dist",
             "spot_hostile_area", "spot_leash", "spot_climb", "spot_drop", "spot_detected", "spot_light", "spot_foe_reach", "spot_lane",
             "spot_portal_busy", "spot_serves", "spot_cover", "spot_region_trust", "spot_path_trust",
+            "light_veto", "light_need", "light_rank", "self_light", "light_on_stealth", "spot_path_light",
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -99,6 +101,7 @@ namespace MFO::Iaus {
         case Cons::NoHealRetreat: case Cons::DisengageClass: case Cons::Stock: case Cons::NoHealDrink:
         case Cons::Ammo: case Cons::StaffCharge: case Cons::MeleeReach: case Cons::ClassWeapon:
         case Cons::FoeControlled: case Cons::HealReach: case Cons::SummonLive: case Cons::HoldStill: case Cons::BuffStealth:
+        case Cons::LightVeto:
         case Cons::ConsumableWorth:   // feat/consumables fix F3: a veto only (worth >= floor scores as before; it must not enter the compensation n)
             return Role::Gate;
         case Cons::BoostCaster: case Cons::BoostDowned: case Cons::BoostOutnumbered:
@@ -124,7 +127,7 @@ namespace MFO::Iaus {
                             f.selfMagicka, f.recipientHp, f.combatSec, f.emergency,
                             f.expDamage, f.bestDamage, f.expRate, f.foeHealth, f.expHeal, f.recipientMissing, f.chase, f.tauntChance,
                             f.controlSec, f.castsWanted, f.backOffNeed, f.buffThreat, f.buffRegenPct, f.consumableWorth, f.spellPerkEdge, f.handLost,
-                            f.healRate, f.bestHealRate, f.effectRate };
+                            f.healRate, f.bestHealRate, f.effectRate, f.recipientLight, f.lightRank, f.selfLight };
         for (const float x : v)
             if (!std::isfinite(x)) return false;
         // +inf is the documented "not recently" / "nothing is hitting" (the estimates' unknown)
@@ -443,6 +446,19 @@ namespace MFO::Iaus {
                 at(Cons::SpotRegionTrust) = Piece(trust);
                 at(Cons::SpotPathTrust) = Piece(trust);
             }
+            // LIGHT (S4). ALL PLACEHOLDERS, piecewise / boolean only. x of a level = the engine's cached actor light level
+            {
+                at(Cons::LightVeto) = Bin(1.0f, 0.0f);   // x = he wants the dark
+                static constexpr std::array<std::array<float, 2>, 4> need{ { { 10.0f, 1.0f }, { 40.0f, 0.7f }, { 60.0f, 0.2f }, { 70.0f, 0.0f } } };
+                at(Cons::LightNeed) = VetoAbove(Piece(need), 69.0f);
+                static constexpr std::array<std::array<float, 2>, 4> rank{ { { 0.0f, 1.0f }, { 1.0f, 0.7f }, { 2.0f, 0.5f }, { 3.0f, 0.0f } } };
+                at(Cons::LightRank) = VetoAbove(Piece(rank), 2.5f);
+                static constexpr std::array<std::array<float, 2>, 2> self{ { { 30.0f, 1.0f }, { 100.0f, 0.5f } } };
+                at(Cons::SelfLight) = Piece(self);
+                at(Cons::LightOnStealth) = Bin(0.0f, 1.0f);
+                static constexpr std::array<std::array<float, 2>, 3> lit{ { { 0.0f, 1.0f }, { 1.0f, 0.5f }, { 4.0f, 0.15f } } };
+                at(Cons::SpotPathLight) = Piece(lit);
+            }
             at(Cons::BashNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
             // regroup need: the largest of three reasons, see Input. Under 0.05 there is no reason: veto.
             at(Cons::RegroupNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
@@ -486,6 +502,7 @@ namespace MFO::Iaus {
             aw(Family::Disengage, 1.0f);   // card G3, chosen (not from the search): gated by its generator, paced by its hard cooldown
             aw(Family::BackOff, 1.0f);     // batch I, chosen: like the other moves, it has to be clearly worth it (the need's own veto and the hard cooldown pace it)
             aw(Family::Step, 1.197f);      // batch I item 5, chosen 0.9; tuning round 2026-11-12 (iaus-sim-v2 31.11 gates) 1.197: above the hold row it replaces (Sneak 0.6) and below a blow (a blow from stealth is generated at once when ready)
+            aw(Family::Decast, 1.5f);      // PLACEHOLDER (S4): it is instant and free, and while it waits he is seen
             aw(Family::DrinkBuff, 0.5f);   // PLACEHOLDER (feat/buff-potions): NOT from the sim, not hand-tuned. MEASURED (harness, lap one, Knight melee): a fortify
                                            // or resist candidate scores 0.500 against an Attack's 0.42 (weight 0.8), so on the first lap a buff potion CAN outrank a
                                            // blow; Generate.cpp gates fortify on the worth-the-gold rule (WorthTable::floor, feat/consumables; it replaced the old kBuffFortifyFoeRatio level rule). The sim / oracle search sets the real number.
@@ -530,6 +547,7 @@ namespace MFO::Iaus {
             { "t.spotRadius", &Tuning::spotRadius }, { "t.spotSplitArea", &Tuning::spotSplitArea }, { "t.spotEyeU", &Tuning::spotEyeU }, { "t.spotHighU", &Tuning::spotHighU },
             { "t.spotPortalU", &Tuning::spotPortalU }, { "t.spotPortalStandU", &Tuning::spotPortalStandU }, { "t.spotExitU", &Tuning::spotExitU }, { "t.spotPeelU", &Tuning::spotPeelU },
             { "t.spotArriveU", &Tuning::spotArriveU }, { "t.spotFactMoveU", &Tuning::spotFactMoveU }, { "t.spotFactMaxAgeSec", &Tuning::spotFactMaxAgeSec }, { "t.spotKeptAgeSec", &Tuning::spotKeptAgeSec }, { "t.spotUnknownExposure", &Tuning::spotUnknownExposure },
+            { "t.lightNearU", &Tuning::lightNearU }, { "t.lightStoreyU", &Tuning::lightStoreyU }, { "t.lightMaxAgeSec", &Tuning::lightMaxAgeSec }, { "t.lightMinConf", &Tuning::lightMinConf }, { "t.lightLitLevel", &Tuning::lightLitLevel }, { "t.lightDarkHoldSec", &Tuning::lightDarkHoldSec },   // S4
             { "t.unmeasuredDamage", &Tuning::unmeasuredDamage },   // fix/spell-worth C2: game only until the sim mirror (PLACEHOLDER)
         };
         if (!std::isfinite(a_v)) { if (a_why) *a_why = "not a finite number"; return false; }
@@ -574,7 +592,8 @@ namespace MFO::Iaus {
             constexpr U kBlock[] = { { Cons::BlockNeed, 1 }, { Cons::BoostGuardLine, 1 }, { Cons::CooldownHard, 1 } };
             constexpr U kBash[] = { { Cons::RangeMelee, 1 }, { Cons::Los, 1 }, { Cons::BashNeed, 1 }, { Cons::SelfStamina, 1 }, { Cons::CooldownHard, 1 }, { Cons::FoeThreat, 1 } };
             constexpr U kRegroup[] = { { Cons::RegroupNeed, 1 }, { Cons::RegroupFar, 1 }, { Cons::CooldownHard, 1 } };
-            constexpr U kSneak[] = { { Cons::Unseen, 1 }, { Cons::HoldStill, 1 }, { Cons::ClassFit, 1 } };   // G2 Layer 1: the hold row (Generate.cpp Holds)
+            constexpr U kSneak[] = { { Cons::Unseen, 1 }, { Cons::HoldStill, 1 }, { Cons::ClassFit, 1 }, { Cons::SelfLight, 1 } };   // G2 Layer 1: the hold row (Generate.cpp Holds)
+            constexpr U kDecast[] = { { Cons::LightOnStealth, 1 } };   // S4
             constexpr U kRetreat[] = { { Cons::RetreatDanger, 1 }, { Cons::NoHealRetreat, 1 }, { Cons::DisengageClass, 1 }, { Cons::BoostMortalDanger, 1 } };
             constexpr U kDrinkHealth[] = {
                 { Cons::DrinkNeed, 1 }, { Cons::Stock, 1 }, { Cons::NoHealDrink, 1 }, { Cons::CooldownHard, 1 },
@@ -628,6 +647,7 @@ namespace MFO::Iaus {
                 { Cons::HealReach, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 }, { Cons::AlreadyActive, 1 },
                 { Cons::BuffEarly, 1 }, { Cons::BuffMelee, 1 }, { Cons::Affordable, 1 }, { Cons::MpReserve, 0.5f },
                 { Cons::ClassFit, 1 }, { Cons::BoostBuffThreat, 1 }, { Cons::BoostSpellPerks, 1 }, { Cons::HandLost, 1 },
+                { Cons::LightVeto, 1 }, { Cons::LightNeed, 1 }, { Cons::LightRank, 1 },   // S4: a light buff only
             };
             constexpr U kSummon[] = {
                 { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 }, { Cons::CooldownSoft, 1 }, { Cons::SummonLive, 1 },
@@ -657,6 +677,7 @@ namespace MFO::Iaus {
             constexpr U kScrollBuff[] = {
                 { Cons::HealReach, 1 }, { Cons::HandFree, 1 }, { Cons::CooldownHard, 1 }, { Cons::AlreadyActive, 1 },
                 { Cons::BuffEarly, 1 }, { Cons::BuffMelee, 1 }, { Cons::ClassFit, 1 },
+                { Cons::LightVeto, 1 }, { Cons::LightNeed, 1 }, { Cons::LightRank, 1 },
                 { Cons::Stock, 1 }, { Cons::ScrollStock, 1 }, { Cons::ScrollMpLow, 1 },
             };
         }
@@ -687,6 +708,7 @@ namespace MFO::Iaus {
             case Family::Disengage:    return kDisengage;
             case Family::BackOff:      return kBackOff;
             case Family::Step:         return kStep;
+            case Family::Decast:       return kDecast;
             case Family::Scroll:
                 if (scrollOf == Family::CastHeal) return kScrollHeal;
                 if (scrollOf == Family::CastBuff) return kScrollBuff;
@@ -943,11 +965,17 @@ namespace MFO::Iaus {
                 return B((std::isfinite(f.recipientTtl) && f.recipientTtl < 5.0f) || (f.recipientSelf && f.recipientHp < t.dyingSelfHp) ||
                          (!f.recipientSelf && f.recipientHp < t.dyingAllyHp) ||
                          (std::isfinite(f.recipientHitsToDown) && f.recipientHitsToDown <= t.dyingHitsToDown));
+            // LIGHT (S4)
+            case Cons::LightVeto:      return f.lightBuff ? B(f.recipientWantsDark) : In::Off();
+            case Cons::LightNeed:      return f.lightBuff && f.recipientLight >= 0.0f ? In(f.recipientLight) : In::Off();
+            case Cons::LightRank:      return f.lightBuff && f.lightRank >= 0.0f ? In(f.lightRank) : In::Off();
+            case Cons::SelfLight:      return c.family == Family::Sneak && f.selfLight >= 0.0f ? In(f.selfLight) : In::Off();
+            case Cons::LightOnStealth: return B(f.lightOnStealth);
             // MOVEMENT (S1): read from SpotFacts by Spots.cpp, in no action family's set
             case Cons::SpotPath: case Cons::SpotSight: case Cons::SpotExposure: case Cons::SpotFireLine: case Cons::SpotRange: case Cons::SpotPathExposed:
             case Cons::SpotExits: case Cons::SpotAllyDist: case Cons::SpotHostileArea: case Cons::SpotLeash: case Cons::SpotClimb: case Cons::SpotDrop:
             case Cons::SpotDetected: case Cons::SpotLight: case Cons::SpotFoeReach: case Cons::SpotLane: case Cons::SpotPortalBusy: case Cons::SpotServes:
-            case Cons::BoostSpotCover: case Cons::SpotRegionTrust: case Cons::SpotPathTrust: return In::Off();
+            case Cons::BoostSpotCover: case Cons::SpotRegionTrust: case Cons::SpotPathTrust: case Cons::SpotPathLight: return In::Off();
             case Cons::kCount:        break;
             }
             return In::Off();

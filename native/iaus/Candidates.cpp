@@ -694,12 +694,12 @@ namespace MFO::Iaus::Candidates {
         const auto& g = a_set.gen;
         const auto n = [&](Family f) { return g.perFamily[static_cast<std::size_t>(f)]; };
         return std::format("foes {}/{} | attack {} power {} taunt {} retreat {} drink {}/{}/{} buff-potion {} posture {} | offense {} "
-                           "control {} heal {} buff {} summon {} ward {} hold {} | dropped cost {} class {} hand {} target {} | "
+                           "control {} heal {} buff {} summon {} ward {} hold {} decast {} | dropped cost {} class {} hand {} target {} | "
                            "book {} emergency {:.2f}{}",
                            g.foesKept, g.foesSeen, n(Family::Attack), n(Family::PowerAttack), n(Family::Taunt),
                            n(Family::Retreat), n(Family::DrinkHealth), n(Family::DrinkStamina), n(Family::DrinkMagicka), n(Family::DrinkBuff),
                            n(Family::Posture), n(Family::CastOffense), n(Family::CastControl), n(Family::CastHeal),
-                           n(Family::CastBuff), n(Family::CastSummon), n(Family::CastWard), n(Family::Sneak), g.droppedCost,
+                           n(Family::CastBuff), n(Family::CastSummon), n(Family::CastWard), n(Family::Sneak), n(Family::Decast), g.droppedCost,
                            g.droppedClass, g.droppedHand, g.droppedTarget, a_set.snap.hasBook ? "yes" : "NO",
                            g.emergency, g.selfUnreadable ? " SELF-UNREADABLE" : "");
     }

@@ -1,0 +1,19 @@
+# A dark room with one lit patch on the straight way between the party and the foe, and dark floor to pass it by. (torch-step, light-on-player)
+nopool
+class fixture_light
+light 0.05
+lit 7 5 10 10 0.9
+map
+######################
+#P...................#
+#....................#
+#....................#
+#....................#
+#.............F......#
+#....................#
+#....................#
+#....................#
+#....................#
+#....................#
+######################
+end
