@@ -1972,4 +1972,19 @@ Options = orders x his ranked actions (the three the pass pairs). An action that
 
 ### 23.5 Proof and cost
 
-PROOFTABLE
+Proof on baa2d811 (later commits are docs): road off v2 v3 v4 at 1 and 8 threads, point and pinned byte identical with a8f9c24b. The road-off oracle, and the strict and point oracle with `--oracle-orders off`, print the same ORC / GAP / SPELL lines as the commit before S5-C. Strict 1 = 8 threads and = that commit. Harness 0 failed, golden untouched. 63 spot scenarios, seeds 1 4 913 6161. CLI-CHECKS pass (five new ones).
+
+Gap sign (oracle less IAUS, same fights, ceiling 32, the tune's cuts; mean and standard error):
+
+| Set | Fights | Orders on | `off` (no claim) |
+|---|---|---|---|
+| evoker on the ridge (the F3 symptom), seed 7 | 10 | +2.72 (0.87), every fight at or above 0 | +10.45 (8.21), one knife-edge fight |
+| warrior natural, seed 7 | 10 | +11.08 (8.46) | |
+| evoker natural, seed 7 | 10 | +9.01 (7.36) | |
+| knight, seeds 21 22 | 24 | +12.97 (5.89) | on less off -2.58 (3.27), on less rank +3.83 (3.16) |
+| evoker, seeds 21 22 | 24 | +6.13 (6.24) | on less off +4.22 (6.38), on less rank +4.23 (6.61) |
+| warrior, seeds 21 22 | 24 | +2.52 (0.95) | on less off +0.08 (0.34), on less rank +0.82 (0.36) |
+
+Claim share, oracle against IAUS: ridge evoker 35 / 32, warrior 60 / 69, knight 38 / 18 percent. The order race is worth something over the claim alone. Against a subject who is never ordered (off = Free all fight) no difference is resolved on these sets: single knife-edge fights (6 or 90) go either way and make the standard error.
+
+Timing, the 12 fights of s5-plan.md 7.1 (archer, knight, thief, warrior, strict,kite, full ceiling, user CPU): planner's binary 1,506 s, this one with orders off 2,022 s, with orders on **5,377 s** (2.7 times off, a share of it one archer fight that ran to the time limit: 190 order windows at 919 rollouts for the three archer fights). Contended machine. That one fight makes a ratio from 12 fights rough, S5-F owes cuts 4 and 6 and the re-pricing of section 8 before a round.
