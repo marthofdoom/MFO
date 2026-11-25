@@ -24,6 +24,7 @@
 // Worker-serial (#4); the rate-limit table takes a leaf lock anyway, like Unanimated.cpp's.
 #include "Actuation_internal.h"
 #include "PartyGap.h"
+#include "apmf/APMFBridge.h"
 #include <mutex>
 
 namespace MFO::Actuation {
@@ -44,7 +45,14 @@ namespace MFO::Actuation {
         // controller is the ONLY missing gate. Any other answer (a shape no claim road serves, Harbinger absent) keeps the
         // road it declares; a Claim answer cannot coincide with no controller.
         const bool other = a_recipient && a_recipient != a_follower;
-        const bool onlyController = ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false, other ? a_recipient : nullptr) == BuffRoad::DirectNoCombat;
+        const bool roadNoCombat = ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false, other ? a_recipient : nullptr) == BuffRoad::DirectNoCombat;
+        // A concentration cast has no ChooseBuffRoad claim: its claim road (DirectTarget / DirectSelf, Task 1) needs the same
+        // controller plus Harbinger's offense-cast claim gates (the review's F1: buff-kind concentration at another recipient, at self
+        // with non-Self delivery, and an ambiguous row at self).
+        const bool conc = a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
+        const bool concGates = conc && APMFBridge::Available() && APMFBridge::OffenseCastClaimSupported() && APMFBridge::CastSeatsSupported() &&
+                               Config::g_apmfCast.load() && !Config::g_legacyCastHybrid.load();
+        const bool onlyController = PartyGap::OnlyGate(roadNoCombat, conc, concGates);
         return PartyGap::Holds(combatTable, hasController, buffKind, onlyController);
     }
 

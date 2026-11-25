@@ -7,6 +7,12 @@
 // the animated claim road is missing (ChooseBuffRoad answered DirectNoCombat). A heal is never held (plan decision D1:
 // it keeps the instant road), nor is anything out of combat or with a controller.
 namespace MFO::PartyGap {
+    // The "only missing gate" test. ChooseBuffRoad answers DirectNoSeat for a CONCENTRATION shape whose claim road (the Task-1
+    // concentration claim, DirectTarget / DirectSelf) also needs only the controller, so a concentration cast whose claim gates are
+    // otherwise open counts too. Before this, those shapes streamed unanimated in the gap.
+    [[nodiscard]] constexpr bool OnlyGate(bool a_roadIsDirectNoCombat, bool a_concentration, bool a_concentrationClaimGatesOpen) {
+        return a_roadIsDirectNoCombat || (a_concentration && a_concentrationClaimGatesOpen);
+    }
     [[nodiscard]] constexpr bool Holds(bool a_combatTable, bool a_hasOwnController, bool a_buffKind, bool a_controllerIsTheOnlyMissingGate) {
         return a_combatTable && !a_hasOwnController && a_buffKind && a_controllerIsTheOnlyMissingGate;
     }

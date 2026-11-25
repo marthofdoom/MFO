@@ -56,7 +56,7 @@ namespace MFO::SeatRows {
     // A claim that carries the flag casts AT MOST ONCE on any caster type, so a spell whose effects map to several caster rows
     // (Mystic Wind: Script + Restore) can be claimed although a candidate row (Restore, Offensive) has no bound of its own.
     //   * kFireOnceBit / kMinAbiFireOnce: kCastSeat_FireOnce and the ABI that first reports it (the literals are static_assert-ed
-    //     against the header in cast/BuffRoad.cpp).
+    //     against the header in apmf/CastClaims.cpp).
     //   * kEngineRowBit: the CastSeatCoverage bit of the row's own seat, indexed by cast/Actuation.h EngineRow's ordinal (the order
     //     is static_assert-ed there). 0 = no seat (Unknown). A rowless spell (NoRow) is served as Script by Harbinger.
     //   * FireOnceServed: the whole gate. abi >= 47 AND the coverage carries kCastSeat_FireOnce AND EVERY candidate row of the mask

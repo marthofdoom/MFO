@@ -1085,8 +1085,8 @@ namespace MFO::Actuation {
             }
 
             // THE PARTY-FIGHT GAP HOLD, ally fork (anim-residue plan A1, cast/PartyGap.cpp): a Buff-kind spell at an ally / the player
-            // whose only missing gate is his own controller is not cast on the direct stream below (target-stream / the concentration
-            // stream's fallback). Transparent, asked again every lap. A heal never reaches this (buffKind excludes it: D1).
+            // whose only missing gate is his own controller is not cast on the direct stream below (target-stream, or the concentration claim's own
+            // road: PartyGap::OnlyGate holds a concentration cast whose claim gates are open). Transparent, asked again every lap. A heal never reaches this (buffKind excludes it: D1).
             if (buffKind && a_target && a_target != a_follower && g_firingRule != kNoRule &&
                 HoldOwnControllerOnlyGap(a_follower, spell, buffRecip, "cast-on ally"))
                 return { Result::NoOp, "buff held: party fight, no combat controller (animated road only)", true };

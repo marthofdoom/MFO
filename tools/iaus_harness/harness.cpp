@@ -3144,6 +3144,15 @@ static void FireOnceAndPartyGapRules() {
     Check(!Holds(true, true, true, true),   "party gap: with his own controller the claim road serves it, nothing is held");
     Check(!Holds(false, false, true, true), "party gap: off the combat table (out of combat) nothing is held, the substrate road owns it");
     Check(!Holds(true, false, true, false), "party gap: a shape no claim road serves (another gate missing) keeps the road it declares");
+    using MFO::PartyGap::OnlyGate;
+    // F1: concentration shapes ChooseBuffRoad answers DirectNoSeat (buff concentration at an ally; non-Self concentration at self;
+    // ambiguous-row concentration at self) are held in the gap when the concentration claim's gates are open
+    Check(Holds(true, false, true, OnlyGate(false, true, true)),  "party gap: a concentration buff at an ally, claim gates open, no controller: HELD");
+    Check(Holds(true, false, true, OnlyGate(false, true, true)),  "party gap: non-Self concentration at self, claim gates open, no controller: HELD");
+    Check(Holds(true, false, true, OnlyGate(false, true, true)),  "party gap: ambiguous-row concentration at self, claim gates open, no controller: HELD");
+    Check(!Holds(true, false, true, OnlyGate(false, true, false)), "party gap: a concentration cast with a claim gate closed (Harbinger absent) keeps its road");
+    Check(!Holds(true, false, true, OnlyGate(false, false, true)), "party gap: a non-concentration cast is not helped by the concentration gates");
+    Check(!Holds(true, true, true, OnlyGate(false, true, true)),   "party gap: concentration with his own controller: unchanged, not held");
 }
 
 int main() {
