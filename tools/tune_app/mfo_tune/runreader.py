@@ -7,6 +7,10 @@ import time
 
 LINE_RE = re.compile(r"^(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)\s\s(.*)$")
 ROW_RE = re.compile(r"^(classes|edge|gap)\s+(\S+)\s+pass\s+(\d+)\s+(\S+)\s+(\S+)\s+->\s+(\S+)\s+train\s+([+-][\d.]+)\s+\(se\s+([\d.]+)\)\s+(.*)$")
+# the rows the other searching stages log (tune_driver.py): follow, spells and the shared-value stages worth and loot. Same dict as a classes row.
+FOLLOW_ROW_RE = re.compile(r"^(follow)\s+(\S+)\s+(\S+)\s+->\s+(\S+)\s+d\s+([+-][\d.]+)\s+\(se\s+([\d.]+)\)\s+(.*)$")
+SPELLS_ROW_RE = re.compile(r"^(spells)\s+round\s+(\d+)\s+(\S+)\s+(\S+)\s+->\s+(\S+)\s+screen\s+([+-][\d.]+)\s+\(se\s+([\d.]+)\)\s+(.*)$")
+SHARED_ROW_RE = re.compile(r"^(worth|loot)\s+pass\s+(\d+)\s+(\S+)\s+(\S+)\s+->\s+(\S+)\s+train\s+(?:\[([+-]?[\d.]+),\s*([\d.]+)\]|None)\s+(.*)$")
 STAGE_DONE_RE = re.compile(r"^STAGE (\S+) done(?: \((\d+) s)?")
 
 
@@ -58,10 +62,22 @@ def parse_log(path, year=None):
             t = time.mktime((year + 1, int(mo), int(dd), int(hh), int(mi), int(ss), 0, 0, -1))
         prev = t
         e = {"t": t, "raw": raw, "msg": msg, "kind": "info", "cls": "", "stage": ""}
-        r = ROW_RE.match(msg)
+        r, fr, sr, hr = ROW_RE.match(msg), FOLLOW_ROW_RE.match(msg), SPELLS_ROW_RE.match(msg), SHARED_ROW_RE.match(msg)
         if r:
             st, cls, ps, knob, old, new, d, se, verdict = r.groups()
             e.update(kind="row", stage=st, cls=cls, knob=knob, old=old, new=new, d=float(d), se=float(se), verdict=verdict.strip(),
+                     accepted=verdict.strip().startswith("ACCEPTED"), **{"pass": int(ps)})
+        elif fr:
+            st, cls, knob, new, d, se, verdict = fr.groups()
+            e.update(kind="row", stage=st, cls=cls, knob=knob, old="", new=new, d=float(d), se=float(se), verdict=verdict.strip(),
+                     accepted=verdict.strip().startswith("ACCEPTED"), **{"pass": 1})
+        elif sr:
+            st, rnd, knob, old, new, d, se, verdict = sr.groups()
+            e.update(kind="row", stage=st, cls="", knob=knob, old=old, new=new, d=float(d), se=float(se), verdict=verdict.strip(),
+                     accepted=verdict.strip().startswith("ACCEPTED"), **{"pass": int(rnd)})
+        elif hr:
+            st, ps, knob, old, new, d, se, verdict = hr.groups()
+            e.update(kind="row", stage=st, cls="", knob=knob, old=old, new=new, d=float(d) if d else 0.0, se=float(se) if se else 0.0, verdict=verdict.strip(),
                      accepted=verdict.strip().startswith("ACCEPTED"), **{"pass": int(ps)})
         elif msg.startswith("STAGE"):
             e["kind"] = "stage"
@@ -73,7 +89,7 @@ def parse_log(path, year=None):
         elif msg.startswith("OPEN DECISION"):
             e["kind"] = "decision"
         else:
-            m2 = re.match(r"^(classes|edge|gap|rejudge)\s+(\S+)", msg)
+            m2 = re.match(r"^(classes|edge|gap|rejudge|follow|spells|worth|loot)\s+(\S+)", msg)
             if m2:
                 e["stage"] = m2.group(1)
                 e["cls"] = m2.group(2).rstrip(":")
@@ -247,7 +263,17 @@ def final_table(summ):
 
 
 def kept_specs(summ):
-    """The final accepted table (final_table) without the values recalib says do not hold."""
+    """The table this run SHIPS. A finished run says it itself: summary.json `ship` (tune_driver.ship_state) holds the table only when the joint gate
+    PASSED on exactly it with exactly the accepted shared values, and is EMPTY when it failed, did not run, or graded another table or other shared
+    values (review E3 of 2d6948a4: the Files tab used to write the per-class values of a FAILED joint, and class rows without joint.sets). A summary
+    without `ship` (a run still writing, or an older driver): joint.verdict FAIL offers nothing; else final_table (the table the driver would ship)
+    without the values recalib says do not hold."""
+    ship = summ.get("ship")
+    if isinstance(ship, dict):
+        return list(ship.get("table") or [])
+    j = summ.get("stages", {}).get("joint")
+    if isinstance(j, dict) and str(j.get("verdict", "")).upper().startswith("FAIL"):
+        return []
     drop = set(recalib_dropped(summ))
     return [s for s in final_table(summ) if s not in drop]
 
