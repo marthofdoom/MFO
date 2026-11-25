@@ -160,7 +160,7 @@ namespace {
         spdlog::set_default_logger(std::move(log));
         spdlog::set_pattern("[%H:%M:%S.%e] [%l] %v");
 #ifdef MFO_DEV_SELFTEST
-        SelfTest::InstallLogTap();   // dev builds only
+        MFO::SelfTest::InstallLogTap();   // dev builds only
 #endif
 
         for (const auto& f : rotated.failed)

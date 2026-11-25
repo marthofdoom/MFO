@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <queue>
+#include <unordered_set>
 
 namespace MFO::SelfTest {
 

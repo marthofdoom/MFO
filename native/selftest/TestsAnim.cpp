@@ -25,6 +25,7 @@
 #include <spdlog/sinks/base_sink.h>
 
 #include <deque>
+#include <unordered_set>
 
 namespace MFO::SelfTest {
 
@@ -209,7 +210,7 @@ namespace MFO::SelfTest {
             if (sp->GetDelivery() != RE::MagicSystem::Delivery::kTargetLocation || !Actuation::IsSummonSpell(sp)) return false;
             if (Actuation::CastRoadUnsupported(sp) || Actuation::SummonClaimUnservedWhy(sp, Actuation::ClassifyArchetype(sp))) return false;
             auto drop = Iaus::Prune::Drop::Keep;
-            Iaus::SpellBook::WouldWeigh(sp, Iaus::ClassGate{}, nullptr, &drop);
+            (void)Iaus::SpellBook::WouldWeigh(sp, Iaus::ClassGate{}, nullptr, &drop);
             return drop == Iaus::Prune::Drop::Keep;
         }
         const Pools& Scan() {
@@ -227,7 +228,7 @@ namespace MFO::SelfTest {
                 auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(id);
                 if (!sp || sp->data.spellType != RE::MagicSystem::SpellType::kSpell || sp->effects.empty() || !Vocab::IsCastableSpell(sp)) continue;
                 auto drop = Iaus::Prune::Drop::Keep;
-                Iaus::SpellBook::WouldWeigh(sp, Iaus::ClassGate{}, nullptr, &drop);
+                (void)Iaus::SpellBook::WouldWeigh(sp, Iaus::ClassGate{}, nullptr, &drop);
                 if (drop == Iaus::Prune::Drop::SelfBlast) g_pools.blasts.push_back(id);
                 if (SummonOk(sp)) g_pools.summons.push_back(id);
                 if (sp->GetDelivery() != RE::MagicSystem::Delivery::kSelf || sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) continue;
@@ -347,6 +348,7 @@ namespace MFO::SelfTest {
                 if (claims == 0) s.n[6] += 0.5;
                 if (s.n[6] < kT.claimWait) return Step::Continue();
                 if (const auto lim = Lines(Since(c), "[summon] " + Hex(c.id), Hex(Spell(c)), "limit"); !lim.empty()) return End(Step::Skip("his summon slot is taken: " + Last(lim)));
+                if (AnySummon(c.follower)) return End(Step::Skip("another creature of his holds the summon slot; " + s.note));
                 if (Pool(c.follower) < Cost(SpellForm(c), c.follower)) return End(Step::Skip("his magicka never reached the cost; " + s.note));
                 if (a_iaus) {
                     const auto all = Lines(Since(c), "[iaus] ", "(" + Hex(c.id) + ")");
