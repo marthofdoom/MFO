@@ -503,6 +503,13 @@ namespace MFO::Iaus {
     const Tuning& DefaultTuning() { return LiveTuning(); }
 
     bool SetTuningScalar(Tuning& a_t, std::string_view a_name, float a_v, std::string* a_why) {
+        if (a_name.rfind("sw.", 0) == 0) {   // S11b: the spell-worth table (iaus/SpellWorthTable.h), one name per field
+            if (!std::isfinite(a_v)) { if (a_why) *a_why = "not a finite number"; return false; }
+            if (a_v < 0.0f) { if (a_why) *a_why = "out of range: must be >= 0"; return false; }
+            if (SetSpellWorthKnob(a_t.spellWorth, a_name, a_v)) return true;
+            if (a_why) *a_why = "unknown sw.<name> knob";
+            return false;
+        }
         struct Scalar { const char* name; float Tuning::* m; };
         static constexpr Scalar kScalars[] = {   // the sim's kTuneScalars (tools/iaus_sim/Tune.h), same names
             { "t.momentum", &Tuning::momentum }, { "t.postureMomentum", &Tuning::postureMomentum }, { "t.preempt", &Tuning::preemptMargin }, { "t.actFloor", &Tuning::actFloor },

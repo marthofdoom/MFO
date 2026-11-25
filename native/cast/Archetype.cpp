@@ -289,7 +289,7 @@ namespace MFO::Actuation {
                 // wards are kAccumulateMagnitude (32) on kWardPower; this test read kValueModifier only, so the
                 // shape never came out Ward. The engine-row table already matches them through the same alias
                 // (LookupAv: `r.arch == kValueModifier && IsVmAlias(a)`), so the row and the shape agree again.
-                anyWard      |= (a == Arch::kValueModifier || IsVmAlias(a)) && b->data.primaryAV == AV::kWardPower;
+                anyWard      |= IsWardEffect(b);
                 o.anyHostile |= b->data.flags.all(RE::EffectSetting::EffectSettingData::Flag::kHostile);
                 o.snapToNavMesh |= b->data.flags.all(RE::EffectSetting::EffectSettingData::Flag::kSnapToNavMesh);
                 o.area = std::max(o.area, eff->effectItem.area);
@@ -459,6 +459,12 @@ namespace MFO::Actuation {
         case EngineRow::Reanimate:    return "Reanimate";
         }
         return "?";
+    }
+
+    bool IsWardEffect(const RE::EffectSetting* a_base) {
+        if (!a_base) return false;
+        const Arch a = a_base->data.archetype;
+        return (a == Arch::kValueModifier || IsVmAlias(a)) && a_base->data.primaryAV == AV::kWardPower;
     }
 
     SpellArchetype ClassifyArchetype(RE::SpellItem* a_spell, bool a_seat0) {

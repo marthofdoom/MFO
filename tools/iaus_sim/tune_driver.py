@@ -28,7 +28,7 @@ STAGES    prep      the world inputs exist, each list's potion-worth table is me
                     on its gap fights: a candidate is accepted when it closes the gap to the class oracle (the class's own abilities only),
                     holds on fresh gap fights and on held-out places and books, and passes the J gates as a FENCE. Its RULE is its docstring.
           spells    the shared spell-worth numbers (t.unmeasuredDamage, the cast families' weights, the damage / exploit / overkill / variety /
-                    control_worth curves, the SpellWorth table once native fills it) against the SPELL REGRET on field-size books, pooled over
+                    control_worth curves, the SpellWorth rows of SW_KNOBS) against the SPELL REGRET on field-size books, pooled over
                     the cells that cast. One oracle fight prices every candidate (--regret-alt). Its RULE is its docstring.
           joint     the whole final table against the shipped one on every cell (128 seeds, three configs), and each T1 value
                     left out in turn. A failure is an open decision: no value is written.
@@ -1914,13 +1914,15 @@ def follow_class(cls, knobs, st):
 SPELL_FAMILIES = ("cast_offense", "cast_control", "cast_heal", "cast_buff", "cast_summon", "cast_ward")
 SPELL_CONS = ("damage", "exploit", "overkill", "variety", "control_worth")
 SPELL_SCALARS = [("t.unmeasuredDamage", 0.5, [0.0, 0.1, 0.25, 0.35, 0.65, 0.8])]   # fix/spell-worth C2's placeholder (iaus/Core.h Tuning::unmeasuredDamage)
-# native iaus/SpellWorth.h `struct SpellWorth` (S11b): one row per field once Estimate-side code reads it, as ("sw.<field>", shipped, [values]).
-# Until then every field is listed in SW_NOT_SEARCHED with the reason, and test_tune_driver.py checks the two lists cover the struct.
-SW_KNOBS = []
-_SW_WHY = "iaus/SpellWorth.cpp is a skeleton (S11b): no consideration reads it yet, so the lab cannot move it"
-SW_NOT_SEARCHED = {"sw." + f: _SW_WHY for f in ("landSecBase", "landSecOffense", "landSecControl", "landSecHeal", "landSecBuff", "landSecSummon", "landSecWard", "recoverSec", "channelUptime",
-                                                 "channelMinSec", "areaFoesIntoDamage", "areaFriendPenalty", "dotLifeShare", "foeLifeFloorSec", "controlDpsScale", "buffDpsScale", "wardDpsScale",
-                                                 "summonDpsScale", "summonLifeSec", "redundantEffectScale", "killConfirmBonus", "magickaHorizonSec", "magickaDryPenalty", "failedStartSec")}
+# native iaus/SpellWorthTable.h `struct SpellWorth` (S11b): a row per searched field, as ("sw.<field>", shipped, [values]); every other field is listed in
+# SW_NOT_SEARCHED with its reason. test_tune_driver.py checks that the two lists cover the struct.
+SW_KNOBS = [("sw.live", 0.0, [0.25, 0.5, 1.0])]   # the switch: how far the reader replaces today's estimate
+_SW_WHY = "read only while sw.live > 0 and it ships 0: one value at a time, the lab would price it as no change. Searchable once a live value is accepted"
+_SW_DEAD = "its term has no Generate.cpp caller or no reader yet (a control's rate, buff, ward, summon, redundant, a row's failed starts): the lab cannot move it"
+SW_NOT_SEARCHED = {"sw." + f: _SW_WHY for f in ("landSecBase", "landSecOffense", "landSecHeal", "recoverSec", "channelUptime", "channelMinSec", "areaFoesIntoDamage",
+                                                 "areaFriendPenalty", "dotLifeShare", "foeLifeFloorSec", "killConfirmBonus", "magickaHorizonSec", "magickaDryPenalty")}
+SW_NOT_SEARCHED.update({"sw." + f: _SW_DEAD for f in ("landSecControl", "landSecBuff", "landSecSummon", "landSecWard", "armorPctPerPoint", "armorMitigationCap", "controlDpsScale", "buffDpsScale",
+                                                       "wardDpsScale", "summonDpsScale", "summonLifeSec", "redundantEffectScale", "failedStartSec")})
 
 
 def spell_knobs():
@@ -2818,7 +2820,7 @@ def render_md():
         for r in sp.get("rows", []):
             L.append("| %d | `%s` | %g -> %g | %+.3f (%.3f) | %s | %s | %s |" % (r["round"], r["knob"], r["shipped"], r["value"], r["screen"][0], r["screen"][1], "%+.3f (%.3f)" % tuple(r["fresh"]) if "fresh" in r else "-",
                      "%+.3f (%.3f)" % tuple(r["held_out"]) if "held_out" in r else "-", r["why"]))
-        L += ["", "Not searched (SpellWorth, until native reads it): %s" % ", ".join(sorted(sp.get("not_searched", {}))), ""]
+        L += ["", "Not searched (SpellWorth, see SW_NOT_SEARCHED): %s" % ", ".join(sorted(sp.get("not_searched", {}))), ""]
     if SUMMARY.get("sight_skipped"):
         L += ["## Not searched: knobs that read sight", "", "The lab's sight is geometry whose error against the engine's rays is not measured (no parity probe yet), so these were kept out of every stage (`--sight-knobs` lifts it): " + ", ".join("`%s`" % k for k in SUMMARY["sight_skipped"]), ""]
     L += ["## AUTOMATIC DECISIONS (--decisions %s; the rule and the numbers are in summary.json auto_decisions)" % A.decisions, "", "| Kind | Verdict | What | Evidence |", "|---|---|---|---|"]

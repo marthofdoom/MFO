@@ -913,6 +913,8 @@ namespace MFO::Actuation {
                                              // costliest effect when several rows compete); -1 = none (NoRow / Unknown / no effects)
         const char*   kindName    = "?";    // CasterConsent::ClassifySpell: Offense / Buff / Heal (static literal)
     };
+    // THE ward test (one reader): a value-modifier-family effect on WardPower. Form data, any thread. Null -> false.
+    bool IsWardEffect(const RE::EffectSetting* a_base);
     // Cached per FormID under a leaf mutex (record data is static after load). Null -> default.
     // a_seat0 = model APMF seat 0 (STATUS.md:135, :186-188): the claim's driven form keys self=1, so a
     // heal-OTHER claim lands in the Restore row. Used for the HealClaim road only.

@@ -21,6 +21,7 @@
 // THREADING: none of its own. Every function is reentrant over its arguments. A Mind is per follower and is owned
 // by whoever holds it (Engine.cpp keeps them in the g_followers worker domain, #4).
 #include "iaus/ConsumableWorth.h"
+#include "iaus/SpellWorthTable.h"
 
 #include <array>
 #include <cstddef>
@@ -386,6 +387,8 @@ namespace MFO::Iaus {
         float spotKeptAgeSec = 1.0f;             // a committed spot's own sight is asked again once its answer is this old (kMarkSightLost)
         float spotUnknownExposure = 0.75f;       // the share an UNANSWERED threat counts as in spot_exposure: neither hidden nor surely seen. It keeps the ray budget from deciding the place
         WorthTable worth{};
+        // S11b (iaus/SpellWorth.h): what one cast of a spell is worth in one unit for every family. SHIPPED INERT (`sw.live` = 0): `sw.<field>` in shared.txt.
+        SpellWorth spellWorth{};
     };
     [[nodiscard]] inline constexpr float MoveDecisionSec(const Tuning& a_t) { return a_t.moveDecisionSec >= kMoveDecisionFloorSec ? a_t.moveDecisionSec : kMoveDecisionFloorSec; }   // a NaN reads as the floor
 

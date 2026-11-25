@@ -403,6 +403,7 @@ namespace MFO::Iaus::SpellBook {
             }
             // The engine fills (iaus/Fills.h): what one cast does to health, probe first, written only with
             // [Debug] bIausFillSpells = 1. With both keys off it returns at once.
+            if (e.drop == Prune::Drop::Keep) Fills::ReadSpellForm(a_sp, e);   // S11b: the spell-worth reader's form data, every nature
             if (e.drop == Prune::Drop::Keep &&
                 (e.nature == Prune::Nature::Offense || e.nature == Prune::Nature::Control || e.nature == Prune::Nature::Heal)) {
                 std::string line;
