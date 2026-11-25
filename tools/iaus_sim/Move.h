@@ -151,6 +151,19 @@ namespace Sim {
     inline const MoveFaultRow* g_moveFault = &kMoveFaults[0];
     [[nodiscard]] inline const MoveFaultRow* MoveFaultByName(std::string_view n) { for (const MoveFaultRow& f : kMoveFaults) if (n == f.name) return &f; return nullptr; }
 
+    // S5-C: AN ORDER THE ORACLE GAVE HIM (or an option being tried). The pass is not asked for him at that window, the rest of the party plans around it
+    // (MoveWorld.h PicksBefore). An order ends by TIME (`until`) or by a mark, never by an end event: with blockTold 0 one that blocks never ends.
+    struct OrderPick {
+        bool on = false, fresh = false;              // fresh: not applied yet (the next window's end does)
+        bool spot = false;                           // a pooled place (key). Else his own: kinds says Stay (Free) or Hold (at the order's point, MV::HoldPoint)
+        MV::MoveMode mode = MV::MoveMode::Free; MV::SpotKey key = 0; std::uint32_t kinds = 0;
+        MFO::Iaus::RankedAction act;                 // the action it is paired with. family kCount = none
+        double until = 0.0;
+        [[nodiscard]] bool SameOrder(const OrderPick& o) const { return spot == o.spot && mode == o.mode && (spot ? key == o.key : kinds == o.kinds); }
+    };
+    // --oracle-orders: on = the oracle's followers hold a claim and race orders with their actions (strict road), rank = the claim alone, off = neither (as before S5-C).
+    enum class OracleOrders : std::uint8_t { Off = 0, Rank, On };
+    inline OracleOrders g_oracleOrders = OracleOrders::On;
     // What one follower's claim is doing (by Fight::ctl index).
     struct StrictHand {   // the strict order in hand (StrictWorld.h). A new place claim keeps it
         MV::MoveOrder order; std::uint32_t orderGen = 0; StrictPhase phase = StrictPhase::None; float stopAt = 0.0f; double nextPick = 0.0, notBefore = 0.0, carriedAt = 0.0, retryAt = 0.0, dueBlock = -1.0; std::array<double, 3> blocks{}; std::uint8_t nBlocks = 0;
@@ -159,6 +172,7 @@ namespace Sim {
         MV::MoveOrder next; double nextAt = -1.0;    // Residue::bridgeLag: the order that is not live yet
         double fearSeen = 0.0, fearFree = 0.0;       // the fear effect that was counted, and until when the order is not carried under it
         double actSeen = 0.0, stopUntil = 0.0;       // Residue::shotStop
+        OrderPick pick;                              // S5-C. A new place claim keeps it
     };
     struct MoveClaim : StrictHand {
         bool on = false, arrived = false, dropDue = false;

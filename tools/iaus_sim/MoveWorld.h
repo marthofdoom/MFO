@@ -86,6 +86,7 @@ namespace Sim {
                 // what the holder finds: he was hit hard, and a place the leash no longer lets him stand on (a leash wins over a point, kLeashStandU past it he still stands)
                 if (x.burstMax > q.burstSeen + 1.0f && x.burstMax >= kOneHitLine * x.c.hpMax) m.marks |= MV::kMarkHitHard;
                 q.burstSeen = x.burstMax;
+                if (q.pick.on && q.pick.spot && !q.pick.fresh && F.now >= q.pick.until) { q.pick.on = false; m.marks |= MV::kMarkOrder; }   // S5-C: the order's time is over, he is decided for again
                 m.wantsDark = g_v4.light && (F.WantsDarkNow(x) || c.gate.darkClass); m.invisible = F.now < x.cloakUntil;
                 m.sneakSkill = g_v4.light ? x.spec->Skill(15) + StealthCombine(F.D->sneakSkillRows, *x.spec, false) : -1.0f;
                 if (m.commit.on && m.leash > 0.0f && MV::Dist(m.commit.p, m.anchor) > m.leash + kLeashStandU) m.marks |= MV::kMarkOrder;
@@ -143,14 +144,56 @@ namespace Sim {
         g_moveNs += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
     }
 
+    // The action he is on, first in his ranking (S5-C): what the oracle chose, and what an order being tried is paired with.
+    inline void MoveNoteFront(MoveClaim& q, MFO::Iaus::RankedAction a) {
+        if (a.family == Family::kCount) return;
+        const auto same = [&](const MFO::Iaus::RankedAction& r) { return r.family == a.family && r.form == a.form && r.target == a.target && r.moveOnly == a.moveOnly; };
+        const auto e = q.top.begin() + q.nTop; auto i = std::find_if(q.top.begin(), e, same);
+        if (i == e) { if (q.nTop < q.top.size()) ++q.nTop; i = q.top.begin() + (q.nTop - 1); *i = a; }   // not ranked: the last row makes room
+        std::rotate(q.top.begin(), i, i + 1);
+    }
+    // ── S5-C: orders that are not the pass's. PicksBefore makes each such member a fixed one, so the same assignment table plans the others around him. PicksAfter
+    // takes the borrowed row of a member on his own place out again and says what his assignment is.
+    inline void PicksBefore(Fight& F) {
+        MoveState& S = *F.move.s; MV::PartyPicture& P = S.pic;
+        for (std::size_t ci = 0; ci < S.claim.size(); ++ci) { MoveClaim& q = S.claim[ci]; OrderPick& k = q.pick; if (!k.on) continue;
+            MV::Member* m = MoveMember(F, F.b[static_cast<std::size_t>(F.ctl[ci].body)].c.id);
+            if (!m || !m->decides || m->tri < 0 || (S.force != Force::None && ci == 0)) { k.on = false; continue; }
+            if (!k.fresh) {
+                if (k.spot) { if (!m->commit.on || m->commit.key != k.key) k.on = false; continue; }   // the commit stands by itself
+                if (F.now >= k.until - 1e-9 || m->seen) { k.on = false; continue; } }
+            if (k.spot) {
+                const auto s = std::find_if(P.pool.begin(), P.pool.end(), [&](const MV::Spot& x) { return x.key == k.key; });
+                if (s == P.pool.end()) { k.on = false; continue; }
+                const double at = m->commit.on && m->commit.key == k.key ? m->commit.at : P.t;
+                m->commit = MV::Commit{ true, k.key, s->p, s->tri, k.kinds, k.act, k.act.family == Family::kCount ? m->top[0] : k.act, at };
+            } else {
+                MV::Spot s; s.key = MV::KeyOfStay(m->id); s.p = m->p; s.tri = m->tri; s.kinds = k.kinds; s.portals = m->portals;   // the stay keys sort behind every place: no index moves
+                P.pool.insert(std::upper_bound(P.pool.begin(), P.pool.end(), s.key, [](MV::SpotKey a, const MV::Spot& b) { return a < b.key; }), s);
+                m->commit = MV::Commit{ true, s.key, s.p, s.tri, k.kinds, k.act, k.act, P.t };
+            }
+            m->fixed = true;
+            if (k.fresh) MoveNoteFront(q, k.act);
+        }
+    }
+    inline void PicksAfter(Fight& F, std::vector<MV::Assignment>& as) {
+        MoveState& S = *F.move.s;
+        for (MoveClaim& q : S.claim) { if (!q.pick.on) continue; q.pick.fresh = false; if (q.pick.spot) continue;
+            MV::Member* m = MoveMember(F, F.b[static_cast<std::size_t>(F.ctl[static_cast<std::size_t>(&q - S.claim.data())].body)].c.id); m->commit = MV::Commit{}; m->fixed = false;
+            for (MV::Assignment& a : as) if (a.who == m->id) { a.spot = -1; a.key = MV::KeyOfStay(m->id); a.p = m->p; a.tri = m->tri; a.kinds = q.pick.kinds; a.kept = q.pick.kinds == MV::KindBit(MFO::Iaus::SpotKind::Hold) && MV::HoldPoint(*m, a.p, a.tri); } }
+        while (!S.pic.pool.empty() && (S.pic.pool.back().key & MV::kStayBit)) S.pic.pool.pop_back();
+    }
+
     inline void MoveClose(Fight& F) {
         MoveState& S = *F.move.s; const auto t0 = std::chrono::steady_clock::now(); tl_moveFight = &F;
-        std::vector<MV::Assignment> as; MP::Phase3(S.pic, &MoveProfile, *ActiveTuning(), as); MP::Adopt(S.pic, as);
+        std::vector<MV::Assignment> as; PicksBefore(F); MP::Phase3(S.pic, &MoveProfile, *ActiveTuning(), as); PicksAfter(F, as); MP::Adopt(S.pic, as);
         g_moveNs += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count();
         S.last = as;
         if (g_road == Road::Strict) {
+            std::vector<MV::MoveOrder> was; for (const MV::Member& m : S.pic.party) was.push_back(m.order);
             MP::Orders(S.pic, as, *ActiveTuning());
             for (MV::Member& m : S.pic.party) { Body* x = F.Find(m.id); if (!x || x->ctl < 0) continue; MoveClaim& q = S.claim[static_cast<std::size_t>(x->ctl)];
+                if (q.pick.on && q.pick.spot && m.commit.on && m.commit.key == q.pick.key && m.order.mode != q.pick.mode && m.order.mode != MV::MoveMode::Free) { const MV::MoveOrder& w = was[static_cast<std::size_t>(&m - S.pic.party.data())]; m.order.mode = q.pick.mode; m.order.gen = w.gen + (m.order.Same(w) ? 0u : 1u); }   // S5-C: the place, in the mode it was given
                 MV::MoveOrder o = m.order; if (S.force != Force::None && x->ctl == 0) { S.forced = o; if (S.forceRule) S.forceRule(F, S.forced); if (S.forced.mode != MV::MoveMode::Free && S.forced.mode != MV::MoveMode::kCount) ++S.forceUsed; o = S.forced; const MV::MoveOrder& stands = q.nextAt >= 0.0 ? q.next : q.order; o.gen = S.forceGen + (o.Same(stands) && (o.mode == MV::MoveMode::Free || q.phase != StrictPhase::Ended) ? 0u : 1u); S.forceGen = o.gen; }   // an order that ended is filed again when its rule fires again (F9)
                 if (g_moveFault->noOrders) { o = MV::MoveOrder{}; o.gen = m.order.gen; }
                 if (o.gen != (q.nextAt >= 0.0 ? q.next.gen : q.orderGen)) { if (g_residue.bridgeLag > 0.0f) { q.next = o; q.nextAt = F.now + static_cast<double>(g_residue.bridgeLag); } else StrictPublish(F, *x, q, o); if (F.trace) std::fprintf(F.trace, "%7.2f  ORDER %s: mode %d at (%.0f, %.0f, %.0f) leash %.0f, %.0f from him\n", F.now, x->c.name.c_str(), static_cast<int>(o.mode), o.p.x, o.p.y, o.p.z, o.leashR, std::hypot(o.p.x - x->c.x, o.p.y - x->c.y)); } } }
