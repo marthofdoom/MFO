@@ -190,6 +190,17 @@ namespace MFO::Iaus {
         SelfLight,          // the hidden hold: how lit he stands
         LightOnStealth,     // decast: one of our lights is on somebody who wants the dark
         SpotPathLight,      // seconds of the walk over lit ground, for a member who wants the dark
+        // HOLD (APPENDED, S5-A, Spots.cpp kHoldSet): factors round 1 on the score of staying, for a Stand order on his own place. w = Profile::hold. Off = not read.
+        HoldFoesOn,         // a blade: foes whose target he is and whose own hand reach covers him now
+        HoldContact,        // a shooter: seconds until the nearest foe that targets him could strike him
+        HoldFoeSpeed,       // the fastest foe that targets him over his own run
+        HoldFoeRanged,      // the share of the foes that target him that fight at range
+        HoldSight,          // the action's sight from there
+        HoldCover,          // the share of the foes that target him (those answered) that do not see the place
+        HoldNarrow,         // the narrowest doorway between him and the nearest foe
+        HoldAllyFront,      // an ally with a foe on him stands between him and the nearest foe
+        HoldPlayer,         // the player's distance over the leash, where he will be in t.orderLeadSec
+        HoldKept,           // he holds this point already: x = t.orderHoldMomentum, else 1
         kCount
     };
     inline constexpr std::size_t kCons = static_cast<std::size_t>(Cons::kCount);
@@ -253,8 +264,9 @@ namespace MFO::Iaus {
 
     // MOVEMENT (S1): what kind of place a spot is. The rows (name, generator, families, needs) are iaus/Spots.h kSpotKinds. APPEND ONLY:
     // per-class weights, the class masks and iIausSpotKinds index it.
-    enum class SpotKind : std::uint8_t { Stay = 0, Firing, Cover, HighGround, Chokepoint, Flank, HealReach, Peel, Kite, Regroup, LootRoute, RetreatExit, ReachUnreach, kCount };
+    enum class SpotKind : std::uint8_t { Stay = 0, Firing, Cover, HighGround, Chokepoint, Flank, HealReach, Peel, Kite, Regroup, LootRoute, RetreatExit, ReachUnreach, Hold /* stay, held by a Stand order (S5-A) */, kCount };
     inline constexpr std::size_t kSpotKindCount = static_cast<std::size_t>(SpotKind::kCount);
+    inline constexpr std::size_t kHoldFirst = static_cast<std::size_t>(Cons::HoldFoesOn), kHoldCons = static_cast<std::size_t>(Cons::HoldKept) - kHoldFirst + 1;   // the hold's rows, in one run: Profile::hold is indexed by Cons - kHoldFirst
     inline constexpr float kMoveDecisionFloorSec = 0.5f;   // marth: no movement decision faster than 500 ms. The reader (MoveDecisionSec) clamps
 
     struct Tuning {
@@ -392,6 +404,12 @@ namespace MFO::Iaus {
         float spotPortalStandU = 100.0f;         // a point this near to it stands in it. A gap one square (128) deep is ONE doorway, both its edges (at 60 two bodies stood in it)
         float spotExitU = 500.0f;                // a route out must lead this far
         float spotPeelU = 250.0f;                // a peel spot lies this near to the middle between attacker and ally
+        // ORDERS (MoveOrder.h, strict movement). PLACEHOLDERS, read only by MovePass.cpp
+        float orderLeash = 64.0f;                // a Stand / Kite / GoTo order's leashR: pushed past it he is walked back
+        float orderLeashPin = 40.0f;             // ... on a kind that needs a pin (cover, chokepoint, flank)
+        float orderArrive = 24.0f;               // arriveR: he walks on until this near (Harbinger's kDefaultArriveR)
+        float orderHoldMomentum = 1.25f;         // the point he holds already (Cons::HoldKept): in the game every flip is a claim filed or released
+        float orderLeadSec = 2.0f;               // Cons::HoldPlayer: how far ahead the player's own walk is read
         float spotArriveU = 90.0f;               // inside this of a committed spot he has arrived
         float spotFactMoveU = 128.0f;            // a sight fact or a path is reused until an end moved this far (or left its triangle)
         float spotFactMaxAgeSec = 5.0f;          // ... or got this old
@@ -452,7 +470,8 @@ namespace MFO::Iaus {
         // a smooth wave over the school circle built from a ClassCurves row (School identity order). 1.0 everywhere = flat = bit-identical. Never a veto.
         std::array<float, kSchools> school{};
         std::array<float, kSpotKindCount> spot{};   // MOVEMENT (S1): a multiplier per spot kind (ClassCurves Row::spot)
-        Profile() { family.fill(1.0f); role.fill(1.0f); school.fill(1.0f); spot.fill(1.0f); }
+        std::array<float, kHoldCons> hold{};        // S5-A: the exponent of each hold consideration (ClassCurves Row::hold). 0 = not read
+        Profile() { family.fill(1.0f); role.fill(1.0f); school.fill(1.0f); spot.fill(1.0f); hold.fill(1.0f); }
     };
 
     // I8's mechanical derivation, one call per applied DefaultGambit[] row: adds 0.5 x (rows - index) / rows to
@@ -607,6 +626,9 @@ namespace MFO::Iaus {
         float detected = -1.0f, light = -1.0f, pathLitSec = -1.0f;   // S4: for a member who wants the dark, where the light is known
         float spotRegionTrust = -1.0f, pathRegionTrust = -1.0f;   // Trust::Level as a number, -1 while trusted (S3)
         bool  coversAlly = false;
+        bool  hold = false, holdKept = false;   // S5-A: this is the Hold place. Without it none of the rest is read
+        float holdFoesOn = -1.0f, holdContactSec = -1.0f, holdFoeSpeed = -1.0f, holdFoeRanged = -1.0f, holdCover = -1.0f, holdNarrowU = -1.0f, holdPlayer = -1.0f;
+        Tri   holdSight = Tri::Unknown, holdAllyFront = Tri::Unknown;
         bool operator==(const SpotFacts&) const = default;
     };
     // MOVEMENT (S1): one of a member's ranked actions, exported from a Decision (TopRanked) for the movement pass to pair with spots.

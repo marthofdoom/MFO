@@ -229,14 +229,6 @@ namespace MFO::EngageOnSight {
             return avo && avo->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f;
         }
 
-        // Is a_actor fighting the party right now (its currentCombatTarget resolves to the
-        // player or a teammate)? The crime filter's exemption. main thread (RunProbe) or the worker (Service's range-drop test); no main-thread-only state.
-        bool FightingParty(RE::Actor* a_actor) {
-            auto  tp = a_actor->GetActorRuntimeData().currentCombatTarget.get();   // HOLD
-            auto* t  = tp.get();
-            return t && (t->IsPlayerRef() || t->IsPlayerTeammate());
-        }
-
         // main thread (RunProbe) or the worker (Service's range-drop test); no main-thread-only state. The ENEMY test (review of 1c50696, SEV-2). Actor::IsHostileToActor
         // alone is the engine's "would attack" predicate (aggression x faction reaction,
         // disassembled AE 0x679F10 by the reviewer): with a bounty, as a stage-4 vampire or
@@ -669,6 +661,13 @@ namespace MFO::EngageOnSight {
             });
         }
 
+    }
+
+    // Declared in EngageOnSight.h (the area guard shares it); the body was file-local until placed-spells M3.
+    bool FightingParty(RE::Actor* a_actor) {
+        auto  tp = a_actor->GetActorRuntimeData().currentCombatTarget.get();   // HOLD
+        auto* t  = tp.get();
+        return t && (t->IsPlayerRef() || t->IsPlayerTeammate());
     }
 
     // a_inFight (ClickUp 1dfcuabc4du): the same gambit run while the PARTY is in combat and HE is not (Scheduler's

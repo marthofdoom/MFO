@@ -349,6 +349,8 @@ namespace MFO::Iaus {
         std::vector<Scored> far;   // the best of each target
         for (std::size_t i = 0; i < ask.cands.size() && i < ask.sight.size(); ++i) {
             const Candidate& c = ask.cands[i];
+            // He reaches that patient with a heal of some kind from here: nobody walks for another one. One on its hard cooldown reaches nobody (review F5).
+            if (std::any_of(cands.begin(), cands.end(), [&](const Candidate& a) { return detail::IsHeal(a) && a.target == c.target && !(a.f.hardCooldownSec > 0.0f && a.f.hardCooldownLeft > 0.0f); })) continue;
             const auto o = detail::Score(c, ask.mind, ask.profile, t, d.rapportRank, 0.0f, 1.0f, 0.0f, nullptr);
             if (o.vetoed) continue;
             float s = o.score;
@@ -364,21 +366,28 @@ namespace MFO::Iaus {
         }
         if (far.empty()) return TopRanked(d, cands, out);
         std::sort(far.begin(), far.end(), [&](const Scored& a, const Scored& b) { return a.score != b.score ? a.score > b.score : TieKey(ask.cands[a.idx]) < TieKey(ask.cands[b.idx]); });
-        struct Row { RankedAction a; bool held; };
-        std::vector<Row> rows;
+        // Decide's own order stands (current target, effect rate, cost, the light tiers: review F1). A far row is INSERTED before the first row it beats, behind the
+        // held action; the lights keep their order among themselves and go under every heal.
+        std::vector<RankedAction> rows, lights, farRows;
+        const auto row = [&](const Scored& s, float score) { const Candidate& c = cands[s.idx]; return RankedAction{ c.family, c.scrollOf, c.form, c.target, score, c.f.reach, c.f.meleeRange, c.f.sight }; };
+        std::size_t held = 0;
+        for (const Scored& s : d.ranked) if (s.idx < cands.size() && s.running && !cands[s.idx].f.lightBuff) { rows.push_back(row(s, s.score)); held = 1; break; }
         for (const Scored& s : d.ranked) {
             if (s.idx >= cands.size()) continue;
-            const Candidate& c = cands[s.idx];
-            const float score = c.f.lightBuff ? (std::max)(0.0f, (std::min)(s.score, far.front().score - 2.0f * t.tieEps)) : s.score;   // a light is never above a heal
-            rows.push_back({ RankedAction{ c.family, c.scrollOf, c.form, c.target, score, c.f.reach, c.f.meleeRange, c.f.sight }, s.running && !c.f.lightBuff });
+            if (cands[s.idx].f.lightBuff) lights.push_back(row(s, (std::max)(0.0f, (std::min)(s.score, far.front().score - 2.0f * t.tieEps))));
+            else if (!s.running) rows.push_back(row(s, s.score));
         }
         for (const Scored& s : far) {
             const Candidate& c = ask.cands[s.idx];
-            rows.push_back({ RankedAction{ c.family, c.scrollOf, c.form, c.target, s.score, c.f.reach, c.f.meleeRange, ask.sight[s.idx], true }, false });
+            farRows.push_back(RankedAction{ c.family, c.scrollOf, c.form, c.target, s.score, c.f.reach, c.f.meleeRange, ask.sight[s.idx], true });
         }
-        std::stable_sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.held != b.held ? a.held : a.a.score > b.a.score; });
+        const auto under = [](std::vector<RankedAction>& into, const std::vector<RankedAction>& add, std::size_t at) {   // both keep their own order; at equal score the one that is there stays first
+            for (const RankedAction& a : add) { while (at < into.size() && !(into[at].score < a.score)) ++at; into.insert(into.begin() + static_cast<std::ptrdiff_t>(at), a); ++at; }
+        };
+        under(rows, farRows, held);
+        under(rows, lights, held);
         const std::size_t n = (std::min)(rows.size(), out.size());
-        for (std::size_t i = 0; i < n; ++i) out[i] = rows[i].a;
+        for (std::size_t i = 0; i < n; ++i) out[i] = rows[i];
         return n;
     }
 

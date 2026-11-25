@@ -324,10 +324,29 @@ namespace MFO::Iaus::Move {
         return f == Family::Retreat || f == Family::Regroup || f == Family::GiveGround || f == Family::Disengage || f == Family::BackOff || f == Family::Step;
     }
 
+    bool HoldPoint(const Member& m, Env::Vec3& p, std::int32_t& tri) {
+        const bool kept = m.order.mode != MoveMode::Free && Dist(m.order.p, m.p) <= 2.0f * m.order.leashR;
+        p = kept ? m.order.p : m.p; tri = kept ? m.order.tri : m.tri;
+        return kept;
+    }
+    bool HoldOffered(const PartyPicture& pic, const Member& m, const RankedAction& a, const Tuning& t) {
+        if (!(AllowedKinds(pic.caps, t) & m.kinds & KindBit(SpotKind::Hold))) return false;   // the strict cap, his class
+        if (a.Kind() >= Family::kCount || IsMove(a.Kind()) || a.moveOnly || a.target == 0 || a.target == m.id) return false;
+        const Env::Vec3* at = nullptr;
+        for (const Foe& f : pic.foes) if (f.id == a.target) at = &f.p;
+        if (!at) for (const Member& o : pic.party) if (o.id == a.target) at = &o.p;
+        // it works from here. A hold that stands is judged with its leash for play: a target that steps over the edge of his reach and back must not file and release a claim each time
+        Env::Vec3 p; std::int32_t tri = -1; const float play = HoldPoint(m, p, tri) ? m.order.leashR : 0.0f;
+        return at && !(a.reach > 0.0f && !(Dist(m.p, *at) <= a.reach + play));
+    }
+
     std::uint32_t AllowedKinds(const RoadCaps& c, const Tuning& t) {
         if (!c.point) return KindBit(SpotKind::Stay);
         std::uint32_t have = 0;
-        if (c.pin && t.spotPinKinds >= 1.0f) have |= kNeedPin;
+        if (c.strict || (c.pin && t.spotPinKinds >= 1.0f)) have |= kNeedPin;
+        if (!c.strict || c.kite) have |= kNeedKite;
+        if (!c.strict || c.disengage) have |= kNeedDisengage;
+        if (c.strict) have |= kNeedStrict;
         if (c.facing) have |= kNeedFacing;
         if (c.gait) have |= kNeedGait;
         std::uint32_t m = 0;
@@ -337,7 +356,7 @@ namespace MFO::Iaus::Move {
 
     std::uint32_t SpotKindsFor(const ClassGate& g) {
         if (!g.resolved) return 0xFFFFFFFFu;   // no class known: nothing is class-gated
-        std::uint32_t m = KindBit(SpotKind::Stay) | KindBit(SpotKind::HealReach) | KindBit(SpotKind::Regroup) | KindBit(SpotKind::LootRoute) | KindBit(SpotKind::ReachUnreach);
+        std::uint32_t m = KindBit(SpotKind::Stay) | KindBit(SpotKind::HealReach) | KindBit(SpotKind::Regroup) | KindBit(SpotKind::LootRoute) | KindBit(SpotKind::ReachUnreach) | KindBit(SpotKind::Hold);
         const bool ranged = g.casterLine || g.weaponBow || g.weaponCrossbow || g.weaponStaff || g.spellsOnClass;
         const bool melee = g.weaponMelee && !g.casterLine;
         if (ranged) m |= KindBit(SpotKind::Firing) | KindBit(SpotKind::HighGround);
@@ -357,6 +376,11 @@ namespace MFO::Iaus::Move {
             { Cons::SpotDetected, 1 }, { Cons::SpotLight, 1 }, { Cons::SpotFoeReach, 1 }, { Cons::SpotLane, 1 }, { Cons::SpotPortalBusy, 1 }, { Cons::SpotServes, 1 },
             { Cons::BoostSpotCover, 1 }, { Cons::SpotRegionTrust, 1 }, { Cons::SpotPathTrust, 1 }, { Cons::SpotPathLight, 1 },
         };
+        constexpr detail::Use kHoldSet[] = {   // factors round 1, over the product above: with every weight 0 a hold is exactly a stay
+            { Cons::HoldFoesOn, 1 }, { Cons::HoldContact, 1 }, { Cons::HoldFoeSpeed, 1 }, { Cons::HoldFoeRanged, 1 }, { Cons::HoldSight, 1 },
+            { Cons::HoldCover, 1 }, { Cons::HoldNarrow, 1 }, { Cons::HoldAllyFront, 1 }, { Cons::HoldPlayer, 1 }, { Cons::HoldKept, 1 },
+        };
+        static_assert(std::size(kHoldSet) == kHoldCons);
         detail::In Num(float v) { return v < 0.0f ? detail::In::Off() : detail::In(v); }   // a NaN applies, and is refused below
         detail::In Three(Iaus::Tri v) { return v == Iaus::Tri::Unknown ? detail::In::Off() : detail::In(v == Iaus::Tri::Yes ? 1.0f : 0.0f); }
         detail::In SpotInput(Cons c, const SpotFacts& f) {
@@ -388,6 +412,24 @@ namespace MFO::Iaus::Move {
         }
     }
 
+    namespace {
+        detail::In HoldInput(Cons c, const SpotFacts& f, const Tuning& t) {
+            switch (c) {
+            case Cons::HoldFoesOn:    return Num(f.holdFoesOn);
+            case Cons::HoldContact:   return Num(f.holdContactSec);
+            case Cons::HoldFoeSpeed:  return Num(f.holdFoeSpeed);
+            case Cons::HoldFoeRanged: return Num(f.holdFoeRanged);
+            case Cons::HoldSight:     return Three(f.holdSight);
+            case Cons::HoldCover:     return Num(f.holdCover);
+            case Cons::HoldNarrow:    return Num(f.holdNarrowU);
+            case Cons::HoldAllyFront: return Three(f.holdAllyFront);
+            case Cons::HoldPlayer:    return Num(f.holdPlayer);
+            case Cons::HoldKept:      return detail::In(f.holdKept ? t.orderHoldMomentum : 1.0f);
+            default:                  return detail::In::Off();
+            }
+        }
+    }
+
     float ScoreSpot(const SpotFacts& f, Family fam, const Profile& p, const Tuning& t, std::vector<Term>* terms) {
         std::size_t n = 0;
         for (const auto& u : kSpotSet) {
@@ -409,6 +451,17 @@ namespace MFO::Iaus::Move {
             const float comp = s + (1.0f - s) * mod * s;
             prod *= comp;
             if (terms) terms->push_back({ u.cons, in.x, raw, w, s, comp });
+        }
+        if (f.hold) for (const auto& u : kHoldSet) {
+            const detail::In in = HoldInput(u.cons, f, t);
+            const float w = p.hold[static_cast<std::size_t>(u.cons) - kHoldFirst];
+            if (!in.on || !(w > 0.0f)) continue;
+            if (!std::isfinite(in.x)) return 0.0f;
+            const float raw = Eval(detail::CurveFor(fam, u.cons, p, t), in.x);
+            if (!(raw > 0.0f)) return 0.0f;
+            const float s = w == 1.0f ? raw : std::pow(raw, w);
+            boost *= s;
+            if (terms) terms->push_back({ u.cons, in.x, raw, w, s, s });
         }
         const float out = prod * boost;
         return std::isfinite(out) ? out : 0.0f;

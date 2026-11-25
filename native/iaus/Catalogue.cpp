@@ -88,6 +88,7 @@ namespace MFO::Iaus {
             "spot_hostile_area", "spot_leash", "spot_climb", "spot_drop", "spot_detected", "spot_light", "spot_foe_reach", "spot_lane",
             "spot_portal_busy", "spot_serves", "spot_cover", "spot_region_trust", "spot_path_trust",
             "light_veto", "light_need", "light_rank", "self_light", "light_on_stealth", "spot_path_light",
+            "hold_foes_on", "hold_contact_sec", "hold_foe_speed", "hold_foe_ranged", "hold_sight", "hold_cover", "hold_narrow", "hold_ally_front", "hold_player", "hold_kept",
         };
         static_assert(std::size(kNames) == kCons, "Cons names out of step with the enum");
         const auto i = static_cast<std::size_t>(c);
@@ -108,6 +109,8 @@ namespace MFO::Iaus {
         case Cons::BoostPlayerDying: case Cons::BoostRecipientDying: case Cons::BoostControlled:
         case Cons::MortalTaunt: case Cons::BoostMortalDanger: case Cons::BoostStrike: case Cons::BoostFleeHeal: case Cons::BoostGuardLine:
         case Cons::BoostBuffThreat: case Cons::BoostPosturePerks: case Cons::BoostSpellPerks: case Cons::BoostSpotCover:
+        case Cons::HoldFoesOn: case Cons::HoldContact: case Cons::HoldFoeSpeed: case Cons::HoldFoeRanged: case Cons::HoldSight:
+        case Cons::HoldCover: case Cons::HoldNarrow: case Cons::HoldAllyFront: case Cons::HoldPlayer: case Cons::HoldKept:
             return Role::Boost;
         default:
             return Role::Shape;
@@ -459,6 +462,26 @@ namespace MFO::Iaus {
                 static constexpr std::array<std::array<float, 2>, 3> lit{ { { 0.0f, 1.0f }, { 1.0f, 0.5f }, { 4.0f, 0.15f } } };
                 at(Cons::SpotPathLight) = Piece(lit);
             }
+            // HOLD (S5-A). ALL PLACEHOLDERS (the `spots` stage searches them). Factors: over 1 = hold, under 1 = leave him to the engine
+            {
+                static constexpr std::array<std::array<float, 2>, 4> foes{ { { 0.0f, 0.7f }, { 1.0f, 0.75f }, { 2.0f, 1.15f }, { 4.0f, 1.3f } } };   // one left: under 1 / t.orderHoldMomentum, so a blade held by two is let go
+                at(Cons::HoldFoesOn) = Piece(foes);
+                static constexpr std::array<std::array<float, 2>, 4> contact{ { { 0.0f, 0.65f }, { 0.4f, 0.85f }, { 0.8f, 1.0f }, { 3.0f, 1.15f } } };
+                at(Cons::HoldContact) = Piece(contact);
+                static constexpr std::array<std::array<float, 2>, 3> pace{ { { 0.4f, 0.9f }, { 1.0f, 1.0f }, { 1.35f, 1.05f } } };
+                at(Cons::HoldFoeSpeed) = Piece(pace);
+                static constexpr std::array<std::array<float, 2>, 2> far{ { { 0.0f, 1.0f }, { 1.0f, 0.9f } } };
+                at(Cons::HoldFoeRanged) = Piece(far);
+                at(Cons::HoldSight) = Bin(0.3f, 1.1f);
+                static constexpr std::array<std::array<float, 2>, 2> hid{ { { 0.0f, 1.0f }, { 1.0f, 1.1f } } };
+                at(Cons::HoldCover) = Piece(hid);
+                static constexpr std::array<std::array<float, 2>, 2> gap{ { { 100.0f, 1.2f }, { 180.0f, 1.0f } } };
+                at(Cons::HoldNarrow) = Piece(gap);
+                at(Cons::HoldAllyFront) = Bin(1.0f, 1.1f);
+                static constexpr std::array<std::array<float, 2>, 3> away{ { { 0.6f, 1.0f }, { 0.9f, 0.7f }, { 1.2f, 0.3f } } };
+                at(Cons::HoldPlayer) = Piece(away);
+                at(Cons::HoldKept) = Lin(1.0f, 0.0f);   // x IS the factor (t.orderHoldMomentum)
+            }
             at(Cons::BashNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
             // regroup need: the largest of three reasons, see Input. Under 0.05 there is no reason: veto.
             at(Cons::RegroupNeed) = VetoBelow(Lin(1.0f, 0.0f), 0.05f);
@@ -547,6 +570,7 @@ namespace MFO::Iaus {
             { "t.moveDecisionSec", &Tuning::moveDecisionSec }, { "t.spotPinKinds", &Tuning::spotPinKinds }, { "t.spotMomentum", &Tuning::spotMomentum }, { "t.spotPreempt", &Tuning::spotPreempt },   // MOVEMENT (S1): the sim's list gains them with S2
             { "t.spotRadius", &Tuning::spotRadius }, { "t.spotSplitArea", &Tuning::spotSplitArea }, { "t.spotEyeU", &Tuning::spotEyeU }, { "t.spotHighU", &Tuning::spotHighU },
             { "t.spotPortalU", &Tuning::spotPortalU }, { "t.spotPortalStandU", &Tuning::spotPortalStandU }, { "t.spotExitU", &Tuning::spotExitU }, { "t.spotPeelU", &Tuning::spotPeelU },
+            { "t.orderLeash", &Tuning::orderLeash }, { "t.orderLeashPin", &Tuning::orderLeashPin }, { "t.orderArrive", &Tuning::orderArrive }, { "t.orderHoldMomentum", &Tuning::orderHoldMomentum }, { "t.orderLeadSec", &Tuning::orderLeadSec },
             { "t.spotArriveU", &Tuning::spotArriveU }, { "t.spotFactMoveU", &Tuning::spotFactMoveU }, { "t.spotFactMaxAgeSec", &Tuning::spotFactMaxAgeSec }, { "t.spotKeptAgeSec", &Tuning::spotKeptAgeSec }, { "t.spotUnknownExposure", &Tuning::spotUnknownExposure },
             { "t.lightNearU", &Tuning::lightNearU }, { "t.lightStoreyU", &Tuning::lightStoreyU }, { "t.lightMaxAgeSec", &Tuning::lightMaxAgeSec }, { "t.lightMinConf", &Tuning::lightMinConf }, { "t.lightLitLevel", &Tuning::lightLitLevel }, { "t.lightGenU", &Tuning::lightGenU }, { "t.lightDarkHoldSec", &Tuning::lightDarkHoldSec },   // S4
             { "t.unmeasuredDamage", &Tuning::unmeasuredDamage },   // fix/spell-worth C2: game only until the sim mirror (PLACEHOLDER)
@@ -979,7 +1003,9 @@ namespace MFO::Iaus {
             case Cons::SpotPath: case Cons::SpotSight: case Cons::SpotExposure: case Cons::SpotFireLine: case Cons::SpotRange: case Cons::SpotPathExposed:
             case Cons::SpotExits: case Cons::SpotAllyDist: case Cons::SpotHostileArea: case Cons::SpotLeash: case Cons::SpotClimb: case Cons::SpotDrop:
             case Cons::SpotDetected: case Cons::SpotLight: case Cons::SpotFoeReach: case Cons::SpotLane: case Cons::SpotPortalBusy: case Cons::SpotServes:
-            case Cons::BoostSpotCover: case Cons::SpotRegionTrust: case Cons::SpotPathTrust: case Cons::SpotPathLight: return In::Off();
+            case Cons::BoostSpotCover: case Cons::SpotRegionTrust: case Cons::SpotPathTrust: case Cons::SpotPathLight:
+            case Cons::HoldFoesOn: case Cons::HoldContact: case Cons::HoldFoeSpeed: case Cons::HoldFoeRanged: case Cons::HoldSight:
+            case Cons::HoldCover: case Cons::HoldNarrow: case Cons::HoldAllyFront: case Cons::HoldPlayer: case Cons::HoldKept: return In::Off();
             case Cons::kCount:        break;
             }
             return In::Off();

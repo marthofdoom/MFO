@@ -1982,7 +1982,8 @@ namespace {
             Check(!Prune::IsPlacement(P{}), "placed L1: nothing set = not a placement (an aimed bolt)");
             { P p; p.targetLocationDelivery = true; Check(Prune::IsPlacement(p), "placed L1: target location delivery is a placement"); }
             { P p; p.rune = p.targetLocationDelivery = true; Check(Prune::IsPlacement(p), "placed L1: a rune is a placement"); }
-            { P p; p.wall = true; Check(Prune::IsPlacement(p), "placed L1: a wall is a placement"); }
+            { P p; p.wall = true; Check(!Prune::IsPlacement(p), "placed M3: a wall is kept (an aimed stream; the area guard closes it)"); }
+            { P p; p.wall = p.targetLocationDelivery = true; Check(Prune::IsPlacement(p), "placed M3: a wall that is also a target-location spell still has no point to name"); }
             { P p; p.tlBurst = p.targetLocationDelivery = true; Check(Prune::IsPlacement(p), "placed L1: a location burst is a placement"); }
             { P p; p.selfBlast = true; Check(Prune::IsPlacement(p), "placed L1: a self blast is a placement (interim)"); }
             { P p; p.summon = true; Check(!Prune::IsPlacement(p), "placed L1: a Self summon is not a placement"); }
@@ -2540,7 +2541,14 @@ namespace {
         { Generated gen = Generate(corner, g, t); gen.actions.clear(); const Decision d = dec(corner, gen); Exp e; e.n = TopRanked(d, gen.actions, e.top, MoveAsk{ gen.moveOnly, gen.moveOnlySight, none, p, t }); Check(d.verdict == Verdict::Idle && e.n == 1 && e.Heal(kPc), "it is exported when he has nothing else to do at all"); }
         {   // nobody walks for a patient he reaches
             Snapshot s = near; s.book.entries.push_back(Spell("Touch Heal", kTouch, Prune::Nature::Heal, 10, 150)); s.book.entries.back().heal = 200.0f; s.book.entries.back().measured = true; s.book.entries.back().touch = true;
-            const Generated gen = Generate(s, g, t); Check(healOf(gen, kPc) && gen.moveOnly.empty(), "a patient he reaches with one heal gets no walk for another");
+            const auto walks = [&](Generated gen) { const Decision d = dec(s, gen); Exp e; e.n = TopRanked(d, gen.actions, e.top, MoveAsk{ gen.moveOnly, gen.moveOnlySight, none, p, t }); bool any = false; for (std::size_t i = 0; i < e.n; ++i) any |= e.top[i].moveOnly; return any; };
+            s.allies[0].sight = Sight::Visible; s.book.entries[0].reach = 600.0f;   // he stands at 900: the first heal is too short, the second (below) reaches
+            s.book.entries[1].drop = Prune::Drop::Unanimated; s.book.entries.back().reach = 2000.0f; s.book.entries.back().touch = false; Generated gen = Generate(s, g, t);
+            Check(healOf(gen, kPc) && gen.moveOnly.size() == 1 && !walks(gen), "a patient he reaches with one heal gets no walk for another");
+            // review F5: that heal is on its hard cooldown, so from here it reaches nobody
+            for (auto& c : gen.actions) if (c.family == Family::CastHeal && c.target == kPc) c.f.hardCooldownSec = c.f.hardCooldownLeft = 5.0f;
+            Check(walks(gen), "... unless that one is on its cooldown");
+            s.book.entries[0].reach = 2000.0f; s.book.entries.back().reach = 150.0f; s.book.entries.back().touch = true; s.book.entries[1].drop = Prune::Drop::Keep;
             s.allies[0].dist = 2600.0f; const Generated q = Generate(s, g, t); const Exp e = exp(s, t); int rows = 0; for (std::size_t i = 0; i < e.n; ++i) rows += e.top[i].target == kPc && e.top[i].Kind() == Family::CastHeal; Check(q.moveOnly.size() == 2 && rows == 1, "... two far heals for one patient: one row");
         }
         {   // ... nor leaves one
@@ -2565,6 +2573,32 @@ namespace {
             s = corner; s.book.entries[0].nature = Prune::Nature::Buff; Check(Generate(s, g, t).moveOnly.empty(), "a buff: none");
             s = corner; Generated gen = Generate(s, g, t); gen.moveOnly[0].f.hardCooldownSec = gen.moveOnly[0].f.hardCooldownLeft = 5.0f; std::array<RankedAction, 3> top; const Decision d = dec(s, gen); const auto n = TopRanked(d, gen.actions, top, MoveAsk{ gen.moveOnly, gen.moveOnlySight, none, p, t }); bool any = false; for (std::size_t i = 0; i < n; ++i) any |= top[i].moveOnly; Check(!any, "one on cooldown is not exported");
         }
+        {   // review F1: an export keeps Decide's own order of the rest (nothing is sorted again), and what does not make the rows moves nothing
+            Snapshot s = corner; s.allies[1].hp = 0.97f * s.allies[1].hpMax; Generated gen = Generate(s, g, t); const Decision d0 = dec(s, gen); Decision d = d0; bool inOrder = true, none3 = true, heldFirst = true; int boards = 0;
+            if (d.ranked.size() >= 3) {
+                // a tie Decide broke by its own rules: row 1 under row 2 by a hair
+                d.ranked[0].score = 0.700f; d.ranked[1].score = 0.5000f; d.ranked[2].score = 0.5001f; for (auto& x : d.ranked) x.running = false;
+                for (std::size_t i = 3; i < d.ranked.size(); ++i) d.ranked[i].score = 0.2f;
+                std::array<RankedAction, 3> plain, with; const auto n0 = TopRanked(d, gen.actions, plain); const auto mov = [&](float far, const Decision& q) { Tuning u = t; u.actFloor = 0.0f; u.moveHealYield = 0.0f; Generated x = gen; (void)far; return TopRanked(q, x.actions, with, MoveAsk{ x.moveOnly, x.moveOnlySight, none, p, u }); };
+                const auto n1 = mov(0.0f, d); std::vector<std::uint32_t> a, b; for (std::size_t i = 0; i < n0; ++i) a.push_back(plain[i].form ^ plain[i].target); for (std::size_t i = 0; i < n1; ++i) if (!with[i].moveOnly) b.push_back(with[i].form ^ with[i].target);
+                inOrder = !b.empty() && b.size() <= a.size() && std::equal(b.begin(), b.end(), a.begin()); ++boards;
+                // everything above the far heal: the three rows are exactly the plain ones
+                Decision hi = d; for (std::size_t i = 0; i < 3; ++i) hi.ranked[i].score += 100.0f; const auto n2 = TopRanked(hi, gen.actions, plain); const auto n3 = mov(0.0f, hi); none3 = n2 == 3 && n3 == 3; for (std::size_t i = 0; none3 && i < 3; ++i) none3 = plain[i].form == with[i].form && plain[i].target == with[i].target && !with[i].moveOnly; ++boards;
+                // review F2 (1): the held action is first although it scores least, the far heal behind it
+                Decision hold = d; hold.ranked[2].running = true; hold.ranked[2].score = 0.001f; const auto n4 = mov(0.0f, hold); heldFirst = n4 >= 2 && !with[0].moveOnly && with[0].form == gen.actions[hold.ranked[2].idx].form && with[0].target == gen.actions[hold.ranked[2].idx].target; ++boards; }
+            Check(boards == 3 && inOrder, "the export keeps Decide's order of the others, also inside a tie"); Check(none3, "... a far heal that does not make the rows moves none of them"); Check(heldFirst, "... the held action stays first, whatever it scores"); }
+        {   // review F2 (2) (4) (5): the act floor, the BEST heal of a patient, and the ray that belongs to it
+            Generated gen = Generate(corner, g, t); std::array<RankedAction, 3> top; const Decision d = dec(corner, gen); Tuning u = t; u.actFloor = 1.0e6f; auto n = TopRanked(d, gen.actions, top, MoveAsk{ gen.moveOnly, gen.moveOnlySight, none, p, u }); bool any = false; for (std::size_t i = 0; i < n; ++i) any |= top[i].moveOnly; Check(!any, "a far heal under the act floor is not exported");
+            Snapshot s = hurt(corner, 1, 0.4f, 2600.0f, Sight::Visible); gen = Generate(s, g, t); const Decision d2 = dec(s, gen); n = TopRanked(d2, gen.actions, top, MoveAsk{ gen.moveOnly, gen.moveOnlySight, none, p, t }); int right = 0; for (std::size_t i = 0; i < n; ++i) if (top[i].moveOnly) right += top[i].sight == (top[i].target == kPc ? Sight::Occluded : Sight::Visible); Check(gen.moveOnly.size() == 2 && right == 2, "two far patients, each with his own ray");
+            Snapshot w = corner; w.book.entries.push_back(Spell("Weak", kTouch, Prune::Nature::Heal, 10, 2000)); w.book.entries.back().heal = 1.0f; w.book.entries.back().measured = true; gen = Generate(w, g, t); const Decision d3 = dec(w, gen);
+            for (int rev = 0; rev < 2; ++rev) { std::vector<Candidate> c = gen.moveOnly; std::vector<Sight> si = gen.moveOnlySight; if (rev) { std::reverse(c.begin(), c.end()); std::reverse(si.begin(), si.end()); }
+                // each alone, then both: both gives the better of the two
+                float best = 0.0f; std::uint32_t form = 0; for (std::size_t i = 0; i < c.size(); ++i) { std::array<RankedAction, 3> one; const auto k = TopRanked(d3, gen.actions, one, MoveAsk{ std::span<const Candidate>(c).subspan(i, 1), std::span<const Sight>(si).subspan(i, 1), none, p, t }); for (std::size_t q = 0; q < k; ++q) if (one[q].moveOnly && one[q].score > best) { best = one[q].score; form = one[q].form; } }
+                n = TopRanked(d3, gen.actions, top, MoveAsk{ c, si, none, p, t }); std::uint32_t got = 0; for (std::size_t i = 0; i < n; ++i) if (top[i].moveOnly) got = top[i].form; Check(c.size() == 2 && form != 0 && got == form, "the best heal of a patient is the one exported"); } }
+        {   // review F2 (3): a light he holds does not stay first over it
+            Snapshot s = corner; s.self.light = 10.0f; for (auto& a : s.allies) { a.light = 10.0f; a.inPlayerView = Tri::Yes; } SpellEntry e = Spell("Candlelight", 0x43324, Prune::Nature::Buff, 20, 0); e.selfDelivery = true; e.light = true; s.book.entries.push_back(e);
+            Tuning b = t; b.actionWeight[static_cast<std::size_t>(Family::CastBuff)] = 30.0f; const Generated gen = Generate(s, g, b); TickIn in; in.now = 10.0; in.rapportRank = 3; Decision d = Decide(none, gen.actions, p, b, in); bool light = false; for (auto& x : d.ranked) { x.running = false; if (gen.actions[x.idx].f.lightBuff && !light) x.running = light = true; }
+            std::array<RankedAction, 3> top; const auto n = TopRanked(d, gen.actions, top, MoveAsk{ gen.moveOnly, gen.moveOnlySight, none, p, b }); Check(light && n > 0 && top[0].family != Family::CastBuff, "a held light does not stay first over a far heal"); }
         {   // a light is never above it
             Snapshot s = corner; s.self.hp = s.self.hpMax; s.self.light = 10.0f; for (auto& a : s.allies) { a.light = 10.0f; a.inPlayerView = Tri::Yes; } SpellEntry e = Spell("Candlelight", 0x43324, Prune::Nature::Buff, 20, 0); e.selfDelivery = true; e.light = true; s.book.entries.push_back(e); s.foes.resize(1);
             Tuning b = t; b.actionWeight[static_cast<std::size_t>(Family::CastBuff)] = 30.0f; for (auto& e2 : s.book.entries) if (e2.nature == Prune::Nature::Offense) e2.drop = Prune::Drop::Unanimated; const Exp x = exp(s, b); const RankedAction* l = nullptr; for (std::size_t i = 0; i < x.n; ++i) if (x.top[i].family == Family::CastBuff) l = &x.top[i]; Check(x.Heal(kPc) && l && l->score < x.Heal(kPc)->score && x.top[0].Kind() == Family::CastHeal, "a light ranks under a move-only heal in the export");
@@ -2835,6 +2869,129 @@ namespace {
             Check(score(find(k, 0x1C789)) == 0.0f, "M2: a party member in a hostile control area closes it");
             for (auto& e : k.book.entries) if (e.form == 0x1C789) e.hostileArea = false;
             Check(!find(k, 0x1C789).f.splashSafe && score(find(k, 0x1C789)) > 0.0f, "M2: without the hostile area flag control is judged as before (splashSafe is not read)");
+        }
+        // M3. WALLS (a hazard footprint round the foe + the stream's line), the party-owned option, the scroll consumer and the census's reported bystander.
+        {
+            const auto person = [](float x, float y, std::uint32_t id = 0x77) { AreaActor a; a.id = id; a.x = x; a.y = y; return a; };
+            Snapshot s = MageFight(); s.self.mp = 200;
+            s.allies[0].x = -400.0f; s.allies[0].y = 400.0f; s.allies[1].x = -400.0f; s.allies[1].y = 300.0f;   // the party is nowhere near
+            for (auto& e : s.book.entries) if (e.form == 0x1C789) { e.wall = true; e.concentration = true; e.areaUnits = Prune::HazardFootprintUnits(false, 0, 3.0f); }   // the Fireball slot stands in for a wall
+            const auto find = [&](const Snapshot& sn, std::uint32_t form) -> Candidate {
+                for (const auto& c : Generate(sn, g, t).actions) if (c.form == form && c.target == 0x3B500) return c;
+                Check(false, "M3: the wall candidate exists"); return {}; };
+            const auto score = [&](const Candidate& c) { return ScoreOne(c, Mind{}, Profile{}, t, 3, 0.0f, nullptr); };
+            const Candidate open = find(s, 0x1C789);
+            Check(open.f.areaGuardOk && open.f.hasArea && score(open) > 0.0f, "M3: a wall with nobody about is a candidate and scores (the lab is not gated)");
+            Snapshot r = s; r.areaPicture = AreaPicture::Ready;
+            Check(score(find(r, 0x1C789)) == score(open), "M3: a readable empty picture scores what the lab scores");
+            // F1: a hazard's radius is FEET (engine 22 units per foot): the Fire Barrier's 3 ft is the sim's 64 units, never 3
+            Check(std::fabs(Prune::HazardFootprintUnits(false, 0, 3.0f) - 64.0f) < 0.01f, "M3 F1: a 3 ft hazard radius is 64 units (about 64, not 3)");
+            Check(std::fabs(Prune::HazardFootprintUnits(true, 6, 3.0f) - 128.0f) < 0.01f && std::fabs(Prune::HazardFootprintUnits(true, 0, 3.0f) - 64.0f) < 0.01f,
+                  "M3 F1: a kInheritRadius hazard takes the effect's EFIT feet, and its own radius when the effect has none");
+            Check(Prune::HazardFootprintUnits(false, 0, 0.0f) == 0.0f && Prune::HazardFootprintUnits(false, 0, NAN) == 0.0f, "M3 F1: an unreadable radius is 0 (SpellBook floors it, F6)");
+            Check(kAreaGuard.wallFloorUnits > 0.0f && kAreaGuard.wallMargin > kAreaGuard.safetyMargin, "M3 F6/F2: the wall's floor and margin come from the one table (floor > 0, margin past the cast moment's)");
+            // F2: the wall's bystander margin (a hazard lives 30 s): just inside / just outside footprint + body + wallMargin, off the line
+            const float wallArea = Prune::HazardFootprintUnits(false, 0, 3.0f);
+            const float fp = wallArea + Estimate::kFireBodyPad + kAreaGuard.wallMargin;
+            r.areaActors = { person(600.0f, fp - 1.0f) };
+            Check(score(find(r, 0x1C789)) == 0.0f, "M3 F2: a bystander just inside the wall's footprint + wallMargin closes the wall");
+            r.areaActors = { person(600.0f, fp + 1.0f) };
+            Check(score(find(r, 0x1C789)) == score(open), "M3 F2: one unit past it is clear");
+            r.areaActors = { person(600.0f, 64.0f + Estimate::kFireBodyPad + kAreaGuard.safetyMargin + 10.0f) };   // past the cast moment's margin, inside the wall's
+            Check(score(find(r, 0x1C789)) == 0.0f, "M3 F2: the wall uses wallMargin, not the cast moment's safetyMargin (footprint)");
+            // THE LINE, on a foe far enough (3000) that the footprint (area + body + wallMargin, ~1128) cannot reach a bystander on the stream
+            Snapshot fz = r; fz.foes[0].x = 3000.0f;
+            const float reach = std::max(Estimate::kFireLinePad, wallArea) + kAreaGuard.wallMargin;
+            const float openFar = [&] { Snapshot z = fz; z.areaActors.clear(); return score(find(z, 0x1C789)); }();
+            fz.areaActors = { person(1000.0f, 100.0f) };
+            Check(!Generate(fz, g, t).areaBlocked.empty() && score(find(fz, 0x1C789)) == 0.0f, "M3 F3: a bystander on the stream's line (outside the footprint) closes the wall, and the [area-guard] line is fed");
+            fz.areaActors = { person(1000.0f, reach - 1.0f) };
+            Check(score(find(fz, 0x1C789)) == 0.0f, "M3 F3: ... up to the corridor's edge (80 + wallMargin)");
+            fz.areaActors = { person(1000.0f, reach + 1.0f) };
+            Check(score(find(fz, 0x1C789)) == openFar, "M3 F3: one unit past the corridor is clear");
+            fz.areaActors = { person(-1500.0f, 0.0f) };   // behind him: the stream does not run there (F8 mutation A: the line's t >= 0)
+            Check(score(find(fz, 0x1C789)) == openFar, "M3 F8: a bystander behind the caster is not on the line");
+            fz.areaActors = { person(3000.0f + wallArea + Estimate::kFireBodyPad + kAreaGuard.wallMargin + 300.0f, 0.0f) };   // past the foe, outside the footprint
+            Check(score(find(fz, 0x1C789)) == openFar, "M3 F8: a bystander past the foe, outside the footprint, is not on the line (t <= 1)");
+            { AreaActor big = person(1000.0f, 1380.0f); big.radius = 500.0f;   // F8 mutation B: his body widens the corridor (reach 1564, footprint 1564 from a foe 2000+ away)
+              fz.areaActors = { big };
+              Check(score(find(fz, 0x1C789)) == 0.0f, "M3 F8: a big bystander's radius widens the line's corridor"); }
+            // F4: the corridor is the footprint along the line: a wide hazard (300) reaches max(80, 300) + wallMargin
+            for (auto& e : fz.book.entries) if (e.form == 0x1C789) e.areaUnits = 300.0f;
+            fz.areaActors = { person(1000.0f, 1200.0f) };
+            Check(score(find(fz, 0x1C789)) == 0.0f, "M3 F4: a wide hazard widens the corridor past the flat 80 + margin");
+            fz.areaActors = { person(1000.0f, 1300.0f + 1.0f) };
+            Check(score(find(fz, 0x1C789)) > 0.0f, "M3 F4: ... and clear one unit past it");
+            for (auto& e : fz.book.entries) if (e.form == 0x1C789) e.areaUnits = wallArea;
+            fz.areaActors = { person(1000.0f, NAN) };
+            Check(score(find(fz, 0x1C789)) == 0.0f, "M3: an unreadable bystander is a hit, never clear");
+            r.areaActors.clear(); r.areaPicture = AreaPicture::NotReady;
+            Check(score(find(r, 0x1C789)) == 0.0f, "M3: an unreadable picture closes the wall");
+            // a party member in the footprint: splash_safe (an ally who fights that foe in melee stands in it)
+            Snapshot w = s; w.allies[1].x = 620.0f; w.allies[1].y = 0.0f;
+            Check(!find(w, 0x1C789).f.splashSafe && score(find(w, 0x1C789)) == 0.0f, "M3: a party member in the footprint scores the wall 0");
+            // a bolt (no wall flag) is not line-guarded for bystanders: the aimed bolt's own corridor is Harbinger's / the line of fire's
+            Snapshot b = s; b.areaPicture = AreaPicture::Ready; b.areaActors = { person(300.0f, 100.0f) };
+            Check(score(find(b, 0x12FCD)) == score(find(s, 0x12FCD)) && score(find(s, 0x12FCD)) > 0.0f, "M3: the stream's line guard is the wall's alone (Firebolt unchanged)");
+            // F2: the option. Party summons and the player's horse count only while it is ON; everyone else always
+            Snapshot o = s; o.areaPicture = AreaPicture::Ready;
+            AreaActor sm = person(600.0f, 60.0f); sm.kind = AreaKind::PartySummon;
+            AreaActor hs = person(300.0f, 40.0f); hs.kind = AreaKind::PlayerHorse;
+            for (const AreaActor* a : { &sm, &hs }) {
+                o.areaActors = { *a };
+                o.areaPartyOwnedBlock = true;
+                Check(score(find(o, 0x1C789)) == 0.0f, "M3 F2: option ON: a party summon / the player's horse closes the area, as M2 had it");
+                o.areaPartyOwnedBlock = false;
+                Check(score(find(o, 0x1C789)) == score(open), "M3 F2: option OFF: a party summon / the player's horse is no bystander");
+            }
+            o.areaActors = { person(600.0f, 60.0f) };
+            Check(score(find(o, 0x1C789)) == 0.0f, "M3 F2: option OFF: a townsperson still closes it");
+            AreaActor ts = person(600.0f, 60.0f); ts.kind = AreaKind::Commanded;   // a summon of somebody outside the party
+            o.areaActors = { ts };
+            Check(score(find(o, 0x1C789)) == 0.0f, "M3 F2: option OFF: a stranger's summon still closes it");
+            o.areaActors = { sm, person(600.0f, 80.0f) };
+            Check(score(find(o, 0x1C789)) == 0.0f, "M3 F2: option OFF: a townsperson beside the party summon still closes it");
+            // F1: a crime-faction actor who is not fighting the party is a plain bystander row; the census does not look at the flag, Gather keeps him
+            AreaActor guard = person(600.0f, 60.0f); guard.kind = AreaKind::Guard; guard.crimeNotFighting = true;
+            o.areaActors = { guard };
+            Check(score(find(o, 0x1C789)) == 0.0f, "M3 F1: a guard with a crime faction in the area closes it");
+            // F6 (b): the reported bystander is the NEAREST one
+            {
+                Snapshot n = s; n.areaPicture = AreaPicture::Ready;
+                n.areaActors = { person(600.0f, 190.0f, 0x81), person(600.0f, 40.0f, 0x82), person(600.0f, 120.0f, 0x83) };
+                const AreaHits h = Estimate::AreaCensus(n, std::vector<const Combatant*>{}, 600.0f, 0.0f, 0.0f, 150.0f, 0.0f);
+                Check(h.bystanders == 3 && h.firstBystander == 0x82, "M3 F6: the census reports the NEAREST bystander (the log names him)");
+                n.areaActors = { person(300.0f, 90.0f, 0x81), person(300.0f, 30.0f, 0x82) };
+                const AreaHits l = Estimate::AreaCensusLine(n, n.self, n.foes[0], 64.0f, kAreaGuard.wallMargin);
+                Check(l.bystanders == 2 && l.firstBystander == 0x82, "M3 F6: the line census reports the nearest one too");
+                Generated gb = Generate(n, g, t);
+                bool named = false; for (const auto& ab : gb.areaBlocked) named |= ab.spell == 0x1C789 && ab.bystander == 0x82;
+                Check(named, "M3 F6: the [area-guard] entry carries the nearest bystander's id");
+            }
+            // F6 (a): the live spell-worth reader counts a bystander as a friend in the area, not only a party member
+            {
+                Tuning tl = t; tl.spellWorth.live = 1.0f;
+                Snapshot clear = s; clear.areaPicture = AreaPicture::Ready;
+                for (auto& e : clear.book.entries) if (e.form == 0x1C789) { e.measured = true; e.damage = 60.0f; e.directDamage = 60.0f; e.school = kDestruction; e.chargeSec = 0.5f; e.concentration = false; e.wall = false; }
+                Snapshot by = clear; by.areaActors = { person(600.0f, 60.0f) };
+                const auto worth = [&](const Snapshot& sn) { for (const auto& c : Generate(sn, g, tl).actions) if (c.form == 0x1C789 && c.target == 0x3B500) return c.f.effectRate; return -1.0f; };
+                Check(worth(clear) > 0.0f && worth(by) < worth(clear), "M3 F6: with the worth reader live, a bystander in the area lowers the cast's worth like a friend does");
+            }
+            // F6 (c): the scroll consumer. A scroll of an area spell is gated by the same reader
+            {
+                Snapshot sc = s; sc.scrollRoad = true;
+                SpellEntry sp = Spell("Scroll of Fireball", 0xA44C6, Prune::Nature::Offense, 0, 2000, Prune::kAvResistFire);
+                sp.source = SpellSource::Scroll; sp.count = 2; sp.areaUnits = 200.0f; sc.book.entries.push_back(sp);
+                ClassGate su = g; su.scrollUser = true;
+                const auto sscore = [&](const Snapshot& sn) { for (const auto& c : Generate(sn, su, t).actions)
+                    if (c.form == 0xA44C6 && c.family == Family::Scroll && c.target == 0x3B500) return ScoreOne(c, Mind{}, Profile{}, t, 3, 0.0f, nullptr);
+                    return -1.0f; };
+                Check(sscore(sc) > 0.0f, "M3 F6: a scroll of an area spell is a candidate that scores when nobody is in the area");
+                sc.areaPicture = AreaPicture::Ready; sc.areaActors = { person(600.0f, 60.0f) };
+                Check(sscore(sc) == 0.0f, "M3 F6: the scroll's area is guarded for bystanders (kScrollOffense carries splash_safe)");
+                sc.areaActors.clear(); sc.areaPicture = AreaPicture::NotReady;
+                Check(sscore(sc) == 0.0f, "M3 F6: ... and an unreadable picture closes the scroll too");
+            }
         }
         // 4. The line of fire.
         {

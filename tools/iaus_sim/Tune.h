@@ -24,6 +24,7 @@ namespace Sim {
         std::vector<Profile::WeightOverride> weights;
         std::map<std::string, float> pkg;   // st.<stance>.<field> / pk.power / pk.leash: the class package under search
         std::array<float, MFO::Iaus::kSpotKindCount> spot = [] { std::array<float, MFO::Iaus::kSpotKindCount> a; a.fill(-1.0f); return a; }();   // spot.<kind>: a place kind's weight, every class (the game's name, per class: TuningFile.cpp). < 0 = unset
+        std::array<float, MFO::Iaus::kHoldCons> hold = [] { std::array<float, MFO::Iaus::kHoldCons> a; a.fill(-1.0f); return a; }();   // spot.hold.<cons>: a hold consideration's exponent, every class. < 0 = the class's own
         MFO::Iaus::LootTuning loot{};       // loot.<field>: the IAUS loot scorer's table (iaus/LootNeed.h), read by the logistics world's IAUS arm
     };
     inline TuneState& Tune() { static TuneState s; return s; }
@@ -51,6 +52,7 @@ namespace Sim {
         // S2 (movement-plan.md): the movement pass's own rows. Flat while --position-road is off. The stage that searches them is S5's.
         { "t.moveDecisionSec", &Tuning::moveDecisionSec }, { "t.spotPinKinds", &Tuning::spotPinKinds }, { "t.spotMomentum", &Tuning::spotMomentum }, { "t.spotPreempt", &Tuning::spotPreempt },
         { "t.spotRadius", &Tuning::spotRadius }, { "t.spotSplitArea", &Tuning::spotSplitArea }, { "t.spotHighU", &Tuning::spotHighU }, { "t.spotExitU", &Tuning::spotExitU }, { "t.spotPeelU", &Tuning::spotPeelU },
+        { "t.orderLeash", &Tuning::orderLeash }, { "t.orderLeashPin", &Tuning::orderLeashPin }, { "t.orderArrive", &Tuning::orderArrive }, { "t.orderHoldMomentum", &Tuning::orderHoldMomentum }, { "t.orderLeadSec", &Tuning::orderLeadSec },
         { "t.spotArriveU", &Tuning::spotArriveU }, { "t.spotFactMoveU", &Tuning::spotFactMoveU }, { "t.spotFactMaxAgeSec", &Tuning::spotFactMaxAgeSec }, { "t.spotKeptAgeSec", &Tuning::spotKeptAgeSec }, { "t.spotUnknownExposure", &Tuning::spotUnknownExposure },
         // S4 (iaus/Light.h): flat while --v4 light is off
         { "t.moveHealYield", &Tuning::moveHealYield }, { "t.spotActionMomentum", &Tuning::spotActionMomentum },
@@ -88,7 +90,8 @@ namespace Sim {
         { "loot.fortifyTarget", &LT::fortifyTarget }, { "loot.regenTarget", &LT::regenTarget }, { "loot.invisTarget", &LT::invisTarget },
         { "loot.lockpickTarget", &LT::lockpickTarget }, { "loot.poisonTarget", &LT::poisonTarget },
     };
-    inline void ApplyWeights(Profile& p) { for (const auto& o : Tune().weights) SetWeight(p, o.family, o.cons, o.w); for (std::size_t k = 0; k < MFO::Iaus::kSpotKindCount; ++k) if (Tune().spot[k] >= 0.0f) p.spot[k] = Tune().spot[k]; }
+    inline void ApplyWeights(Profile& p) { for (const auto& o : Tune().weights) SetWeight(p, o.family, o.cons, o.w); for (std::size_t k = 0; k < MFO::Iaus::kSpotKindCount; ++k) if (Tune().spot[k] >= 0.0f) p.spot[k] = Tune().spot[k]; for (std::size_t k = 0; k < MFO::Iaus::kHoldCons; ++k) if (Tune().hold[k] >= 0.0f) p.hold[k] = Tune().hold[k]; }
+    [[nodiscard]] inline std::size_t HoldIndex(std::string_view name) { for (std::size_t k = 0; k < MFO::Iaus::kHoldCons; ++k) if (name == Name(static_cast<Cons>(MFO::Iaus::kHoldFirst + k))) return k; return MFO::Iaus::kHoldCons; }   // spot.hold.<cons>
 
     // The default weight of (family, cons) is not reachable from outside Catalogue.cpp; the search starts a weight at 1 unless told.
     inline bool SetParam(const std::string& name, double v) {
@@ -97,6 +100,7 @@ namespace Sim {
         if (name.rfind("w.", 0) == 0) { const auto dot = name.find('.', 2); if (dot == std::string::npos) return false; const std::size_t fi = idx(2), ci = idx(dot + 1); if (fi >= kFamilies || ci >= kCons) return false;
             for (auto& o : s.weights) if (o.family == static_cast<Family>(fi) && o.cons == static_cast<Cons>(ci)) { o.w = f; return true; }
             s.weights.push_back({ static_cast<Family>(fi), static_cast<Cons>(ci), f }); return true; }
+        if (name.rfind("spot.hold.", 0) == 0) { const std::size_t k = HoldIndex(std::string_view(name).substr(10)); if (k >= MFO::Iaus::kHoldCons || !(f >= 0.0f)) return false; s.hold[k] = f; return true; }
         if (name.rfind("spot.", 0) == 0) { for (const MV::SpotKindRow& r : MV::kSpotKinds) if (name.substr(5) == r.name && f >= 0.0f) { s.spot[static_cast<std::size_t>(r.kind)] = f; return true; } return false; }
         if (name.rfind("aw.", 0) == 0) { const std::size_t fi = idx(3); if (fi >= kFamilies) return false; s.t.actionWeight[fi] = f; return true; }
         if (name.rfind("c.", 0) == 0) { const auto dot = name.find('.', 2); if (dot == std::string::npos) return false; const std::size_t ci = idx(2); if (ci >= kCons) return false; Curve& c = s.t.curve[ci]; const std::string fld = name.substr(dot + 1);
@@ -122,6 +126,7 @@ namespace Sim {
         auto idx = [&](std::size_t from) { return static_cast<std::size_t>(std::atoi(name.c_str() + from)); };
         if (name.rfind("w.", 0) == 0) { const auto dot = name.find('.', 2); const std::size_t fi = idx(2), ci = dot == std::string::npos ? 0 : idx(dot + 1);
             for (const auto& o : s.weights) if (o.family == static_cast<Family>(fi) && o.cons == static_cast<Cons>(ci)) return o.w; return unset; }
+        if (name.rfind("spot.hold.", 0) == 0) { const std::size_t k = HoldIndex(std::string_view(name).substr(10)); return k < MFO::Iaus::kHoldCons ? (s.hold[k] >= 0.0f ? s.hold[k] : 1.0) : unset; }
         if (name.rfind("spot.", 0) == 0) { for (const MV::SpotKindRow& r : MV::kSpotKinds) if (name.substr(5) == r.name) return s.spot[static_cast<std::size_t>(r.kind)] >= 0.0f ? s.spot[static_cast<std::size_t>(r.kind)] : 1.0; return unset; }
         if (name.rfind("aw.", 0) == 0) return s.t.actionWeight[idx(3) % kFamilies];
         if (name.rfind("c.", 0) == 0) { const auto dot = name.find('.', 2); const Curve& c = s.t.curve[idx(2) % kCons]; const std::string fld = dot == std::string::npos ? "" : name.substr(dot + 1); return fld == "a" ? c.a : fld == "b" ? c.b : c.floor; }
@@ -153,7 +158,7 @@ namespace Sim {
     inline void ListParams() {
         std::printf("families:"); for (std::size_t i = 0; i < kFamilies; ++i) std::printf(" %zu=%s", i, std::string(Name(static_cast<Family>(i))).c_str());
         std::printf("\nconsiderations:"); for (std::size_t i = 0; i < kCons; ++i) std::printf(" %zu=%s", i, std::string(Name(static_cast<Cons>(i))).c_str());
-        std::printf("\nparams: w.<family>.<cons>  aw.<family>  c.<cons>.a|b|floor  spot.<kind> "); for (const TuneScalar& k : kTuneScalars) std::printf(" %s", k.name);
+        std::printf("\nparams: w.<family>.<cons>  aw.<family>  c.<cons>.a|b|floor  spot.<kind>  spot.hold.<cons> "); for (const TuneScalar& k : kTuneScalars) std::printf(" %s", k.name);
         for (std::size_t i = 0; !MFO::Iaus::SpellWorthKnobName(i).empty(); ++i) std::printf(" %s", std::string(MFO::Iaus::SpellWorthKnobName(i)).c_str());
         for (const WorthKnob& k : kWorthKnobs) std::printf(" %s", k.name); for (const LootKnobF& k : kLootKnobsF) std::printf(" %s", k.name); for (const LootKnobI& k : kLootKnobsI) std::printf(" %s", k.name); std::printf("\n");
     }

@@ -1,0 +1,20 @@
+# A hall with a gallery 256 up along its far side, a stair at each end of it. The foes stand on the gallery. (the mode set)
+class fixture_stairs
+nopool
+map
+######################
+#P...................#
+#....................#
+#....................#
+#....................#
+#....................#
+#.....r........s.....#
+#.....r........s.....#
+#.....r........s.....#
+#....ggggggFggggg....#
+#....gggggggggggg....#
+######################
+end
+ramp 6 6 6 8 0 256 y
+ramp 15 6 15 8 0 256 y
+z 5 9 16 10 256
