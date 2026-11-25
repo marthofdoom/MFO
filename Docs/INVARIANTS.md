@@ -17,6 +17,10 @@ with a borrowed one, because the next person will believe it.
 symptom.** A rule with a local scar outranks the same rule with a borrowed
 one, because the next person will believe it.
 
+**Harbinger INVARIANTS #0 (no perform calls), note 2026-11-24:** marth APPROVED a rune-only exception: at the release of a rune his own AI chose and
+animated, Harbinger may complete the launch at the declared point, once. NOT BUILT (package H2, after the tune;
+`Docs/research/2026-11/placed-spells-plan.md`). Until H2 lands and amends Harbinger's own #0, no code may rely on it.
+
 ## CITATION NAMESPACE (2026-09-07) — `#N` is an INVARIANT, `T#N` is a TASK
 
 **99 rules: 85 numbered (`#1`–`#85`, each used exactly once) plus 14 lettered

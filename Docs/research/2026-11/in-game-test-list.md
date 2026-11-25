@@ -426,3 +426,13 @@ Deploy the DEV-SELFTEST DLL (probes default ON there; a release DLL needs `[Prob
 - **Point road.** Take a hit-and-run fight so a follower gives ground or disengages (a low-health Thief, a mage with a foe close). PASS = `[probe-point]` OPEN / progress / CLOSED lines with "walked N inside", the figure that says whether a small R pins him.
 - **Not in this session:** the light level (no reader yet), foes' own traversal, a point claim with a small radius.
 
+## Placed spells F1 (`feat/placed-l1m1`; needs Harbinger 0.20.5 or newer; not field run)
+One conjurer on Sentient AI with Conjure Familiar and Flame Atronach taught, one mage with Wall of Flames and Frost Nova (or Fire Storm) taught. Open field. Judge one watched cast with its log lines, never counts.
+1. **Claimed summon fires (IAUS).** Start a fight. `MFO.log`: the follower's `[spellbook] ...: spells ... summon=N` with N > 0 and NO `Conjure Familiar ... no IAUS candidate` line; `[iaus] ... pick=cast_summon`; `[buff] <id> Conjure Familiar (<form>): ... CLAIM at <id> (animated; the engine's own Summon caster decides when it fires)`; `APMF.log` `[ctcensus]` shows a Summon caster. PASS = he raises his hand, the creature appears about 300 units ahead, and `fired -- left hand released at once` follows. FAIL = `UNANIMATED road 'summon-oneshot'` or `NEVER FIRED this fight`.
+2. **Same by gambit rule** (Always -> Cast Conjure Familiar on self): the same lines. This is the first proof of the claimed summon road.
+3. **Limit and live.** While the first lives he casts no second one of the same spell, and no second spell past the limit. No repeated `APMF REFUSED` / `WOULD REFUSE` lines and no hand flicker.
+4. **Back to a cliff.** Stand him facing a wall: where does the creature land.
+5. **Thrall (both hands), gambit.** Report only: does it raise both hands and fire, or `NEVER FIRED`.
+6. **Self blast blocked.** Frost Nova / Fire Storm known, Sentient AI: `[spellbook] ... no IAUS candidate: hostile area around himself: blocked for now ...`, never picked, also in Whiterun with townsfolk near. A gambit rule still casts it. A tome of it in your pack: Classes tab, Teach spells, the row is grey with the reason.
+   Opener: before his own combat starts the line is `[buff] <id> summon <form> DEFERRED -- no combat controller ...`, then the claim. Never `UNANIMATED road 'summon-oneshot'` for an IAUS pick.
+7. **Self-test** `t2.spell_weighing`: PASS with `0 dropped as placement` and `0 kept`.

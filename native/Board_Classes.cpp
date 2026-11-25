@@ -334,6 +334,14 @@ namespace MFO::Board {
                     ImGui::PopID();
                     if (armed) ImGui::PopStyleColor();
                 }
+                // placed-spells D2 (marth 11-24): a spell the AI is blocked from for now is shown greyed with the reason, never taught from this page.
+                for (const auto& t : who->teachableSpells) {
+                    if (!t.iausSelfBlast) continue;
+                    ++listed;
+                    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 360.0f);
+                    ImGui::TextDisabled("%s", Str::Fmt(Str::K::Cl_TeachBlocked, { t.name }).c_str());
+                    ImGui::PopTextWrapPos();
+                }
                 if (listed == 0) ImGui::TextDisabled("%s", Str::Fmt(Str::K::Cl_TeachNone, { who->name }).c_str());
                 ImGui::Separator();
                 if (Click::Selectable(Str::Label(Str::K::Cl_TeachClose, "clsteachclose"))) ImGui::CloseCurrentPopup();

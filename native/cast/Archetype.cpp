@@ -306,7 +306,7 @@ namespace MFO::Actuation {
                 archs.push_back(a);
                 effIdx.push_back(effNo);
                 bool drops = false;
-                if (HasImpactHazard(b, drops)) o.impactHazard = true;
+                if (HasImpactHazard(b, drops)) { o.impactHazard = true; o.hostileImpact |= b->data.flags.all(RE::EffectSetting::EffectSettingData::Flag::kHostile); }
                 if (drops) o.impactHazardDrops = true;
                 if (a == Arch::kSpawnHazard) {
                     o.spawnHazard = true;

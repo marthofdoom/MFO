@@ -183,6 +183,18 @@ def stale_spawns(path):
     return _SPAWNS[k]
 
 
+_PLACED = {}
+
+
+def stale_placed(path):
+    """Placed spells L1: a compiled list whose spell rows do not carry what native's placement rule reads. Once per file version."""
+    k = (path, os.stat(path).st_mtime_ns)
+    if k not in _PLACED:
+        t = open(path, encoding="utf-8").read()
+        _PLACED[k] = '"archetype":' in t and '"placedSchema":2' not in t
+    return _PLACED[k]
+
+
 def check_world(world, need_worth=True):
     """Review F8: EVERY stage that reads a list checks its companion files here (world_args and ident call it), not only stage_prep.
     The simulator reads <list>.combatmods.json BESIDE the .sim.json and takes "absent" for "no such mod", so a missing file would
@@ -194,6 +206,8 @@ def check_world(world, need_worth=True):
             raise SystemExit("missing %s (tools/list_balance/compile_world.py / extract_combat_mods.py): a list is never run without its companion files" % f)
     if stale_spawns(CACHE_DIR + world + ".sim.json"):
         raise SystemExit("%s was compiled before sim bundle A: no Summon effect names its actor, every summon would silently be the generic creature. Run extract.py, extract_world.py and compile_world.py again" % (CACHE_DIR + world + ".sim.json"))
+    if stale_placed(CACHE_DIR + world + ".sim.json"):
+        raise SystemExit("%s was compiled before placed-spells L1 (no placedSchema): the lab's books would not be the game's. Run extract.py, extract_world.py and compile_world.py again" % (CACHE_DIR + world + ".sim.json"))
     if need_worth and not os.path.exists(os.path.join(A.out, "potworth-%s.txt" % world)):
         raise SystemExit("missing %s: run the prep stage on this --out first (it measures each list's potion worth)" % os.path.join(A.out, "potworth-%s.txt" % world))
 
