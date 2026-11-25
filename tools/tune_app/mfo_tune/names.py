@@ -21,9 +21,12 @@ CONS = (
     "spot_leash", "spot_climb", "spot_drop", "spot_detected", "spot_light", "spot_foe_reach", "spot_lane", "spot_portal_busy", "spot_serves", "spot_cover",
     "spot_region_trust", "spot_path_trust",
     "light_veto", "light_need", "light_rank", "self_light", "light_on_stealth", "spot_path_light",
+    "hold_foes_on", "hold_contact_sec", "hold_foe_speed", "hold_foe_ranged", "hold_sight", "hold_cover", "hold_narrow", "hold_ally_front", "hold_player", "hold_kept",
 )
+# the hold considerations (class files: spot.hold.<cons>=<v>, v >= 0): a run of CONS
+HOLD_CONS = tuple(c for c in CONS if c.startswith("hold_"))
 # native/iaus/Spots.h kSpotKinds, in order (class files: spot.<kind>=<v>)
-SPOT_KINDS = ("stay", "firing", "cover", "high_ground", "chokepoint", "flank", "heal_reach", "peel", "kite", "regroup", "loot_route", "retreat", "reach")
+SPOT_KINDS = ("stay", "firing", "cover", "high_ground", "chokepoint", "flank", "heal_reach", "peel", "kite", "regroup", "loot_route", "retreat", "reach", "hold")
 CLASS_SLUGS = (
     "melee", "ranged", "mage", "knight", "warrior", "mercenary", "archer", "thief", "evoker", "conjurer", "healer", "warlock",
     "great-knight", "champion", "blademaster", "ranger", "master-thief", "wizard", "necromancer", "priest", "spellsword",

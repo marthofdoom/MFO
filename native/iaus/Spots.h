@@ -4,6 +4,8 @@
 // TO ADD A SPOT KIND: append to Core.h SpotKind, add its row to kSpotKinds and its generator in Spots.cpp, and its class rule in SpotKindsFor.
 // TO ADD A CONSIDERATION: a Core.h Cons + SpotFacts field, its curve in Catalogue.cpp, its row in Spots.cpp kSpotSet / SpotInput, its fill in
 // MovePass.cpp Fill. Nowhere else.
+// TO ADD A HOLD CONSIDERATION: a Cons before HoldKept (one run, Core.h kHoldCons) + its SpotFacts field, name, curve and RoleOf line in Catalogue.cpp, its row in
+// Spots.cpp kHoldSet / HoldInput, its fill in MovePass.cpp FillHold. Its weight is spot.hold.<name> (TuningFile.cpp, the sim's Tune.h) by itself.
 #include "iaus/ClassCurves.h"
 #include "iaus/PartyPicture.h"
 
@@ -36,6 +38,10 @@ namespace MFO::Iaus::Move {
     bool GenRegroup(const GenIn&, const Cand&, float&);
     bool GenRetreatExit(const GenIn&, const Cand&, float&); bool CheckExit(const GenIn&, const Cand&, Env::Scratch&);
     bool GenReachUnreach(const GenIn&, const Cand&, float&);
+    // HOLD has no generator: there is one place, his own (HoldPoint), and Phase3 makes its row beside Stay's. This is its gate: the action works from here.
+    [[nodiscard]] bool HoldOffered(const PartyPicture& a_pic, const Member& a_m, const RankedAction& a_act, const Tuning& a_t);
+    // The point a hold is on: his own, or the standing order's while he is within twice its leash (a hold does not creep with every push). True = the order's.
+    [[nodiscard]] bool HoldPoint(const Member& a_m, Env::Vec3& a_p, std::int32_t& a_tri);
 
     struct SpotKindRow { SpotKind kind; const char* name; SpotGen gen; SpotCheck check; std::uint64_t families; std::uint32_t needs; };
     // A Scroll pairs as the family of the spell it reads (RankedAction::Kind).
@@ -53,6 +59,7 @@ namespace MFO::Iaus::Move {
         { SpotKind::LootRoute,   "loot_route",  nullptr,          nullptr,     0, 0 },   // the logistics run's: no combat action pairs with it, so it is never offered here
         { SpotKind::RetreatExit, "retreat",     &GenRetreatExit,  &CheckExit,  Families(Family::Retreat, Family::Disengage, Family::GiveGround, Family::BackOff, Family::DrinkHealth), kNeedDisengage },
         { SpotKind::ReachUnreach,"reach",       &GenReachUnreach, &CheckSight, Families(Family::Attack, Family::PowerAttack, Family::CastOffense, Family::CastControl), 0 },
+        { SpotKind::Hold,        "hold",        nullptr,          nullptr,    ~std::uint64_t{ 0 }, kNeedStrict },   // its gate is HoldOffered
     } };
     static_assert([] { for (std::size_t i = 0; i < kSpotKindCount; ++i) if (static_cast<std::size_t>(kSpotKinds[i].kind) != i) return false; return true; }(), "kSpotKinds is indexed by SpotKind");
 

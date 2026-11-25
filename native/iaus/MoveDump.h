@@ -17,7 +17,7 @@
 
 namespace MFO::Iaus::MoveDump {
 
-    inline constexpr int kVersion = 5;
+    inline constexpr int kVersion = 6;
 
     struct Mesh {   // a View that owns its arrays
         std::vector<Env::Vec3> verts; std::vector<Env::Tri> tris; std::vector<Env::Door> doors; std::vector<Env::Wall> walls; std::vector<std::uint32_t> walk, weak; Env::Grid grid;
@@ -70,12 +70,12 @@ namespace MFO::Iaus::MoveDump {
         line("pic"); o << a_pic.envStamp << a_pic.t << a_pic.caps.point << a_pic.caps.hold << a_pic.caps.pin << a_pic.caps.facing << a_pic.caps.gait << a_pic.exterior << a_pic.caps.strict << a_pic.caps.kite << a_pic.caps.disengage;
         for (const auto& m : a_pic.party) {
             line("m"); o << m.id << m.p << m.ageSec << m.decides << m.classId << m.kinds << m.speed << m.anchor << m.leash << m.wantsDark << (m.marks | m.seen)
-                         << m.who.radius << m.who.opensDoors << m.who.unlocks << m.who.large << m.who.drops << m.who.maxDrop << m.sneakSkill << m.invisible;
+                         << m.who.radius << m.who.opensDoors << m.who.unlocks << m.who.large << m.who.drops << m.who.maxDrop << m.sneakSkill << m.invisible << m.anchorVel << m.anchorMoves;
             for (std::size_t k = 0; k < m.nTop; ++k) { line("a"); detail::Act(o, m.top[k]); }
             if (m.commit.on) { line("c"); o << m.commit.key << m.commit.p << m.commit.tri << m.commit.kinds << m.commit.at; detail::Act(o, m.commit.act); detail::Act(o, m.commit.held); }
             if (m.order.gen) { line("o"); detail::Order(o, m.order); }   // the order that stood
         }
-        for (const auto& e : a_pic.foes) { line("f"); o << e.id << e.p << e.ageSec << e.target << e.faceX << e.faceY << e.skill; }
+        for (const auto& e : a_pic.foes) { line("f"); o << e.id << e.p << e.ageSec << e.target << e.faceX << e.faceY << e.skill << e.reach << e.speed << e.ranged; }
         for (const auto& r : a_pic.areas) { line("r"); o << r.p << r.r; }
         for (const auto& l : a_pic.light) { line("l"); o << l.key << l.level; }
         for (const auto& s : a_pic.lightField.samples) { line("i"); o << s.p << s.level << s.t << s.source; }   // S4
@@ -108,11 +108,11 @@ namespace MFO::Iaus::MoveDump {
             else if (k == "d") { Env::Door d; i >> d.tri >> d.state >> d.key >> d.id >> d.leaf >> d.ax >> d.ay >> d.bx >> d.by >> d.z0 >> d.z1; c->mesh.doors.push_back(d); }
             else if (k == "pic") i >> P.envStamp >> P.t >> P.caps.point >> P.caps.hold >> P.caps.pin >> P.caps.facing >> P.caps.gait >> P.exterior >> P.caps.strict >> P.caps.kite >> P.caps.disengage;
             else if (k == "m") { Move::Member m; i >> m.id >> m.p >> m.ageSec >> m.decides >> m.classId >> m.kinds >> m.speed >> m.anchor >> m.leash >> m.wantsDark >> m.marks
-                                                   >> m.who.radius >> m.who.opensDoors >> m.who.unlocks >> m.who.large >> m.who.drops >> m.who.maxDrop >> m.sneakSkill >> m.invisible; P.party.push_back(m); }
+                                                   >> m.who.radius >> m.who.opensDoors >> m.who.unlocks >> m.who.large >> m.who.drops >> m.who.maxDrop >> m.sneakSkill >> m.invisible >> m.anchorVel >> m.anchorMoves; P.party.push_back(m); }
             else if (k == "a" && !P.party.empty() && P.party.back().nTop < 3) { auto& m = P.party.back(); detail::Act(i, m.top[m.nTop++]); }
             else if (k == "c" && !P.party.empty()) { auto& x = P.party.back().commit; x.on = true; i >> x.key >> x.p >> x.tri >> x.kinds >> x.at; detail::Act(i, x.act); detail::Act(i, x.held); }
             else if (k == "o" && !P.party.empty()) detail::Order(i, P.party.back().order);
-            else if (k == "f") { Move::Foe e; i >> e.id >> e.p >> e.ageSec >> e.target >> e.faceX >> e.faceY >> e.skill; P.foes.push_back(e); }
+            else if (k == "f") { Move::Foe e; i >> e.id >> e.p >> e.ageSec >> e.target >> e.faceX >> e.faceY >> e.skill >> e.reach >> e.speed >> e.ranged; P.foes.push_back(e); }
             else if (k == "r") { Move::Area r; i >> r.p >> r.r; P.areas.push_back(r); }
             else if (k == "l") { Move::LightAt l; i >> l.key >> l.level; P.light.push_back(l); }
             else if (k == "i") { Light::Sample s; i >> s.p >> s.level >> s.t >> s.source; P.lightField.samples.push_back(s); }

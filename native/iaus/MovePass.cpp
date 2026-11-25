@@ -146,6 +146,47 @@ namespace MFO::Iaus::MovePass {
             return f;
         }
         // Marks: what the places already given change. Pure over (f, plans): calling it again with more plans rewrites every field it owns.
+        // ... and the hold's half. The shared facts are those of staying: with no hold consideration read, a hold IS a stay. What is not read stays not applicable.
+        void FillHold(SpotFacts& f, const PartyPicture& pic, const Member& m, const RankedAction& a, const Tuning& t) {
+            f.hold = true;
+            Env::Vec3 at; std::int32_t tri = -1; f.holdKept = HoldPoint(m, at, tri) && !m.commit.on;   // on a committed place the momentum is the place's own (the bar), not the hold's
+            const Foe* near = nullptr; float nearD = 0.0f;
+            int on = 0, known = 0, aimed = 0, ranged = 0, rangedKnown = 0, hid = 0, seenKnown = 0; float contact = -1.0f, pace = -1.0f;
+            for (const Foe& e : pic.foes) {
+                const float d = Dist(e.p, m.p);
+                if (!near || QDist(d) < QDist(nearD)) { near = &e; nearD = d; }   // the party is sorted by FormID: the first of equals
+                if (e.target != m.id) continue;
+                ++aimed;
+                if (e.reach >= 0.0f) { ++known; if (d <= e.reach) ++on; }
+                if (e.reach >= 0.0f && e.speed >= 0.0f) { const float s = d <= e.reach ? 0.0f : e.speed > 1.0f ? (std::min)(60.0f, (d - e.reach) / e.speed) : 60.0f; if (contact < 0.0f || s < contact) contact = s; }
+                if (e.speed >= 0.0f) pace = (std::max)(pace, e.speed / (m.speed > 1.0f ? m.speed : 1.0f));
+                if (e.ranged != Iaus::Tri::Unknown) { ++rangedKnown; if (e.ranged == Iaus::Tri::Yes) ++ranged; }
+                if (const auto s = Sees(pic, KeyOfStay(m.id), e.id); s != Iaus::Tri::Unknown) { ++seenKnown; if (s == Iaus::Tri::No) ++hid; }
+            }
+            if (a.melee && known == aimed) f.holdFoesOn = static_cast<float>(on);   // a blade's reason. 0 of none is known too
+            if (!a.melee) f.holdContactSec = contact;                               // a shooter's
+            f.holdFoeSpeed = pace;
+            if (rangedKnown) f.holdFoeRanged = static_cast<float>(ranged) / static_cast<float>(rangedKnown);
+            if (seenKnown) f.holdCover = static_cast<float>(hid) / static_cast<float>(seenKnown);
+            if (Sighted(a) && a.sight != Sight::Unknown) f.holdSight = a.sight == Sight::Visible ? Iaus::Tri::Yes : Iaus::Tri::No;
+            if (near) {
+                if (const auto it = pic.work.narrow.find({ m.id, near->id }); it != pic.work.narrow.end()) f.holdNarrowU = it->second;
+                f.holdAllyFront = Iaus::Tri::No;
+                const float bx = near->p.x - m.p.x, by = near->p.y - m.p.y, l2 = bx * bx + by * by;
+                for (const Member& o : pic.party) {
+                    if (o.id == m.id || !Finite(o.p) || std::none_of(pic.foes.begin(), pic.foes.end(), [&](const Foe& e) { return e.target == o.id; })) continue;
+                    const float px = o.p.x - m.p.x, py = o.p.y - m.p.y, u = l2 > 1.0f ? (px * bx + py * by) / l2 : -1.0f;
+                    if (!(u > 0.0f && u < 1.0f)) continue;
+                    const float x = px - bx * u, y = py - by * u;
+                    if (x * x + y * y <= t.spotPeelU * t.spotPeelU) f.holdAllyFront = Iaus::Tri::Yes;
+                }
+            }
+            if (m.leash > 0.0f) {
+                Env::Vec3 pl = m.anchor;
+                if (m.anchorMoves) { pl.x += m.anchorVel.x * t.orderLeadSec; pl.y += m.anchorVel.y * t.orderLeadSec; pl.z += m.anchorVel.z * t.orderLeadSec; }
+                f.holdPlayer = Dist(at, pl) / m.leash;
+            }
+        }
         void FillMarks(SpotFacts& f, const PartyPicture& pic, std::size_t me, const RankedAction& a, const Spot* spot, const Work::Pair* pair, const std::vector<Plan>& plans) {
             const Member& m = pic.party[me];
             const Env::Vec3 at = spot ? spot->p : m.p;
@@ -203,6 +244,7 @@ namespace MFO::Iaus::MovePass {
             Triple x{ mi, ai, si, mask, pair, 1.0f, FillStatic(pic, m, m.top[ai], s, pair, t) };
             x.incumbent = s && m.commit.on && m.commit.key == s->key;
             x.scale = !s && m.top[ai].moveOnly ? 0.0f : KindWeight(mask, profiles(m.classId)) * (x.incumbent ? t.spotMomentum : 1.0f);   // a move-only action does not work from here
+            if (mask == KindBit(SpotKind::Hold)) { FillHold(x.f, pic, m, m.top[ai], t); x.scale *= profiles(m.classId).spot[static_cast<std::size_t>(SpotKind::Stay)]; }   // a hold is a stay with an order on it
             return x;
         }
         std::int32_t TriOf(const PartyPicture& pic, const Triple& x) { return x.spot >= 0 ? pic.pool[static_cast<std::size_t>(x.spot)].tri : -1; }
@@ -212,7 +254,8 @@ namespace MFO::Iaus::MovePass {
             if (a.member != b.member) return a.member < b.member;
             if (const auto ta = TriOf(pic, a), tb = TriOf(pic, b); ta != tb) return ta < tb;
             if (a.spot != b.spot) return a.spot < b.spot;   // the pool is sorted by key
-            return a.action < b.action;
+            if (a.action != b.action) return a.action < b.action;
+            return a.kinds < b.kinds;   // Stay before Hold: a hold must be worth MORE than leaving him to the engine
         }
 
         // ── phase 1, one unit at a time ──
@@ -224,7 +267,16 @@ namespace MFO::Iaus::MovePass {
             Env::Path p; PathFact f; f.from = m.p;
             const bool any = Env::FindPath(v, { m.p, to, m.tri, k.toTri, m.who, pic.avoid }, s, p);
             f.reachable = any && p.reachable; f.length = p.length; f.climb = p.climb; f.drop = p.fall;
-            if (k.actor) { f.at[0] = to; f.nAt = 1; }
+            if (k.actor) {
+                f.at[0] = to; f.nAt = 1;
+                if (f.reachable && pic.caps.strict) {   // the hold's passage (Cons::HoldNarrow). A foe in his own triangle: the corridor is none of this walk's
+                    f.narrow = t.spotPortalU;
+                    if (m.tri != k.toTri) for (std::size_t i = 0; i + 1 < s.corridor.size(); ++i) {
+                        const std::int32_t a = s.corridor[i].tri, b = s.corridor[i + 1].tri; const Env::Tri& T = v.tris[static_cast<std::size_t>(a)];
+                        for (int e = 0; e < 3; ++e) if (T.nb[e] == b && DoorwayOf(v, pic.wallVert, a, e, t)) { const Env::Vec3 &q = v.verts[T.v[e]], &r = v.verts[T.v[(e + 1) % 3]]; f.narrow = (std::min)(f.narrow, std::sqrt((q.x - r.x) * (q.x - r.x) + (q.y - r.y) * (q.y - r.y))); }
+                    }
+                }
+            }
             else if (f.reachable) {
                 const int n = (std::min)(B.pathSamples, static_cast<int>(f.at.size()));   // evenly along the walk
                 Env::Vec3 prev = m.p; float done = 0.0f; int next = 1;
@@ -313,6 +365,7 @@ namespace MFO::Iaus::MovePass {
                     PathFact* p = nullptr;
                     PathTo(pic, v, s, t, m, { m.id, m.tri, f->id, f->tri, true }, f->p, p);
                     if (p) w.reach[{ m.id, f->id }] = p->reachable ? Iaus::Tri::Yes : Iaus::Tri::No;
+                    if (p && p->narrow >= 0.0f) w.narrow[{ m.id, f->id }] = p->narrow;
                 }
                 return true;
             }
@@ -751,7 +804,10 @@ namespace MFO::Iaus::MovePass {
         for (std::uint32_t i = 0; i < pic.party.size(); ++i) {
             if (!open[i]) continue;
             const Member& m = pic.party[i];
-            for (std::uint8_t a = 0; a < m.nTop; ++a) table.push_back(MakeTriple(pic, i, a, -1, nullptr, KindBit(SpotKind::Stay), profiles, t));
+            for (std::uint8_t a = 0; a < m.nTop; ++a) {
+                table.push_back(MakeTriple(pic, i, a, -1, nullptr, KindBit(SpotKind::Stay), profiles, t));
+                if (HoldOffered(pic, m, m.top[a], t)) table.push_back(MakeTriple(pic, i, a, -1, nullptr, KindBit(SpotKind::Hold), profiles, t));
+            }
         }
         const std::size_t stays = table.size();
         if (done) for (const auto& p : w.pairs) {
@@ -815,6 +871,7 @@ namespace MFO::Iaus::MovePass {
             } else if (const Triple* x = picked[i]) {
                 a.act = m.top[x->action]; a.score = x->score;
                 if (x->spot >= 0) { spotOf(x->spot); a.kinds = x->kinds; a.kept = x->incumbent; }
+                else if (x->kinds == KindBit(SpotKind::Hold)) { a.kinds = x->kinds; a.kept = HoldPoint(m, a.p, a.tri); }
             }
             a.action = a.act.family; a.form = a.act.form; a.target = a.act.target;
             out.push_back(a);
@@ -837,28 +894,15 @@ namespace MFO::Iaus::MovePass {
 
 namespace MFO::Iaus::Move {
 
-    MoveMode StayMode(const PartyPicture& pic, const Member& m, const RankedAction& act, const Tuning& t) {
-        if (!(t.orderHoldStay >= 1.0f) || act.Kind() >= Family::kCount || IsMove(act.family) || act.moveOnly || act.target == 0 || act.target == m.id) return MoveMode::Free;
-        const Env::Vec3* at = nullptr;
-        for (const Foe& f : pic.foes) if (f.id == act.target) at = &f.p;
-        if (!at) for (const Member& o : pic.party) if (o.id == act.target) at = &o.p;
-        if (!at || (act.reach > 0.0f && Dist(m.p, *at) > act.reach)) return MoveMode::Free;   // it does not work from here
-        int onHim = 0; float nearest = kInf;
-        for (const Foe& f : pic.foes) if (f.target == m.id) { const float d = Dist(f.p, m.p); nearest = (std::min)(nearest, d); if (d <= t.orderNearU) ++onHim; }
-        if (act.melee) return static_cast<float>(onHim) >= t.orderHoldFoes ? MoveMode::Stand : MoveMode::Free;
-        return act.sight == Sight::Visible && nearest >= t.orderStandMinU ? MoveMode::Stand : MoveMode::Free;
-    }
-
     MoveOrder OrderOf(const PartyPicture& pic, const Member& m, const Assignment& a, const Tuning& t) {
         MoveOrder o;
         if (!pic.caps.strict || !m.decides) return o;
-        const OrderRow& r = OrderRowOf(a.spot >= 0 ? a.kinds : KindBit(SpotKind::Stay));
-        o.mode = a.spot >= 0 ? r.mode : StayMode(pic, m, a.act, t);
+        const OrderRow& r = OrderRowOf(a.kinds & AllowedKinds(pic.caps, t) & m.kinds);
+        o.mode = r.mode;
         if (o.mode == MoveMode::Free) return o;
         o.p = a.p; o.tri = a.tri; o.target = a.act.target;
         o.leashR = r.pin ? t.orderLeashPin : t.orderLeash; o.arriveR = (std::min)(t.orderArrive, o.leashR);
-        // holding where he is: the point he was already standing on, so a hold does not creep with every push
-        if (a.spot < 0 && m.order.mode != MoveMode::Free && Dist(m.order.p, m.p) <= 2.0f * m.order.leashR) { const FormID tg = o.target; const float lr = m.order.leashR, ar = m.order.arriveR; o = MoveOrder{ MoveMode::Stand, m.order.p, m.order.tri, lr, ar, 0, tg, 0 }; }
+        if (Env::Vec3 p; a.spot < 0) if (std::int32_t tri = -1; HoldPoint(m, p, tri)) { o.p = p; o.tri = tri; o.leashR = m.order.leashR; o.arriveR = m.order.arriveR; }   // the point he holds already, at its own radii
         return o;
     }
 }
