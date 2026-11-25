@@ -53,10 +53,10 @@ namespace MFO::Iaus::Prune {
         return a_hazardDropsToGround && a_concentration && !a_selfDelivery;
     }
 
-    // INTERIM BLOCK (marth 2026-11-24 "Block them for now", decision D2; review F4 narrowed it to his words, "caster-centered hostile area spell"): the sentient
-    // AI casts no Self, fire-and-forget spell whose AREA is HOSTILE by the engine (Frost Nova, Fire Storm, Blizzard). Their only road is the unanimated
-    // self-stream (CastSelfDirect) and nothing yet counts the townsfolk in the area. Gambit rules are unchanged. DELETE this rule when packages M2 (area
-    // census) and M4 (animated self-blast road) have landed (placed-spells-plan.md). PURE and shared: iaus/SpellBook.cpp and the lab (Data.h) both call these.
+    // SELF BLASTS (marth 2026-11-24 "Block them for now", decision D2; review F4 narrowed it to his words, "caster-centered hostile area spell").
+    // PACKAGE M4 (placed-spells-plan 3.3) DELETED THE BLOCK for the AREA arm: the sentient AI now picks a Self, fire-and-forget, hostile AREA spell (Frost Nova,
+    // Fire Storm, Harmony, Mass Paralysis) like any other area spell. Its road is the animated buff claim (cast/BuffRoad.cpp, target 0, fire-once) and its guard
+    // is the ONE area census (iaus/AreaCensus.h, centred on him, the radius of his own hostile area effect): a bystander or an ally in the blast scores it 0.
     //   HostileAreaEffect  ONE effect: the kHostile flag (not kDetrimental) AND an area of ITS OWN: EFIT area, impact hazard, or an explosion with a payload
     //                      (its own or its projectile's). A hostile effect with no area, or an area effect without the flag (Vanish, Hallowed Weapon, a Calm
     //                      the record leaves unflagged), is not one.
@@ -64,12 +64,46 @@ namespace MFO::Iaus::Prune {
     //                      carry a Demoralize / Paralysis rider.
     //   hostileHazard      it spawns a caster-centred hazard whose SPELL has a hostile effect (SpellArchetype::hazardHostile), whatever its own flags say.
     //                      That holds for Blizzard and, by record, for every damage circle (Circle of Strength drains stamina, Talons of Nirn harms it).
-    // Conditions are NOT read: an undead-only hostile area (Bane of the Undead, Turn, Circle of Protection's slow) stays blocked.
+    // Conditions are NOT read: an undead-only hostile area (Bane of the Undead, Turn, Circle of Protection's slow) is a blast like any other; the census counts who
+    // is in it, never what the spell would do to them.
+    // WHAT STAYS OUT, IsSelfHazardBlock (MFO-B872): the HAZARD arm. Those spells are Buff by nature (their own flags say benign), so no offense candidate runs
+    // the census for them, and a hazard LIVES (it is placed and stays; no dwell or stack rule exists, MFO-B871 is the wall's twin), so one cast per lap would
+    // pile hazards up. To offer them, give them the offense nature, read the spawned hazard's footprint and write the stack rule, then delete this function.
+    // THE LAB keeps IsSelfBlastPlacement (BOTH arms): plan section 7 leaves self-blast rows out of every tune until the M4 field run, so the lab's book must not
+    // hold one. PURE and shared: iaus/SpellBook.cpp (IsSelfHazardBlock) and the lab (Data.h, IsSelfBlastPlacement).
     [[nodiscard]] inline bool HostileAreaEffect(bool a_hostileFlag, bool a_efitArea, bool a_impactHazard, bool a_payloadExplosion) {
         return a_hostileFlag && (a_efitArea || a_impactHazard || a_payloadExplosion);
     }
     [[nodiscard]] inline bool IsSelfBlastPlacement(bool a_selfDelivery, bool a_concentration, bool a_harms, bool a_hostileArea, bool a_hostileHazard) {
         return a_selfDelivery && !a_concentration && ((a_harms && a_hostileArea) || a_hostileHazard);
+    }
+    [[nodiscard]] inline bool IsSelfHazardBlock(bool a_selfDelivery, bool a_concentration, bool a_hostileHazard) {
+        return a_selfDelivery && !a_concentration && a_hostileHazard;
+    }
+
+    // THE TWO RADII OF A SELF BLAST (M4 F2; units). `guard` is what the census reads for allies and bystanders: the WIDEST area the record states anywhere (a
+    // detrimental effect's, a payload explosion's), because a guard errs wide. `foe` is where the harm lands: the hostile effect's own radius (the foe-inside gate,
+    // foes in area), because a pick errs narrow. Both widen to the hostile effect's impact hazard. An unreadable number never narrows the guard.
+    struct BlastRadii { float guard = 0.0f, foe = 0.0f; };
+    [[nodiscard]] inline BlastRadii SelfBlastRadii(float a_widest, float a_hostile, float a_impactHazard) {
+        const auto pos = [](float v) { return std::isfinite(v) && v > 0.0f ? v : 0.0f; };
+        BlastRadii r;
+        r.foe   = (std::max)(pos(a_hostile), pos(a_impactHazard));
+        r.guard = (std::max)(pos(a_widest), r.foe);
+        return r;
+    }
+
+    // A PICKED SELF BLAST (M4 F3, F5): it goes out (and its rule is a cast channel of the scan) only on the animated claim road AND with bCastSelf on; a
+    // never-fired hold-off (a_transparent) holds no hand either. Everything else is deferred: no cast, no castSeen.
+    [[nodiscard]] inline bool BlastGoes(bool a_claim, bool a_selfCasts) { return a_claim && a_selfCasts; }
+    [[nodiscard]] inline bool BlastHoldsCastChannel(bool a_claim, bool a_selfCasts, bool a_transparent) { return BlastGoes(a_claim, a_selfCasts) && !a_transparent; }
+    // THE RECORD + SEAT HALF of "can a blast ever be claimed" (M4 F4): false = it is not offered (book, Teach page).
+    [[nodiscard]] inline bool BlastServed(bool a_fireOnceServed, bool a_rowServed) { return a_fireOnceServed && a_rowServed; }
+    // A STANDING BLAST CLAIM, each lap (M4 F1). Its candidate is open this lap = keep. Closed, or no candidate at all = release. A charge in flight is NEVER cut by this:
+    // the engine fires it or an existing road ends it.
+    enum class StandingBlast : std::uint8_t { Keep, Release, InFlight };
+    [[nodiscard]] inline StandingBlast StandingBlastVerdict(bool a_open, bool a_inFlight) {
+        return a_open ? StandingBlast::Keep : a_inFlight ? StandingBlast::InFlight : StandingBlast::Release;
     }
 
     // THE ROAD OF A PICKED SUMMON (placed-spells review F1; cast/Fire.cpp). An IAUS pick is never cast unanimated: no claim = transparent, asked again every
@@ -92,7 +126,7 @@ namespace MFO::Iaus::Prune {
         bool rune = false;                     // SpellShape::Rune (target location with an effect projectile)
         bool wall = false;                     // SpellShape::Wall (IsWallShape, and no shape that outranks it in cast/Archetype.cpp)
         bool tlBurst = false;                  // SpellShape::TLBurst
-        bool selfBlast = false;                // IsSelfBlastPlacement (interim)
+        bool selfBlast = false;                // IsSelfHazardBlock in the game, IsSelfBlastPlacement in the lab (M4)
         bool summon = false;                   // any Summon Creature effect
     };
     // M1 (marth's end state: no static drop): a SUMMON is kept whatever its delivery. The engine places the creature itself (plan 2.2), so there is no
@@ -146,7 +180,7 @@ namespace MFO::Iaus::Prune {
     }
     // Unweighted (batch I item 6, marth 11-12 on Q91: "MFO should hide spells we can't weight if we don't know what they do"):
     // the nature is stated but NO effect of the spell is one IAUS can value. APPENDED; the value is only logged, never saved.
-    enum class Drop : std::uint8_t { Keep = 0, NotCastable, Unanimated, Placement, UnknownNature, Unweighted, SelfBlast };   // SelfBlast: the interim block (IsSelfBlastPlacement)
+    enum class Drop : std::uint8_t { Keep = 0, NotCastable, Unanimated, Placement, UnknownNature, Unweighted, SelfBlast };   // SelfBlast: a self hazard (IsSelfHazardBlock), and in the LAB every self blast (IsSelfBlastPlacement)
     [[nodiscard]] inline Drop StaticDrop(const StaticIn& a_in) {
         if (!a_in.castable) return Drop::NotCastable;
         if (a_in.roadUnsupported) return Drop::Unanimated;
@@ -161,7 +195,7 @@ namespace MFO::Iaus::Prune {
         case Drop::NotCastable:   return "not castable";
         case Drop::Unanimated:    return "unanimated road only";
         case Drop::Placement:     return "target location";
-        case Drop::SelfBlast:     return "hostile area around himself: blocked for now (no animated road, no bystander check)";
+        case Drop::SelfBlast:     return "hostile area around himself that no census reads yet (a spawned hazard in the game, any self blast in the lab): not offered";
         case Drop::UnknownNature: return "nature unknown";
         case Drop::Unweighted:    return "its effects are script-only or unknown archetypes: IAUS cannot weight what it does";
         }

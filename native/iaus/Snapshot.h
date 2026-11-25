@@ -66,7 +66,11 @@ struct SpellEntry {
         int           resistAv = -1;            // actor value of the costliest hostile effect's resist; -1 none
         float         cost = 0.0f;              // magicka cost for THIS caster (0 for scrolls and staves)
         float         reach = 0.0f;             // aimed reach in units; 0 = no cap of its own
-        float         areaUnits = 0.0f;         // max effect area in units; 0 = single target
+        float         areaUnits = 0.0f;         // max effect area in units; 0 = single target. What the GUARD (AreaCensus) reads: the widest of the spell's areas
+        float         blastFoeUnits = 0.0f;     // M4, a Self blast only: the HOSTILE effect's own radius (where the harm lands), <= areaUnits; 0 = areaUnits (Prune::SelfBlastRadii)
+        bool          leavesHazard = false;     // M4 F7: a Self blast whose hostile effect drops an impact hazard (it lives on: guarded for bystanders with kAreaGuard.wallMargin)
+        // Where a Self blast REACHES a foe (the foe-inside gate, foes in area, the range it is fought at): the narrow radius. Anything else: areaUnits.
+        [[nodiscard]] float FoeUnits() const { return selfDelivery && blastFoeUnits > 0.0f ? blastFoeUnits : areaUnits; }
         bool          selfDelivery = false;
         bool          targetActor = false;      // Delivery::kTargetActor (batch I H4: a lock-on spell; aimed otherwise when not touch / self)
         bool          touch = false;            // reach = the melee reach

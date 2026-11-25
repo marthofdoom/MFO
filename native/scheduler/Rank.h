@@ -28,6 +28,9 @@ namespace MFO::Scheduler::Rank {
     [[nodiscard]] constexpr int  OfTableRow(int a_row) { return a_row; }
     [[nodiscard]] constexpr bool IsChoice(int a_rank) { return a_rank >= 0; }
 
+    // An IAUS choice's rank (Iaus::RankOf). False for a table row, kNone and an unranked hold (Actuation kNoRule = INT_MAX).
+    [[nodiscard]] constexpr bool IsIaus(int a_rank) { return a_rank >= kIausRankFloor && a_rank <= Iaus::kRankBase; }
+
     // The table walk resumes past a passed-over row (Evaluate's a_startIndex).
     [[nodiscard]] constexpr int NextTableRow(int a_rank) { return a_rank + 1; }
 

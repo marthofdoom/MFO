@@ -522,6 +522,7 @@ namespace Sim {
     struct Policy {
         virtual ~Policy() = default;
         virtual void Serve(Fight& F, int ci) = 0;
+        virtual void Window(Fight&) {}   // before every step: S5-C, the oracle gives its orders at the end of a movement window
     };
 
     inline void (*&ProfileHook())(Profile&) { static void (*h)(Profile&) = nullptr; return h; }   // weight overrides for every follower (Tune.h)
@@ -628,6 +629,7 @@ namespace Sim {
         F.SetArena();   // review F1: the room stands before the first decision
         while (!F.over) {
             if (F.now >= F.nextPump && !F.ctl.empty()) { F.nextPump += TM::pump; P.Serve(F, F.rr); F.rr = (F.rr + 1) % static_cast<int>(F.ctl.size()); }
+            P.Window(F);
             F.StepWorld();
         }
     }

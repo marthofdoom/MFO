@@ -216,9 +216,10 @@ namespace MFO::Actuation {
         // failure mode of that mistake harmless instead: an unranked (kNoRule) lock,
         // which outranks nothing and is preemptable by anything.
         struct FiringScope {
-            ~FiringScope() { g_firingRule = kNoRule; g_firingAllyThreshold = -1.0f; }
+            ~FiringScope() { g_firingRule = kNoRule; g_firingAllyThreshold = -1.0f; g_firingIaus = false; }
         } firingScope;
         g_firingRule = a_choice.rank;
+        g_firingIaus = a_choice.source == Eval::Source::Iaus;   // placed-spells M4: only an IAUS pick of a self blast takes the claim road
         // Only an ALLY selector's param is an ally-HP threshold. Every other
         // condition's param means something else entirely, so it must never be
         // read as one -- kCondAllyHpBelow is the only ally selector that carries a
@@ -412,6 +413,19 @@ namespace MFO::Actuation {
             // there. Not here: the target is not resolved for kActCastTarget yet.)
         }
         if (op == Vocab::kActCastSelf) {
+            // PLACED SPELLS M4: an IAUS pick of a SELF BLAST (Self, fire-and-forget, Offense kind) is cast on the animated buff claim road (target 0, fire-once; the area census
+            // closed any bystander / ally in the blast before it was picked), or not at all this lap: never the unanimated self-stream the gambit road would take. No claim road
+            // (no controller yet, Harbinger without the rowless / fire-once seats, a row it does not serve) = transparent, asked again next lap, named on a [buff] line.
+            if (g_firingIaus) {
+                if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_choice.actionParam); sp && SelfBlastClaimSpell(sp)) {
+                    const char* why = nullptr;
+                    const bool selfCasts = Config::g_castSelf.load();   // F5: bCastSelf = 0 skips CastOn's self fork, so the pick would run on to an unanimated road
+                    if (!Iaus::Prune::BlastGoes(ChooseBuffRoad(a_follower, sp, /*a_log=*/false, nullptr, &why) == BuffRoad::Claim, selfCasts)) {
+                        NoteSelfBlastDeferred(a_follower, sp, selfCasts ? why : "bCastSelf is off");
+                        return { Result::NoOp, "self blast deferred: no animated claim road this lap", true };
+                    }
+                }
+            }
             return CastOn(a_follower, a_choice.actionParam, a_follower);
         }
         if (op == Vocab::kActCastPlayer) {

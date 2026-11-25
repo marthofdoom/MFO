@@ -51,6 +51,7 @@
 #include <unordered_set>
 #include "Runtime.h"
 #include "apmf/APMFBridge.h"
+#include "apmf/CastGuardBits.h"   // MFO-B872 11: BlastStands
 #include "SeatRows.h"   // ABI v47 FireOnceServed
 #include "iaus/Prune.h"   // SummonHoldsCastChannel
 
@@ -238,6 +239,7 @@ namespace MFO::Actuation {
                 ComposedCast::ClearWatchHand(id, APMFBridge::kApmfHandLeft);
             }
             ClearLeftCastLockIf(id, a_spell->GetFormID());
+            if (SelfBlastClaimSpell(a_spell)) APMFBridge::SetSelfBlastGuard(id, false);   // MFO-B872 11: the hold ends with the claim
             if (const auto fs = g_fireSeen.find(id); fs != g_fireSeen.end())
                 for (auto it = fs->second.begin(); it != fs->second.end();)
                     it = (static_cast<RE::FormID>(it->first & 0xFFFFFFFFu) == a_spell->GetFormID()) ? fs->second.erase(it) : std::next(it);
@@ -249,6 +251,7 @@ namespace MFO::Actuation {
         // up" read can see (a cure, a dispel, an instant restore): its claim ends once a fire is observed.
         bool InstantSpell(RE::SpellItem* a_spell) {
             if (a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) return false;
+            if (SelfBlastClaimSpell(a_spell)) return true;   // M4: a blast leaves nothing on HIM an up-read could see (Frost Nova's rider has a duration, on the foes): one cast per claim
             for (auto* eff : a_spell->effects)
                 if (eff && eff->effectItem.duration > 0) return false;
             return true;
@@ -325,6 +328,23 @@ namespace MFO::Actuation {
         if (!a_spell) return false;
         const auto shape = ClassifyArchetype(a_spell).shape;   // any Summon / Reanimate effect (Harbinger's IsPlacementSpell)
         return shape == SpellShape::Summon || shape == SpellShape::Reanimate;
+    }
+
+    // PLACED SPELLS M4 (Actuation_internal.h). The shape test is on the RECORD: Self delivery, fire-and-forget, Offense kind (ClassifySpell: a hostile flag on an effect, or a
+    // control archetype). The BOOK decides whether IAUS offers it (area, the census); this only says which ROAD an IAUS pick of it takes.
+    bool SelfBlastClaimSpell(RE::SpellItem* a_spell) {
+        return a_spell && a_spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf &&
+               a_spell->GetCastingType() == RE::MagicSystem::CastingType::kFireAndForget &&
+               CasterConsent::ClassifySpell(a_spell) == CasterConsent::SpellKind::Offense;
+    }
+    void NoteSelfBlastDeferred(RE::Actor* a_follower, RE::SpellItem* a_spell, const char* a_why) {
+        static std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> s_log;   // worker-serial
+        const auto now = std::chrono::steady_clock::now();
+        auto& at = s_log[(static_cast<std::uint64_t>(a_follower->GetFormID()) << 32) | a_spell->GetFormID()];
+        if (at != std::chrono::steady_clock::time_point{} && now - at < std::chrono::seconds(15)) return;
+        at = now;
+        spdlog::info("[buff] {:08X} self blast {} ({:08X}) DEFERRED -- {}: the IAUS pick waits for the animated claim road, never the unanimated self-stream",
+                     a_follower->GetFormID(), a_spell->GetName() ? a_spell->GetName() : "?", a_spell->GetFormID(), a_why ? a_why : "no claim road for this spell");
     }
 
     // CARD G7 (Actuation_internal.h). The effect test is Harbinger's own (core/CastClassify.cpp IsReanimateSpell:
@@ -413,17 +433,23 @@ namespace MFO::Actuation {
     // It is never set on a Heal-kind spell (ChooseBuffRoad answers NotBuff for one), never with RequestEx or a deny-only
     // floor (the bridge's builder only writes it on RequestCast, never for a floor). If the gate fails the answer is the
     // refusal it has always been. To serve another row, edit SeatRows::kEngineRowBit; nothing here changes.
-    bool BuffFireOnce(const SpellArchetype& a_arch) {
-        if (!AmbiguousUnbounded(a_arch)) return false;
+    // The seat half of the test (the resolved Harbinger serves the flag AND every candidate row has its own seat): shared by BuffFireOnce and a SELF BLAST's claim (M4).
+    static bool FireOnceServes(const SpellArchetype& a_arch) {
         if (a_arch.casting == RE::MagicSystem::CastingType::kConcentration) return false;
         if (!APMFBridge::FireOnceSupported()) return false;
         return SeatRows::FireOnceServed(APMFBridge::AbiVersion(), APMFBridge::CastSeatCoverage(), a_arch.rowMask,
                                         /*a_corpseClaim=*/false);
     }
+    bool BuffFireOnce(const SpellArchetype& a_arch) {
+        if (!AmbiguousUnbounded(a_arch)) return false;
+        return FireOnceServes(a_arch);
+    }
 
     // The claim of a_spell at a_other (null / the follower = self) is fire-once? The same classification BuffClaim and
     // ChooseBuffRoad make (a non-Self buff at self is keyed with seat 0's self flip).
     bool BuffClaimFireOnce(RE::SpellItem* a_spell, bool a_other) {
+        // M4: a SELF BLAST's claim is ALWAYS fire-once (one blast per claim; the engine's caster for a rowless spell has no bound of its own), whatever its rows.
+        if (!a_other && SelfBlastClaimSpell(a_spell)) return FireOnceServes(ClassifyArchetype(a_spell, /*a_seat0=*/false));
         if (!a_spell || CasterConsent::ClassifySpell(a_spell) != CasterConsent::SpellKind::Buff) return false;
         return BuffFireOnce(ClassifyArchetype(a_spell, /*a_seat0=*/a_other || ExplicitSelfBuff(a_spell)));
     }
@@ -446,6 +472,12 @@ namespace MFO::Actuation {
             return "a summon whose other effects make it an offense or a heal: no claim road";
         if (const char* why = BuffAmbiguousRowWhy(a_arch)) return why;
         return BuffRowOk(a_arch, nullptr) ? nullptr : kBuffRowElsewhere;
+    }
+
+    const char* BlastClaimUnservedWhy(RE::SpellItem* a_spell, const SpellArchetype& a_arch) {
+        if (!SelfBlastClaimSpell(a_spell)) return nullptr;
+        return Iaus::Prune::BlastServed(FireOnceServes(a_arch), BuffRowOk(a_arch, nullptr)) ? nullptr
+                   : "a self blast no Harbinger row serves fire-once: no claim road";
     }
 
     const char* BuffAimedLightWhy(RE::SpellItem* a_spell, const SpellArchetype& a_arch) {
@@ -508,6 +540,47 @@ namespace MFO::Actuation {
                !BuffUpTransparent(a_follower, a_spell);
     }
 
+    bool BlastWithoutCastChannel(RE::Actor* a_follower, RE::SpellItem* a_spell) {
+        if (!a_follower || !SelfBlastClaimSpell(a_spell)) return false;
+        // No controller, no claim road (and ChooseBuffRoad would erase the per-fight g_neverFired latch on this read-only ask).
+        if (!a_follower->GetActorRuntimeData().combatController) return true;
+        // The chooser judges a blast as an IAUS pick only while g_firingIaus is set (worker-serial; restored on every exit).
+        struct AsIaus { bool was = g_firingIaus; AsIaus() { g_firingIaus = true; } ~AsIaus() { g_firingIaus = was; } } asIaus;
+        return !Iaus::Prune::BlastHoldsCastChannel(ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false) == BuffRoad::Claim, Config::g_castSelf.load(),
+                                                   BuffUpTransparent(a_follower, a_spell));
+    }
+
+    RE::FormID StandingSelfBlast(RE::FormID a_follower) {
+        const auto it = g_castLock.find(a_follower);
+        const RE::FormID spell = it == g_castLock.end() ? 0 : it->second.hand[kHandLeft].spell;
+        if (spell == 0 || CastLockClaimStamp(a_follower, kHandLeft, spell) == std::chrono::steady_clock::time_point{}) return 0;
+        return SelfBlastClaimSpell(RE::TESForm::LookupByID<RE::SpellItem>(spell)) ? spell : 0;
+    }
+
+    bool SelfBlastGuardStands(RE::FormID a_follower) {
+        const bool lock = StandingSelfBlast(a_follower) != 0;
+        return CastGuardBits::BlastStands(lock, lock ? g_castLock.find(a_follower)->second.hand[kHandLeft].owningRule : kNoRule,
+                                          lock && APMFBridge::IsOwnedCastActiveOnHand(a_follower, APMFBridge::kApmfHandLeft));
+    }
+
+    void ServiceStandingBlast(RE::Actor* a_follower, RE::FormID a_spell, bool a_open) {
+        auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_spell);
+        if (!a_follower || !sp) return;
+        const auto id = a_follower->GetFormID();
+        switch (Iaus::Prune::StandingBlastVerdict(a_open, CastInFlightOnHand(a_follower, kHandLeft, a_spell, CastProxyOnHand(id, kHandLeft)))) {
+        case Iaus::Prune::StandingBlast::Keep:
+            return;
+        case Iaus::Prune::StandingBlast::InFlight:
+            spdlog::info("[buff] {:08X} self blast {} ({:08X}): its area closed while the charge is in flight -- not cut by MFO", id, sp->GetName() ? sp->GetName() : "?", a_spell);
+            return;
+        case Iaus::Prune::StandingBlast::Release:
+            spdlog::info("[buff] {:08X} self blast {} ({:08X}): its area is not open this lap (somebody in or near it, or no foe in it) -- the standing claim is released",
+                         id, sp->GetName() ? sp->GetName() : "?", a_spell);
+            EndBuffClaim(a_follower, sp, /*a_takeBack=*/true);
+            return;
+        }
+    }
+
     bool BuffServedAtAlly(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient) {
         if (!a_follower || !a_spell || !a_recipient || a_recipient == a_follower) return false;
         // A SelfHazard / ScriptRider spell leaves no active effect carrying its own spell, so neither the book's activeOn nor
@@ -533,7 +606,9 @@ namespace MFO::Actuation {
     BuffRoad ChooseBuffRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, bool a_log, RE::Actor* a_recipient,
                             const char** a_why) {
         if (!a_follower || !a_spell) return BuffRoad::NotBuff;
-        if (CasterConsent::ClassifySpell(a_spell) != CasterConsent::SpellKind::Buff) return BuffRoad::NotBuff;
+        // M4: an IAUS pick of a SELF BLAST is judged like a self buff (target 0). A gambit rule's road is unchanged (g_firingIaus is false there): NotBuff, its stream.
+        const bool blast = g_firingIaus && SelfBlastClaimSpell(a_spell) && !(a_recipient && a_recipient != a_follower);
+        if (!blast && CasterConsent::ClassifySpell(a_spell) != CasterConsent::SpellKind::Buff) return BuffRoad::NotBuff;
         const auto fid     = a_follower->GetFormID();
         const auto spellID = a_spell->GetFormID();
         const auto name    = a_spell->GetName() ? a_spell->GetName() : "?";
@@ -572,6 +647,11 @@ namespace MFO::Actuation {
         // the claim was judged for: the 55-light spam shape. Direct.
         if (const char* why = BuffAmbiguousRowWhy(arch))
             return say(BuffRoad::DirectNoSeat, why);
+        // M4: a blast's claim IS fire-once (one blast per claim: the "cast pace" of plan 3.3 is the claim's own bound). A Harbinger that does not serve the flag
+        // for every candidate row of the spell cannot bound it, so the pick is held rather than claimed unbounded.
+        if (blast && !FireOnceServes(arch))
+            return say(BuffRoad::DirectNoSeat, "a self blast's claim is fire-once and the resolved Harbinger does not serve fire-once for every row of it (ABI 47, kCastSeat_FireOnce, "
+                                               "the row's own seat)");
         const auto delivery = a_spell->GetDelivery();
         if (!placement) {
             if (const char* why = BuffAimedLightWhy(a_spell, arch))
@@ -687,7 +767,11 @@ namespace MFO::Actuation {
         const RE::FormID target = BuffClaimTarget(a_spell, other, rid, corpseTarget);
         // ABI v47: an ambiguous-row buff the bounded set refused is filed fire-once (the claim's own bound), decided by BuffFireOnce.
         const bool fireOnce = BuffClaimFireOnce(a_spell, other);
+        // MFO-B872 11: the party hold is asked BEFORE the blast claim, so the two reach Harbinger's same drain. Only an IAUS pick comes here with a blast.
+        const bool blast = g_firingIaus && !other && SelfBlastClaimSpell(a_spell);
+        if (blast) APMFBridge::SetSelfBlastGuard(id, true);
         if (!APMFBridge::ClaimOffenseCast(id, spellID, target, APMFBridge::kApmfHandLeft, conc, /*stopPct=*/0, fireOnce)) {
+            if (blast) APMFBridge::SetSelfBlastGuard(id, false);
             // Present and capable means APMF REFUSED: fail closed, loudly, never the direct road.
             LogApmfRefusal(id, "buff cast", spellID, target, "left");
             return SelfCast::Declined;
@@ -701,7 +785,7 @@ namespace MFO::Actuation {
             const auto arch = ClassifyArchetype(a_spell, /*a_seat0=*/other || explicitSelf);
             spdlog::info("[buff] {:08X} {} ({:08X}): {} CLAIM at {:08X}{}{} (animated; the engine's own {} caster "
                          "decides when it fires)", id, a_spell->GetName() ? a_spell->GetName() : "?", spellID,
-                         ClaimLabel(arch, other), corpseTarget ? corpseTarget : rid,
+                         SelfBlastClaimSpell(a_spell) ? "SELF BLAST (the area census closed any bystander in it)" : ClaimLabel(arch, other), corpseTarget ? corpseTarget : rid,
                          corpseTarget ? " (the rule's corpse, kCastFlag_CorpseTarget)" : "",
                          fireOnce ? " FIRE-ONCE (kCastFlag_FireOnce: the claim casts at most once, whatever caster the engine builds)" : "",
                          EngineRowName(arch.row));

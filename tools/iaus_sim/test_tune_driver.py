@@ -422,6 +422,24 @@ class Gap(unittest.TestCase):
         r = T.gap_parse("GAPFIGHT knight nat 0 80.0 85.5\nGAPSIT knight attack|idle|idle|hp:hi,near:melee,foes:1 3 9.5\nGAPGEN knight block 4\nGAPDEC knight 50\n", "knight", 7)
         self.assertEqual((r["fights"], r["sit"]["attack|idle|idle|hp:hi,near:melee,foes:1"], r["gen"]["block"], r["dec"]), ([(7, 0, "nat", 80.0, 85.5)], (3, 9.5), 4, 50))
 
+    def test_order_divergences_are_classified(self):   # GAPORD (S5-C review finding 5)
+        T.CFG = dict(T.SMOKE)
+        r = T.gap_parse("GAPFIGHT knight nat 0 80.0 85.5\nGAPSIT knight attack|idle|idle|x 3 9.5\nGAPORD knight order:free:own|order:stand:firing|unpaired|x 2 4.0\nGAPORD evoker order:free:own|order:stand:hold|ranked|x 1 1.0\nGAPDEC knight 50\n", "knight", 7)
+        self.assertEqual(r["sit"], {"attack|idle|idle|x": (3, 9.5), "order:free:own|order:stand:firing|unpaired|x": (2, 4.0)})
+        self.assertEqual(T.classify("order:free:own", "order:stand:firing", "unpaired", {})[0], "c")
+        self.assertEqual(T.classify("order:stand:refused", "order:free:own", "ranked", {})[0], "b")
+        self.assertEqual(T.classify("order:free:own", "order:stand:hold", "ranked", {})[::2], ("a", []))
+        fams, a = T.a_families(T.gap_merge([r]))
+        self.assertEqual(fams, ["attack"])
+        self.assertAlmostEqual(a, 9.5 / 13.5)   # the order's cost is in the total
+
+    def test_the_gap_classes_sum_to_the_gap(self):
+        for gap in (5.5, -0.713, 0.0, 1.0 / 3.0):
+            for rows in ([("a", 9.5), ("c", 4.0)], [("a", 1.0), ("b", 1.0), ("c", 1.0)], [], [("d", 0.0)]):
+                self.assertAlmostEqual(sum(T.class_gap(gap, rows).values()), round(gap, 3), places=6)
+        self.assertEqual(T.class_gap(6.0, [("a", 2.0), ("c", 1.0)]), {"a": 4.0, "b": 0.0, "c": 2.0, "d": 0.0, "unseen": 0.0})
+        self.assertEqual(T.class_gap(6.0, [])["unseen"], 6.0)
+
 
 class Logistics(unittest.TestCase):
     def test_logi_class(self):

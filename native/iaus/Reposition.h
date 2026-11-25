@@ -42,7 +42,7 @@ namespace MFO::Iaus::Reposition {
         Range r;
         const auto fin = [](float v) { return std::isfinite(v) && v > 0.0f ? v : 0.0f; };
         if (a_e.touch) { r.desired = 0.8f * fin(a_meleeReach); return r; }
-        if (a_e.selfDelivery) { r.desired = 0.8f * fin(a_e.areaUnits); return r; }   // no area = no range to keep
+        if (a_e.selfDelivery) { r.desired = 0.8f * fin(a_e.FoeUnits()); return r; }   // no area = no range to keep
         const float reach = fin(a_e.reach);
         if (!(reach > 0.0f)) return r;
         // A concentration stream whose range is beyond a foe's strike distance (Frostbite: marth 2026-11-13, "Frostbite range is out of melee")
@@ -67,7 +67,7 @@ namespace MFO::Iaus::Reposition {
     // potions use for "he cannot win by the numbers"). Nothing targets him = it passes (the TTL is unknown, the floor 0).
     [[nodiscard]] inline bool CloseSpell(const SpellEntry& a_e, float a_meleeReach) {
         if (a_e.touch) return true;
-        const float reach = a_e.selfDelivery ? a_e.areaUnits : a_e.reach;
+        const float reach = a_e.selfDelivery ? a_e.FoeUnits() : a_e.reach;
         return std::isfinite(reach) && reach > 0.0f && reach < Estimate::StrikeDistance(a_meleeReach);
     }
     [[nodiscard]] inline bool SurvivesClosing(const Snapshot& a_s, const WorthTable& a_w) {
