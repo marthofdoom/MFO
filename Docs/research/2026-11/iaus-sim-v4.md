@@ -1639,3 +1639,61 @@ The first four also hold: the place is used again within one decay of the repair
 3. The engine's mesh is a switch of the scenario. Ignored wall and buried patch: engine and plan read one mesh and the body meets the truth (STUCK). Missing link and one way: the engine routes on the truth (refused, length far).
 4. The static signs have rows and no filler (G1). Moved-unwalked, unplanned-move and falling likewise (no such event in the lab).
 5. Two scenarios are not in `Scenarios.h`: a new scenario there moves the v4 baseline, which had to stay byte identical.
+
+## 19. Light and darkness, and the S3 review's findings (movement-plan.md S4, branch `feat/move-s4`, 2026-11-24)
+
+Road off, `--world v2`, `v3` and `v4` baselines are byte identical with main at 1 and 8 threads, with the light switch on (the v4 default). `--v4 light=off` prints the same numbers: no library place or older fixture has a light layer, and no built-in class knows a light spell. The DLL fills no light fact, so nothing changes there (19.3).
+
+### 19.1 The S3 findings
+
+- **R1.** A refused place is dropped before the sort, so the sorted part holds only places that are looked at.
+- **R2, R3, R4.** A walk clears a mark when it crosses the mark's own line 64 units beyond where he stood, within 40 of it, going along it (26 degrees), and it clears that mark alone. Lived marks of one leg, or within 1.5 s, are one event. A leg ends at every end, so a claim's next try is another leg.
+- **R6.** `trust-walk-clears`: wall gone and walked at 10 s, planned on again within 10 s. With clearing off it is not (the marks live 30 s).
+- **R7.** The four trust scenarios draw where he and his target stand. Ignored wall: mean 3.0 s, worst 6.5 s. The reviewer's "used again 0 of 12" was traced: in those variants he sees the target through the opened gap, so no place is needed.
+
+### 19.2 Where things are
+
+| What | Where | To change it |
+|---|---|---|
+| The field, who wants the dark, whom a light goes to, the detection formula | `native/iaus/Light.h` | a number: `t.light*`. A reason to want the dark: a `Combatant` field and `WantsNow` |
+| The cast rules | `Generate.cpp` (buff case, `Decasts`), `Catalogue.cpp` (`light_veto`, `light_need`, `light_rank`, `self_light`, `light_on_stealth`), `Decide.cpp` (the cap) | the curves |
+| The spot facts | `MovePass.cpp FillStatic` (`spot_light`, `spot_detected`, `spot_path_light`), `UnitGenerate` (`SpotPoint::lit`) | |
+| The lab | `Env.h LightTuning`, `World.h LightOn`, `Policy.h MakeSnapshot`, `MoveWorld.h MoveFill` (meters), `MoveOpen` (sampler), fixtures `light-hall`, `torch-room` | a fixture's `light` / `lit` lines |
+| Scenarios | `SpotTest.h`, faults `no-light`, `no-veto`, `no-need`, `no-decast` | |
+
+### 19.3 How it works
+
+Samples (an actor's own level, a sampler's answer) keep one a 128-unit cell for 20 s. A place is as lit as the nearest sample within 256 units on its storey, or unknown. Unknown is not applicable everywhere.
+
+A light buff: a gate refuses whoever sneaks (the player too), runs to hide, is invisible, wanted the dark in the last 6 s or is a stealth class. The need reads the recipient's level (over 69 none), the rank takes the player before members in his view, unseen-unknown after them, out of view never. Decide keeps it under every heal and ward. `SpellEntry::allyRoadOn` is the list of served recipients, `allyRoad` stays for the old filler.
+
+Decast: behind `Snapshot::decastRoad`, for a light of ours on somebody who wants the dark NOW, by its caster or its wearer.
+
+Spots, for a member who wants the dark: the level at the place, the engine's own formula per foe (crouched and still there, with the sight answer of that foe), the seconds of the walk over lit ground. The generators rank a place known to be lit, or with a lit straight way, as farther (`t.lightGenU`): they keep three places and test sixty-four, and lit ones crowded the dark ones out.
+
+### 19.4 The scenarios (48 fights an arm)
+
+| Scenario | Result | Off arm |
+|---|---|---|
+| dark-corner-hide (scripted, pinned road, no sampler) | the dark corner in 48 of 48 | `no-light` 0 |
+| torch-step (scripted, pinned road, no sampler) | reached in 48, crossed the light in 0 | `no-light` 48 |
+| lit-ally-stealth | the player lit in 48, the stealth member in 0, his worst detection score 0.4 | `no-veto`: lit in 48, score 17.5 |
+| sneaking-player | never lit, somebody else in all | `no-veto` lit |
+| light-on-player | the first light on the player in all | `no-need` about half |
+| decast-on-sneak | ended within half a second in all, not lit again | `no-decast` 0 |
+| decast-road-off | no new light on him | `no-veto` some |
+
+In the cast rows the mage knows one spell, the light: the rows are about WHOM. "Never above a heal or a ward" is a harness row with weights that would put it above.
+
+CPU (user seconds, 1 thread, main then this branch): evoker, knight, archer, mage on the fixtures 3.15 to 3.33 with the road off, 6.69 to 6.91 with it on, 7.21 to 7.38 in `i_Skyrim-0213A0`. Thief and nightingale (who want the dark, the dear case) 1.00 to 1.04 off, 2.12 to 2.42 on, 2.36 to 2.68 in `i_Clockwork-52F496`.
+
+### 19.5 Differences from the plan
+
+1. `spotLightConf` is no consideration: scoring confidence would put a place of known darkness under one nobody knows. It is the gate `t.lightMinConf`.
+2. `Cons::SpotPathLight` and the generators' rank are additions. Without them the torch step and the hide could not be held.
+3. The route search has no light price. The claim names a place and the engine takes its own way there, so a place is judged by that way. "Never crosses while a dark route exists" is held by choosing another place, not another way to the same one.
+4. A stealth CLASS is never lit, crouched or not (marth: "simply never cast on stealth characters"). The decast asks what he wants now.
+5. The hidden step's own point pick (`Concealment`) reads no light: G6. `self_light` is in the hold row only. Lowering the step's score too would cancel it.
+6. The library has no light references (the extractor exports none): one level per place, as before.
+7. `lit-ally-stealth` uses a thief: the lab's Nightblade holds no stance.
+8. A pool sampler is modelled as existing (`--light-sampler off` takes it away). Both placement scenarios run on the actors' own levels alone.

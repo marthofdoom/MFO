@@ -2416,7 +2416,7 @@ namespace {
             { Snapshot q = s; q.allies[1].lights[0].caster = kPc; Check(dec(q, kLydia) == 0, "... never the player's own light"); }
             { Snapshot q = s; q.allies[1].lights[0].fromItem = true; Check(dec(q, kLydia) == 0, "... never an item's"); }
             { Snapshot q = s; q.allies[1].lights[0].caster = 0x999; Check(dec(q, kLydia) == 0, "... another member's is that member's decision, or the wearer's"); }
-            { Snapshot q = s; q.allies[1].lights.clear(); q.self.sneaking = true; q.self.lights = { { 0x43324, 0x999, false } }; Check(dec(q, q.self.id) == 1, "the wearer ends one on himself"); }
+            { Snapshot q = s; q.allies[1].lights.clear(); q.self.sneaking = true; q.self.lights = { { 0x43324, 0x999, false } }; Check(dec(q, q.self.id) == 1, "the wearer ends one on himself"); q.self.lights[0].caster = kPc; Check(dec(q, q.self.id) == 0, "... not the player's"); }
             for (const auto& c : Generate(s, mage, t).actions) if (c.family == Family::Decast) Check(ScoreOne(c, Mind{}, Profile{}, t, 1, 0.0f, nullptr) > 1.0f, "it outranks a blow");
         }
         {   // the hold row in the light

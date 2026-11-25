@@ -3968,6 +3968,15 @@ F8 SEV-5 CheckExit floods 256 triangles; on dense meshes f.cut makes `far` small
 S1 BACKLOG: R3 flood alloc FIXED. R1 (21.8 ms slices) OPEN, measured 4.5 to 8.4 ms worst window here with small parties, still over one 3 ms slice. R2 re-ask stamp OPEN in native (sim always sends t); must be closed before G2.
 HEAL FINDING (8): real in game. Generate.cpp:969 drops any heal whose recipient is past e.reach or Sight::Occluded (Actuation::HealInReach, same in the cast roads), and the ch.24 held-heal approach (CombatApproach.cpp) is built for a heal already held, so a patient who STARTS out of reach or round a corner gets no approach. heal_reach gets no ranked heal, so its weight can not be tuned: the tune would learn nothing. Do: a small native brief (own review) before S5: emit such a heal as a MOVE-ONLY candidate (scored as if in reach, never a Decide winner, never cast, exported only through TopRanked / MoveNoteRanked), gated so that shipped decisions stay byte identical when no pass asks. Safety: HealRefused must still apply. Then the healer scenario runs unscripted.
 
+### MOVE-S4: what `feat/move-s4` closed of the MOVE-S3 findings below (evidence: iaus-sim-v4.md 19.1)
+- R1 CLOSED: a refused place is dropped before the sort. Harness row (60 rounds of refusals, the next best in order) fails without it.
+- R2 CLOSED: the line is 64 past where he stood, 40 wide, and the walk goes along it (26 degrees). Rows for slides at 30, 45, 60 degrees and the thin end fail with the old numbers.
+- R3 CLOSED (per mark), R4 CLOSED (one leg or 1.5 s is one event), R6 CLOSED (`trust-walk-clears`, fault `no-walked`), R7 CLOSED (starts and targets vary) with its trace: in the reviewer's variants the target is SEEN once the wall is gone, so he needs no place, "used again 0 of 12" was the rule's fault. The other three mutations of R6 (allroute, noexempt, notrail) stay harness rows only.
+- OPEN: R5 (before G2, field calibration), the clipped corner.
+- SEV-4 (author, S4): the straight-line half of `SpotPoint::lit` reads three points of a straight way. Round a corner it reads a way he does not take. Only the rank of candidates, the score reads the real walk.
+- SEV-4 (author, S4): `Light::At` is a linear scan of up to 256 samples. It runs per candidate point for members who want the dark only (19.4 has the cost). An index is due before a party of five stealth members is in the game (G6).
+- SEV-5 (author, S4): the light cap reads a ward SPELL and every heal, not a scroll of ward.
+
 ### MOVE-S3: review findings on 6996d274 (Opus, nothing above SEV-3). R1 and R2 are fixed at the start of S4; R5 before G2
 
 R1 SEV-3 (determinism) MovePass.cpp UnitGenerate: partial_sort to max(geomPerGen 64, perGen 3), but the new `Trust::Refused -> continue` does not count in `tested`, so a checked kind with k refused spots in its prefix reads k entries of the UNSORTED tail (order implementation defined: gcc vs MSVC, golden/live parity). Fix: drop refused before the sort, or add refused.size() to the bound.

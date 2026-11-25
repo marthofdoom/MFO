@@ -169,6 +169,8 @@ void  MovePass::Phase3(const PartyPicture&, const ClassGates&, const Tuning&, co
 
 #### S4. Light and darkness, pure and sim half
 
+**Built on `feat/move-s4`: `iaus-sim-v4.md` section 19, differences in 19.5.**
+
 - **Mechanism.** Section 3.2 and 3.4. `Light.h`, the facts, the veto, the need, `allyRoad` as a per-recipient value in the SNAPSHOT (the pure layer reads `e.allyRoadOn` as a list of recipients, the native filler changes in G6), `Family::Decast` behind `Snapshot::decastRoad` (false until G6), the light layer of places, `Detect.h` by triangle.
 - **Files.** New `native/iaus/Light.h`. `Core.h` (`Family` append, `Facts`, `Cons`, `t.light*`), `Snapshot.h:90` (`allyRoad` gains the recipient list, the bool stays for the old filler), `Generate.cpp:908` to `:945` (the veto, the need, per-recipient road), `Catalogue.cpp`, `Spots.cpp` (`spotLight`, `spotDetected`), `tools/iaus_sim/Detect.h`, `Env.h`, `Setup.h:132` and `:349`, `World.h` (a light on a body), `make_fixtures.py`, `Scenarios.h`.
 - **Interplay.** `Generate.cpp` is shared with the shipped DLL: with `allyRoadOn` empty and no light field the candidates are byte for byte today's (a harness row pins that on the existing rows). Appending a `Family` moves `kCount`: every `switch` over families and the log's count line (`Candidates.cpp:700`) get the new row, and no stored value holds a family index (to confirm in review: FLWR and MCLS store opcodes, not families).
