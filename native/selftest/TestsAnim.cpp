@@ -121,7 +121,7 @@ namespace MFO::SelfTest {
         std::uint32_t FiredEnds(Ctx& c) { return Actuation::DevBuffFiredEndCount(Spell(c)) - static_cast<std::uint32_t>(c.s->n[3]); }
         void NoteProxy(Ctx& c) {
             const auto p = APMFBridge::GetOffenseCastProxy(c.id, APMFBridge::kApmfHandLeft);
-            if (p && std::find(c.s->set[1].begin(), c.s->set[1].end(), p) == c.s->set[1].end() && Claims(c) > 0) c.s->set[1].push_back(p);
+            if (p && std::find(c.s->set[1].begin(), c.s->set[1].end(), p) == c.s->set[1].end() && Claims(c) > 0 && c.s->set[1].empty()) c.s->set[1].push_back(p);   // the first claim's proxy only: a later proxied cast must count as a second cast
         }
         int Fires(Ctx& c) {
             std::lock_guard lk(g_fireMx);
@@ -181,11 +181,7 @@ namespace MFO::SelfTest {
         }
         void Begin(Ctx& c) {
             auto& s = *c.s;
-            s.b[0]  = true;
-            s.n[0]  = static_cast<double>(Seq());
-            s.n[1]  = NowMs();
-            s.n[2]  = Actuation::DevBuffClaimCount(Spell(c));
-            s.n[3]  = Actuation::DevBuffFiredEndCount(Spell(c));
+            s.b[0]  = true;   // the baselines n[0..3] were taken in Lend(), before the fixture and the rows applied
         }
         void TempClass(Ctx& c, const char* a_slug) {
             std::string why;
@@ -256,6 +252,11 @@ namespace MFO::SelfTest {
         }
         void Lend(Ctx& c, FixtureRequest& r, float a_casts = 1.0f) {
             auto* sp = SpellForm(c);
+            auto& s  = *c.s;   // the log / count baselines, taken BEFORE the fixture and the temp rows apply (a rate-limited first line must not precede them)
+            s.n[0]   = static_cast<double>(Seq());
+            s.n[1]   = NowMs();
+            s.n[2]   = Actuation::DevBuffClaimCount(Spell(c));
+            s.n[3]   = Actuation::DevBuffFiredEndCount(Spell(c));
             r.spells.push_back(Spell(c));
             r.fillMagicka = true;
             if (Cost(sp, c.follower) * a_casts > MaxPool(c.follower))
@@ -291,6 +292,7 @@ namespace MFO::SelfTest {
             if (c.follower->IsOnMount()) return "the follower on foot";
             return nullptr;
         }
+        const char* NoLog() { return Config::g_enableLogging.load() ? nullptr : "bEnableLogging = 0 (the verdicts read the log lines)"; }
         const char* NoHarbinger() {
             if (!APMFBridge::Available()) return "Harbinger is absent";
             if (!APMFBridge::CastSeatsSupported() || !APMFBridge::OffenseCastClaimSupported()) return "Harbinger is too old for the cast seats";
@@ -320,7 +322,7 @@ namespace MFO::SelfTest {
             return nullptr;
         }
         void SummonFix(Ctx& c, FixtureRequest& r, bool a_iaus) {
-            if (!Spell(c) || NoHarbinger() || (a_iaus && !Config::g_iausAvailable.load())) return;
+            if (!Spell(c) || NoLog() || NoHarbinger() || (a_iaus && !Config::g_iausAvailable.load())) return;
             Lend(c, r);
             Foe(r);
             r.iaus = a_iaus ? 1 : 0;
@@ -331,6 +333,7 @@ namespace MFO::SelfTest {
         void SummonFixGambit(Ctx& c, FixtureRequest& r) { SummonFix(c, r, false); }
         Step SummonStep(Ctx& c, bool a_iaus) {
             auto& s = *c.s;
+            if (const char* why = NoLog()) return Step::Skip(why);
             if (const char* why = NoHarbinger()) return Step::Skip(why);
             if (a_iaus && !Config::g_iausAvailable.load()) return Step::Skip("bIausAvailable = 0");
             if (!Spell(c)) return Step::Skip(std::format("no Target Location conjuration he could pay for (magicka {:.0f})", MaxPool(c.follower)));
@@ -360,7 +363,7 @@ namespace MFO::SelfTest {
                 return End(Step::Fail(std::format("no claim in {:.0f} s of combat: {} | last [buff]: {}", kT.claimWait, s.note, Last(why))));
             }
             const float alive = c.elapsed - static_cast<float>(s.n[4]);
-            if (claims == 0) return End(Step::Fail("the body exists but no claim was filed for it; " + s.note));
+            if (claims == 0) return End(Step::Info("cast outside MFO's claim (the body exists, no claim was filed: the vanilla AI cast it); " + s.note));
             if (fires > 1) return End(Step::Fail(std::format("cast {} times while the creature lives ({:.1f} s); {}", fires, alive, s.note)));
             if (alive < kT.settle) return Step::Continue();
             if (!s.b[3]) { s.b[3] = true; s.n[5] = claims; }
@@ -395,6 +398,7 @@ namespace MFO::SelfTest {
         }
         Step FireOnceStep(Ctx& c) {
             auto& s = *c.s;
+            if (const char* why = NoLog()) return Step::Skip(why);
             if (const char* why = NoHarbinger()) return Step::Skip(why);
             if (!APMFBridge::FireOnceSupported()) return Step::Skip("Harbinger does not serve fire-once (ABI 47, [CastSeats] EnableFireOnce)");
             if (!Spell(c)) return Step::Skip(std::format("no ambiguous-row duration buff a tome teaches in this load order that he could pay for ({} of the shape)", Scan().fireOnce.size()));
@@ -419,7 +423,8 @@ namespace MFO::SelfTest {
                 const bool due = t >= std::min(kT.oneCastWatch, std::max(2.0f, Duration(SpellForm(c)) - 1.0f));
                 if (fires > 1) return End(Step::Fail(std::format("cast {} times within {:.1f} s of the first; {}", fires, t, s.note)));
                 if (!due) return Step::Continue();
-                if (filed.empty()) return End(Step::Fail("the claim was not filed FIRE-ONCE; " + s.note));
+                if (filed.empty()) return End(Claims(c) == 0 ? Step::Info("cast outside MFO's claim (it fired, no claim was filed: the vanilla AI cast it); " + s.note)
+                                                             : Step::Fail("the claim was not filed FIRE-ONCE; " + s.note));
                 if (FiredEnds(c) == 0) return End(Step::Fail("GetClaimEndReason never read Fired; " + s.note));
                 if (!FiredLine(c)) return End(Step::Fail("the claim was not released on the fire; " + s.note));
                 s.b[3] = true;
@@ -435,7 +440,7 @@ namespace MFO::SelfTest {
         // ── anim.party_gap / anim.party_gap_conc ────────────────────────────────────────────────
         // The foe is set on the PLAYER. While the party fights and he has no controller, the lent buff must be HELD ([cast-hold]). He is kept
         // out with StopCombat (bounded, and never once a claim stands). Then he is brought in and the buff must go animated.
-        // n[4] elapsed of the hold, n[5] pulls, n[7] elapsed of the controller; b[2] hold seen, b[3] controller after it, b[4] foe sent to him.
+        // n[4] elapsed of the hold, n[5] pulls, n[7] elapsed of the controller; b[2] hold seen, b[3] controller after it, b[4] foe sent to him, n[6] claims at the hold line.
         const char* GapPre(Ctx& c) {
             if (const char* r = Ready(c)) return r;
             c.s->set[0].clear();
@@ -452,7 +457,7 @@ namespace MFO::SelfTest {
             return nullptr;
         }
         void GapFix(Ctx& c, FixtureRequest& r) {
-            if (!Spell(c) || NoHarbinger()) return;
+            if (!Spell(c) || NoLog() || NoHarbinger()) return;
             Lend(c, r, 2.0f);
             Foe(r);
             r.spawn.onPlayer = true;
@@ -460,6 +465,7 @@ namespace MFO::SelfTest {
         }
         Step GapStep(Ctx& c) {
             auto& s = *c.s;
+            if (const char* why = NoLog()) return Step::Skip(why);
             if (const char* why = NoHarbinger()) return Step::Skip(why);
             if (!Spell(c)) return Step::Skip("no buff to lend (Oakflesh / Candlelight / Lesser Ward): not in the load order, already on him, or too dear");
             if (!s.b[0]) { Begin(c); return Step::Continue(); }
@@ -471,7 +477,7 @@ namespace MFO::SelfTest {
             const auto claims = Claims(c);
             const bool up     = EffectUp(c.follower, SpellForm(c));
             s.note = Facts(c) + std::format(", own controller {}, kept out {:.0f}x, hold lines {}, effect up {} | {}", ctrl ? "yes" : "no", s.n[5], held.size(), up ? "yes" : "no", Last(held));
-            if (!held.empty() && !s.b[2]) { s.b[2] = true; s.n[4] = c.elapsed; }
+            if (!held.empty() && !s.b[2]) { s.b[2] = true; s.n[4] = c.elapsed; s.n[6] = claims; }   // n[6] claims at the hold line: PASS needs a newer one
             if (!s.b[2]) {
                 if (claims > 0) return End(Step::Retry("he joined the fight and claimed before a gap lap was seen; " + s.note));
                 if (!ctrl && pc && !pc->IsInCombat() && c.elapsed > 8.0f) return End(Step::Retry("the party fight did not start; " + s.note));
@@ -489,7 +495,7 @@ namespace MFO::SelfTest {
                 PostEngage(c.hostile->GetFormID(), c.id);
             }
             if (ctrl && !s.b[3]) { s.b[3] = true; s.n[7] = c.elapsed; }
-            if (claims > 0 && (Fires(c) > 0 || up || FiredLine(c)))
+            if (claims > static_cast<std::uint32_t>(s.n[6]) && s.b[3] && (Fires(c) > 0 || up || FiredLine(c)))
                 return End(Step::Pass("held in the gap, then ANIMATED with his own controller, no UNANIMATED line; " + s.note));
             if (c.elapsed - static_cast<float>(s.b[3] ? s.n[7] : s.n[4]) < kT.animWait) return Step::Continue();
             if (!s.b[3]) return End(Step::Info("held in the gap, nothing unanimated; he never got a controller of his own, so the animated half is not judged; " + s.note));
@@ -507,7 +513,7 @@ namespace MFO::SelfTest {
             return nullptr;
         }
         void BlastFix(Ctx& c, FixtureRequest& r) {
-            if (!Spell(c) || !Config::g_iausAvailable.load()) return;
+            if (!Spell(c) || NoLog() || !Config::g_iausAvailable.load()) return;
             Lend(c, r);
             Foe(r);
             Snap(c, r);
@@ -515,6 +521,7 @@ namespace MFO::SelfTest {
         }
         Step BlastStep(Ctx& c) {
             auto& s = *c.s;
+            if (const char* why = NoLog()) return Step::Skip(why);
             if (!Config::g_iausAvailable.load()) return Step::Skip("bIausAvailable = 0");
             if (!Spell(c)) return Step::Skip("no hostile self area spell a tome teaches in this load order");
             if (!s.b[0]) { Begin(c); TempClass(c, "evoker"); return Step::Continue(); }

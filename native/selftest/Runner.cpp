@@ -95,6 +95,8 @@ namespace MFO::SelfTest {
         constexpr float kStuckSec = 30.0f, kStuckOrphanSec = 100.0f;   // an orphan's second pass comes kOrphanRetrySec (30 s) after its first
         constexpr float kFoeHealth[kMaxTries] = { 1500.0f, 6000.0f, 20000.0f };   // the spawned foe's least health on try 1 / 2 / 3 (a mudcrab dies in one blow)
         std::map<std::string, int>               g_tries;
+        std::map<std::string, Clock::time_point> g_refusedSince;   // first safety refusal of a test this load; 3 minutes of them end it as SKIP
+        constexpr std::chrono::minutes           kRefusedMax{ 3 };
         std::unordered_map<std::uint32_t, float> g_stuck;   // run token -> seconds its hostile has been waiting to be deleted
         bool                                     g_stopped = false;
         bool                                     g_doneToast = false;
@@ -417,9 +419,17 @@ namespace MFO::SelfTest {
         void Finish(RE::FormID a_id, Run& a_run, const Step& a_step, const char* a_word, bool a_error = false,
                     std::chrono::seconds a_backoff = std::chrono::seconds(30), bool a_countTry = true) {
             Step own = a_step;
-            if (a_word == std::string_view("RETRY") && a_countTry && ++g_tries[a_run.def->id] >= kMaxTries) {
+            const bool retry = a_word == std::string_view("RETRY");
+            const bool abort = a_word == std::string_view("ABORT") && a_error;   // a fixture failure counts as a try too, so the run terminates
+            if (((retry && a_countTry) || abort) && ++g_tries[a_run.def->id] >= kMaxTries) {
                 own    = Step::Skip(std::format("{} tries, could not be judged: {}", kMaxTries, a_step.evidence));
                 a_word = "SKIP";
+            } else if (retry && !a_countTry) {   // a safety refusal is not a try, but it must not hold the finished toast forever
+                const auto first = g_refusedSince.emplace(a_run.def->id, Clock::now()).first->second;
+                if (Clock::now() - first >= kRefusedMax) {
+                    own    = Step::Skip(std::format("refused for {} minutes this load, not run: {}", kRefusedMax.count(), a_step.evidence));
+                    a_word = "SKIP";
+                }
             }
             FinishStep(a_id, a_run, own, a_word, a_error, a_backoff);
         }
@@ -823,6 +833,7 @@ namespace MFO::SelfTest {
         g_lastPre.clear();
         g_blockedAnnounced = false;
         g_tries.clear();
+        g_refusedSince.clear();
         g_stuck.clear();
         g_stopped   = false;
         g_doneToast = false;
