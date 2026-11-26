@@ -12,6 +12,7 @@
 // ComputeWeaponRoles, WornInLogicalSlot, IsCreatureWeapon/IsCreatureArmor,
 // AcquireEquip) -- all still defined in Logistics_Loot.cpp.
 #include "Logistics_internal.h"
+#include "compat/Quartermaster.h"   // Quartermaster-dressed followers: Fashionrim for armor
 #include "GemRules.h"
 
 namespace MFO::Logistics {
@@ -214,7 +215,7 @@ namespace MFO::Logistics {
             using WT = RE::WEAPON_TYPE;
             if (auto* armo = a_obj->As<RE::TESObjectARMO>()) {
                 if (IsCreatureArmor(armo)) return false;
-                if (Config::g_dollsMode.load()) return false;   // #61 FASHIONRIM
+                if (QuartermasterCompat::DollsFor(a_follower)) return false;   // #61 FASHIONRIM (or Quartermaster dresses him)
                 if (ctx.noHelmets && IsHelmetPiece(armo)) return false;   // 86e3phy41 "Wear helmets" OFF
                 const bool isShield = (static_cast<std::uint32_t>(armo->GetSlotMask())
                     & static_cast<std::uint32_t>(RE::BGSBipedObjectForm::BipedObjectSlot::kShield)) != 0;
@@ -343,7 +344,7 @@ namespace MFO::Logistics {
                     // candidate (plain-rated AND mage school-robe) so MFO never
                     // loots or swaps a follower's armor; the player dresses them
                     // by hand. Weapons fall to the else-branch below, untouched.
-                    if (Config::g_dollsMode.load()) continue;
+                    if (QuartermasterCompat::DollsFor(a_follower)) continue;
                     // 86e3phy41 "Wear helmets" OFF for him: no head piece is a candidate (plain-rated
                     // or mage apparel). What he already carries is left alone.
                     if (ctx.noHelmets && IsHelmetPiece(armo)) continue;

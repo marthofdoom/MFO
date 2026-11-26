@@ -1,5 +1,6 @@
 // logistics/GemRules.cpp -- MEO-aware gem rules. Module doc in GemRules.h.
 #include "PCH.h"
+#include "compat/Quartermaster.h"   // Quartermaster-dressed followers: Fashionrim for armor
 #include "GemRules.h"
 #include "Logistics_internal.h"   // FitsCarryWeight, IsQuestObjectInstance, IsCreature*
 #include "ItemCatalog.h"
@@ -286,7 +287,7 @@ namespace MFO::Logistics::GemRules {
             if (!e || !e->hasLists || IsQuestObjectInstance(e)) continue;
             if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
             if (auto* armo = obj->As<RE::TESObjectARMO>()) {
-                if (IsCreatureArmor(armo) || Config::g_dollsMode.load()) continue;
+                if (IsCreatureArmor(armo) || QuartermasterCompat::DollsFor(a_follower)) continue;
             } else if (auto* weap = obj->As<RE::TESObjectWEAP>()) {
                 if (IsCreatureWeapon(weap)) continue;
             } else continue;

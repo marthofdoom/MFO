@@ -54,6 +54,7 @@
 // RemoveItem into the SOURCE container (the LootAmmo trade that has shipped for
 // months) -- no world drop, no 3D, so no MainThread::Post hop is needed.
 #include "Logistics_internal.h"
+#include "compat/Quartermaster.h"   // Quartermaster-dressed followers: Fashionrim for armor
 #include "GemRules.h"
 #include "Lotd.h"          // LOTD: HoldFromSale -- a needed relic is never sold or dropped
 #include <cmath>          // std::ceil: the gambit's N is a float param
@@ -226,7 +227,7 @@ namespace MFO::Logistics {
             if (out.armorJudged) {
                 using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
                 const bool useMageApparel = UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load() &&
-                                            !Config::g_dollsMode.load();
+                                            !QuartermasterCompat::DollsFor(a_follower);
                 const std::uint8_t top2   = useMageApparel ? TopTwoSchoolMask(a_follower) : 0;
                 const bool schoolPrimary  = Config::g_mageApparelStrictSchool.load();
                 const bool allowVillain   = useMageApparel && IsNecromancerFollower(a_state);
@@ -309,7 +310,7 @@ namespace MFO::Logistics {
                 for (auto& [k, b] : best) if (b.obj) { keepArmor.insert(b.obj); bestBySlot[k] = b.obj; }
                 // The ring / amulet the declaration CHOSE (EquipAuthority.cpp ChooseJewelry): never sold from under it,
                 // for a non-mage too (his jewelry used to fall through to "sellable junk" above).
-                if (!Config::g_dollsMode.load()) {
+                if (!QuartermasterCompat::DollsFor(a_follower)) {
                     RE::TESObjectARMO *chosenRing = nullptr, *chosenAmulet = nullptr;
                     DeclaredJewelry(a_follower, a_state, chosenRing, chosenAmulet);
                     if (chosenRing)   keepArmor.insert(chosenRing);
