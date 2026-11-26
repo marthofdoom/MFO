@@ -18,6 +18,7 @@
 // copy of that base in it: with identical base forms that is the same item, but instance data (a temper level, a gem) can
 // differ between two followers' copies of one base. That is the documented limit (design doc 0a).
 #include "PCH.h"
+#include "compat/Quartermaster.h"   // Quartermaster-dressed followers: Fashionrim for armor
 #include "Storage.h"
 
 #include "Logistics_internal.h"   // ClassWeaponBit / ClassSet, ComputeWeaponRoles, WeaponScore, ArmorScore, the keep set + its gates
@@ -450,7 +451,7 @@ namespace MFO::Logistics::Storage {
         if (!Followers::IsPersistableID(base)) return 0;   // a runtime (0xFF) form could never be saved (#9)
         const Piece pc = Classify(a_obj);
         if (pc.bucket == Bucket::None) return 0;
-        if (pc.armor && Config::g_dollsMode.load()) return 0;   // the player dresses him (dolls mode): his apparel is not ours
+        if (pc.armor && QuartermasterCompat::DollsFor(a_follower)) return 0;   // the player dresses him (dolls mode): his apparel is not ours
         std::vector<Item> mine;
         {
             std::scoped_lock lk(g_mx);

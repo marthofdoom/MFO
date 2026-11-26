@@ -33,6 +33,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/CostParity.cpp
     FollowerCatchUp.cpp
     Rapport.cpp
+    compat/Quartermaster.cpp
     Diagnostics.cpp
     CrimeProbe.cpp
     Board.cpp

@@ -9,6 +9,7 @@
 // tome-gate unlock, owned-gear equip pass, and the public GEAR/TOME buy
 // helpers shared with TradeBridge::PlanBuy (see Logistics.h).
 #include "Logistics_internal.h"
+#include "compat/Quartermaster.h"   // Quartermaster-dressed followers: Fashionrim for armor
 #include "GemRules.h"
 #include "Pricing.h"           // town phase 2 R2: the follower-own barter price model
 #include "apmf/APMFBridge.h"   // feat/mfo-equip-authority: the ch.17 claim + SetEquipSet declaration
@@ -304,7 +305,7 @@ namespace MFO::Logistics {
         TradeBridge::BuyThresholds BuildBuyThresholds(RE::Actor* a_follower,
                                                       const FollowerState& a_state) {
             TradeBridge::BuyThresholds buy;
-            const bool dolls = Config::g_dollsMode.load();
+            const bool dolls = QuartermasterCompat::DollsFor(a_follower);
             // `caster` = the gambit signal, for the weapon/shield role only; APPAREL follows
             // UsesMageClothing (class by skill) and bMageWearRobes (marth).
             const bool caster         = IsCasterFollower(a_state);
@@ -693,7 +694,7 @@ namespace MFO::Logistics {
                 spdlog::info("[sell] {:08X} scanning (sellAnything={})", fid, sellAnything);
 
             const bool umaSell = UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load() &&
-                                 !Config::g_dollsMode.load();
+                                 !QuartermasterCompat::DollsFor(a_follower);
 
             // SELL CANDIDATES: the follower's OWN unworn weapons/armour (jewellery is
             // ARMO, so IsJewelryPiece rides along) + valuable MISC that clear every
@@ -748,6 +749,9 @@ namespace MFO::Logistics {
                     continue;
                 }
                 if (IsStockGear(fid, obj->GetFormID())) { sdiag(obj, "stock"); continue; }        // T#69 own signature gear
+                // A piece of one of his Quartermaster sets / hand rules (compat/Quartermaster.h): the player's outfit,
+                // worn or waiting in the pack for its situation -- never sold, never force-sold.
+                if (QuartermasterCompat::KeepsItem(fid, obj->GetFormID())) { sdiag(obj, "Quartermaster set"); continue; }
                 // CONVERGENCE (marth): a WORN piece that is NOT its slot's best (a strictly
                 // kept-better exists) is a redundant inferior. The engine keeps re-applying
                 // it from the follower's DEFAULT OUTFIT, so unequip-and-wait never wins the

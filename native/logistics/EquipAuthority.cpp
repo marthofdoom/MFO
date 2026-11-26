@@ -3,6 +3,7 @@
 // Split out of the old native/Logistics*.cpp by the wave-2 subsystem-folder split
 // (2026-09-25): a pure move, proven function by function with tools/splitcheck.
 #include "Logistics_internal.h"
+#include "compat/Quartermaster.h"   // Quartermaster-dressed followers: Fashionrim for armor
 #include "apmf/APMFBridge.h"   // feat/mfo-equip-authority: the ch.17 claim + SetEquipSet declaration
 #include "Lotd.h"               // HoldFromSale: a museum-needed relic is never MFO's armor choice
 #include "PlayerGiven.h"        // ... unless the PLAYER gave it / put it on him
@@ -107,7 +108,7 @@ namespace MFO::Logistics {
         RE::TESBoundObject* ComputeOwnedGearPick(RE::Actor* a_follower, const FollowerState& a_state,
                                                  ArmorPref& a_outPref, bool& a_outMageMode) {
             a_outMageMode = false;
-            if (!a_follower || Config::g_dollsMode.load()) return nullptr;
+            if (!a_follower || QuartermasterCompat::DollsFor(a_follower)) return nullptr;
             const bool caster         = UsesMageClothing(a_state, a_follower);
             const bool useMageApparel = caster && Config::g_mageWearRobes.load();
             a_outMageMode = useMageApparel;
@@ -247,7 +248,7 @@ namespace MFO::Logistics {
         }
 
         void EquipBestOwnedGear(RE::Actor* a_follower, const FollowerState& a_state) {
-            if (!a_follower || Config::g_dollsMode.load()) return;
+            if (!a_follower || QuartermasterCompat::DollsFor(a_follower)) return;
             auto* eqObj  = a_follower->GetEquippedObject(false);
             auto* myWeap = eqObj ? eqObj->As<RE::TESObjectWEAP>() : nullptr;
             ArmorPref armorPref;
@@ -902,7 +903,7 @@ namespace MFO::Logistics {
             void ComputeOwnedGearSlate(RE::Actor* a_follower, const FollowerState& a_state, GearSlate& a_out,
                                        const InvSnap::View& a_inv) {
                 a_out = GearSlate{};
-                if (!a_follower || Config::g_dollsMode.load()) return;
+                if (!a_follower || QuartermasterCompat::DollsFor(a_follower)) return;
                 if (UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load()) {
                     a_out.mage = true;
                     MageSlotBest best[6];
@@ -1199,7 +1200,10 @@ namespace MFO::Logistics {
             // dual-wield hold under an enemy at range is NOT released for it --
             // the exits are the gambit's own condition, combat end, or a spell
             // taking the left. Releasing on range would be invented intent.
-            std::uint32_t owned = APMF_API::kEquipCat_Armor;
+            // A follower Quartermaster dresses (compat/Quartermaster.h): Armor is NOT owned, so Harbinger lets
+            // Quartermaster's set switches through and skips MFO's armor entries as unowned.
+            std::uint32_t owned = QuartermasterCompat::DressesArmor(id) ? 0u
+                                                                       : static_cast<std::uint32_t>(APMF_API::kEquipCat_Armor);
             if (right)          owned |= APMF_API::kEquipCat_Right;
             if (left)           owned |= APMF_API::kEquipCat_Left;
             if (rightRanged)    owned |= APMF_API::kEquipCat_Right | APMF_API::kEquipCat_Left | APMF_API::kEquipCat_Ammo;
@@ -1494,7 +1498,7 @@ namespace MFO::Logistics {
             // a best that overlaps a piece already chosen is skipped (never two items for
             // one slot). The legacy (APMF-absent) EquipBestOwnedGear single pick is
             // unchanged, and the combat road (a_judgeArmor false) still declares worn.
-            const bool mageSetMode = a_judgeArmor && !Config::g_dollsMode.load() &&
+            const bool mageSetMode = a_judgeArmor && !QuartermasterCompat::DollsFor(a_follower) &&
                                      UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load();
             // "WEAR HELMETS" (ClickUp 86e3phy41, marth 2026-10-12). OFF for him (board override, else
             // bWearHelmets): the pick, the slate and the mage set already hold no head piece (the judges
@@ -1693,6 +1697,9 @@ namespace MFO::Logistics {
                 if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
                 auto* ar = obj->As<RE::TESObjectARMO>();
                 if (!ar || ar->IsShield()) continue;
+                // Quartermaster dresses him (Armor unowned in the scope above): no armor entry at all -- the
+                // pass would only skip it as unowned, and his worn set is Quartermaster's.
+                if (!(owned & APMF_API::kEquipCat_Armor)) continue;
                 // 86e3phy41 "Wear helmets" OFF: a worn head piece is never declared, so the seat refuses
                 // its re-equip (Armor is owned). MFO does NOT take it off itself (marth 2026-10-20: no MFO
                 // UnequipObject; a narrow Harbinger "strip these named items" facet is a separate tier-A
